@@ -1,0 +1,31 @@
+{
+  "name": "@repo/agent-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --conditions=development --import tsx --watch src/server.ts",
+    "start": "node --env-file-if-exists=../../.env --conditions=development --import tsx src/server.ts",
+    "build": "tsup --config tsup.config.ts",
+    "start:prod": "node --env-file-if-exists=../../.env dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --conditions=development --import tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@repo/artifacts": "workspace:*",
+    "@repo/contracts": "workspace:*",
+    "@repo/db": "workspace:*",
+    "bullmq": "^5.58.5",
+    "fastify": "^5.6.1",
+    "ioredis": "^5.7.0",
+    "jose": "^6.1.0",
+    "zod": "^4.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "tsx": "^4.23.12",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2"
+  }
+}

@@ -4,12 +4,19 @@
   "private": true,
   "description": "",
   "scripts": {
-    "setup": "pnpm install && uv sync --all-packages",
-    "dev": "concurrently -n web,api -c blue,green \"pnpm --filter web dev\" \"uv run --package api uvicorn api.main:app --reload --port 8000 --app-dir apps/api\"",
-    "dev:api": "uv run --package api uvicorn api.main:app --reload --port 8000",
+    "setup": "pnpm install",
+    "dev": "node --env-file-if-exists=.env node_modules/concurrently/dist/bin/concurrently.js -n web,api,worker -c blue,green,magenta \"pnpm --filter web dev\" \"pnpm --filter @repo/agent-api dev\" \"pnpm --filter @repo/agent-worker dev\"",
+    "dev:api": "pnpm --filter @repo/agent-api dev",
+    "dev:worker": "pnpm --filter @repo/agent-worker dev",
+    "cli": "pnpm --filter ai-cli start --",
     "build": "turbo run build",
     "lint": "turbo run lint",
-    "dev:web": "turbo run dev --filter=web"
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "dev:web": "turbo run dev --filter=web",
+    "infra:up": "docker compose -f infra/compose.yaml up -d --wait",
+    "infra:down": "docker compose -f infra/compose.yaml down",
+    "db:migrate": "pnpm --filter @repo/db migrate"
   },
   "keywords": [],
   "author": "",
@@ -23,7 +30,8 @@
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
-    "turbo": "^2.10.12"
+    "turbo": "^2.10.12",
+    "typescript": "^5.9.2"
   },
   "packageManager": "pnpm@11.24.0",
   "type": "module"

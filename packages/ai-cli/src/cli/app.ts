@@ -53,7 +53,6 @@ async function runRepl(taskRunner: TaskRunner): Promise<void> {
     const task = (await askReplInput()).trim();
     if (!task) continue;
     if (task === '/exit' || task === '/quit') return;
-
     try {
       await taskRunner.run(task);
     } catch (error) {
@@ -62,55 +61,54 @@ async function runRepl(taskRunner: TaskRunner): Promise<void> {
   }
 }
 
-/** 组合启动配置、Agent、任务执行器和 REPL。 */
 export async function runCli(): Promise<void> {
   const settings = createCliSettings();
   const sessionStore = new SessionStore(settings.projectDir);
-  const runtime = await createAgentRuntime(settings, sessionStore);
-  const taskRunner = new TaskRunner(runtime, sessionStore);
-
-  tuiSetHeader(
-    `DeepAgents Coding Agent · 模式: ${runtime.backendMode === 'sandbox' ? '☁️ 云沙箱' : '💻 本机'} · 工作目录: ${settings.cwd}`,
-  );
+  tuiSetHeader(`DeepAgents Coding Agent · 工作目录: ${settings.cwd}`);
   startTui();
-  showBanner(settings, runtime);
 
-  if (settings.oneShotTask) {
-    try {
-      await taskRunner.run(settings.oneShotTask);
-      stopTui();
-      return;
-    } catch (error) {
-      if (!process.stdin.isTTY || !isRecoverableNetworkError(error)) throw error;
-      showTaskError(error);
-      tuiShowStartLine('▶ 单任务因网络错误中断，已转入交互模式');
-      await runRepl(taskRunner);
-      stopTui();
-      return;
+  let threadId = `cli-${Date.now()}`;
+  if (!settings.oneShotTask) {
+    const sessions = sessionStore.list();
+    const picked = await pickSession([
+      { title: '🆕 开始新会话', subtitle: '' },
+      ...sessions.map((session) => ({
+        title: `💬 ${session.title}`,
+        subtitle: `${session.tasks} 个任务 · ${formatRelative(session.updatedAt)}`,
+      })),
+    ]);
+    const session = picked > 0 ? sessions[picked - 1] : undefined;
+    if (session) {
+      threadId = session.threadId;
+      tuiShowStartLine(
+        `▶ 恢复会话：${session.title}（${session.tasks} 个任务，最后活跃 ${formatRelative(session.updatedAt)}）`,
+      );
+    } else {
+      tuiShowStartLine('▶ 开始新会话');
     }
   }
 
-  const sessions = sessionStore.list();
-  const picked = await pickSession([
-    { title: '🆕 开始新会话', subtitle: '' },
-    ...sessions.map((session) => ({
-      title: `💬 ${session.title}`,
-      subtitle: `${session.tasks} 个任务 · ${formatRelative(session.updatedAt)}`,
-    })),
-  ]);
+  const runtime = await createAgentRuntime(settings, sessionStore, threadId);
+  const taskRunner = new TaskRunner(runtime, sessionStore, threadId);
+  tuiSetHeader(
+    `DeepAgents Coding Agent · 模式: ${runtime.backendMode === 'sandbox' ? '☁️ 云沙箱' : '💻 本机'} · 工作目录: ${settings.cwd}`,
+  );
+  showBanner(settings, runtime);
 
-  if (picked === 0) {
-    taskRunner.setThread(`demo20-${Date.now()}`);
-    tuiShowStartLine('▶ 开始新会话');
-  } else {
-    const session = sessions[picked - 1];
-    taskRunner.setThread(session.threadId);
-    tuiShowStartLine(
-      `▶ 恢复会话：${session.title}（${session.tasks} 个任务，最后活跃 ${formatRelative(session.updatedAt)}）`,
-    );
-    await taskRunner.printRecap();
+  try {
+    if (settings.oneShotTask) {
+      try {
+        await taskRunner.run(settings.oneShotTask);
+        return;
+      } catch (error) {
+        if (!process.stdin.isTTY || !isRecoverableNetworkError(error)) throw error;
+        showTaskError(error);
+        tuiShowStartLine('▶ 单任务因网络错误中断，已转入交互模式');
+      }
+    }
+    await runRepl(taskRunner);
+  } finally {
+    await taskRunner.dispose();
+    stopTui();
   }
-
-  await runRepl(taskRunner);
-  stopTui();
 }

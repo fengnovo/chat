@@ -1,0 +1,29 @@
+{
+  "name": "@repo/agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --conditions=development --import tsx --watch src/worker.ts",
+    "start": "node --env-file-if-exists=../../.env --conditions=development --import tsx src/worker.ts",
+    "build": "tsup --config tsup.config.ts",
+    "start:prod": "node --env-file-if-exists=../../.env dist/worker.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --conditions=development --import tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@langchain/langgraph-checkpoint-postgres": "^1.0.5",
+    "@repo/agent-core": "workspace:*",
+    "@repo/contracts": "workspace:*",
+    "@repo/db": "workspace:*",
+    "bullmq": "^5.58.5",
+    "ioredis": "^5.7.0",
+    "zod": "^4.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "tsx": "^4.23.12",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2"
+  }
+}

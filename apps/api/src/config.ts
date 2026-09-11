@@ -1,0 +1,68 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { z } from 'zod';
+
+const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
+
+const schema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    API_HOST: z.string().default('127.0.0.1'),
+    API_PORT: z.coerce.number().int().positive().default(8000),
+    WEB_ORIGIN: z.string().url().default('http://localhost:3000'),
+    DATABASE_URL: z
+      .string()
+      .default('postgresql://agent:agent@127.0.0.1:55432/agent'),
+    REDIS_URL: z.string().default('redis://127.0.0.1:56379'),
+    S3_ENDPOINT: z.string().url().default('http://127.0.0.1:59000'),
+    S3_PUBLIC_ENDPOINT: z.string().url().optional(),
+    S3_REGION: z.string().default('us-east-1'),
+    S3_BUCKET: z.string().default('agent-artifacts'),
+    S3_ACCESS_KEY: z.string().default('agent'),
+    S3_SECRET_KEY: z.string().default('agent-local-secret'),
+    ARTIFACT_MAX_BYTES: z.coerce.number().int().positive().default(100_000_000),
+    RATE_LIMIT_REQUESTS: z.coerce.number().int().positive().default(300),
+    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(500),
+    OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
+    OUTBOX_LEASE_MS: z.coerce.number().int().min(1_000).default(30_000),
+    OUTBOX_RECONCILE_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
+    OUTBOX_STALE_AFTER_MS: z.coerce.number().int().min(5_000).default(30_000),
+    AUTH_MODE: z.enum(['dev', 'oidc']).default('dev'),
+    DEV_TENANT_ID: z.uuid().default('00000000-0000-4000-8000-000000000001'),
+    DEV_USER_ID: z.uuid().default('00000000-0000-4000-8000-000000000001'),
+    OIDC_ISSUER: z.string().url().optional(),
+    OIDC_AUDIENCE: z.string().optional(),
+    OIDC_JWKS_URL: z.string().url().optional(),
+    WORKSPACE_ROOT: z.string().default(path.join(repositoryRoot, 'data/workspaces')),
+  })
+  .superRefine((value, context) => {
+    if (value.NODE_ENV === 'production' && value.AUTH_MODE === 'dev') {
+      context.addIssue({
+        code: 'custom',
+        path: ['AUTH_MODE'],
+        message: 'AUTH_MODE=dev is forbidden in production',
+      });
+    }
+    if (
+      value.AUTH_MODE === 'oidc' &&
+      (!value.OIDC_ISSUER || !value.OIDC_AUDIENCE || !value.OIDC_JWKS_URL)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['AUTH_MODE'],
+        message: 'OIDC_ISSUER, OIDC_AUDIENCE and OIDC_JWKS_URL are required',
+      });
+    }
+  });
+
+export type ApiConfig = ReturnType<typeof loadConfig>;
+
+export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
+  const value = schema.parse(environment);
+  return {
+    ...value,
+    WORKSPACE_ROOT: path.resolve(value.WORKSPACE_ROOT),
+  };
+}

@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import './langsmith.js';
 
 // LangSmith 初始化必须先于 app 及其 LangChain/LangGraph 依赖执行，确保模型和

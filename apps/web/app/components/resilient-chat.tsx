@@ -3,7 +3,10 @@
 import { useChat } from '@ai-sdk/react';
 import { WorkflowChatTransport } from '@ai-sdk/workflow';
 import { AIBoundary } from '@cognicatch/react';
+import type { AgentEvent } from '@repo/contracts';
 import type { UIMessage } from 'ai';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   type FormEvent,
   type ReactNode,
@@ -54,37 +57,47 @@ type MessageMetadata = {
 };
 
 type ResilientData = {
+  agent: AgentEvent;
   pipeline: PipelineEvent;
   card: InsightCard | null;
   suggestions: string[];
 };
 
 type ResilientMessage = UIMessage<MessageMetadata, ResilientData>;
+type PendingInterrupt = Extract<
+  AgentEvent,
+  { type: 'approval.required' | 'question.required' }
+>;
+type AgentTodo = Extract<AgentEvent, { type: 'todo.updated' }>['todos'][number];
+type QuestionAnswer = {
+  selections: Array<{ index: number; label: string }>;
+  customText?: string;
+};
 
 const starterPrompts = [
   {
-    icon: 'shuffle' as const,
-    label: '模型降级',
-    description: '5 次重试后切换模型',
-    prompt: '请演示模型降级和熔断',
+    icon: 'panel' as const,
+    label: '检查项目',
+    description: '理解结构并找出风险',
+    prompt: '请检查这个项目的结构，说明主要模块并找出最值得优先处理的问题。',
   },
   {
     icon: 'braces' as const,
-    label: 'JSON 修复',
-    description: 'Catch → Teach → Fix',
-    prompt: '请演示畸形 JSON 的 Reality Lock 修复',
+    label: '实现功能',
+    description: '规划、编码并验证',
+    prompt: '请先阅读 README 和项目代码，然后选择一个明确的未完成功能，制定计划并实现它。',
   },
   {
     icon: 'triangle' as const,
-    label: '错误恢复',
-    description: 'undo 后重新生成',
-    prompt: '请演示一次错误恢复',
+    label: '诊断错误',
+    description: '复现并定位根因',
+    prompt: '请运行项目的检查和测试，定位当前错误的根因并提出修复方案。',
   },
   {
-    icon: 'panel' as const,
-    label: '组件边界',
-    description: '隔离生成式 UI 崩溃',
-    prompt: '请演示组件渲染崩溃和 AIBoundary',
+    icon: 'check' as const,
+    label: '运行验证',
+    description: '类型、测试与构建',
+    prompt: '请检查现有改动，并运行适合这个项目的类型检查、测试和构建。',
   },
 ];
 
@@ -93,24 +106,24 @@ const initialTrace: PipelineEvent[] = [
     id: 'boot-transport',
     stage: 'transport',
     status: 'success',
-    title: '可恢复传输已就绪',
-    detail: '等待消息；断流后将从 offset 续传',
+    title: '持久化事件流已就绪',
+    detail: 'SSE 断流后将从数据库 cursor 续传',
     timestamp: '--:--:--',
   },
   {
     id: 'boot-circuit',
     stage: 'circuit',
     status: 'success',
-    title: '熔断器处于闭合状态',
-    detail: '阈值 5 次失败 · 30 秒半开探测',
+    title: '共享熔断器已连接',
+    detail: 'Redis 在 Worker 之间共享模型健康状态',
     timestamp: '--:--:--',
   },
   {
     id: 'boot-verify',
     stage: 'verify',
     status: 'success',
-    title: 'Reality Lock 已加载',
-    detail: 'ChatResponse schema 正在保护输出',
+    title: '租户与工作区隔离已加载',
+    detail: 'API 鉴权、队列和独立 workspace 正在保护运行',
     timestamp: '--:--:--',
   },
 ];
@@ -193,6 +206,118 @@ function localEvent(
   };
 }
 
+function agentEventToTrace(event: AgentEvent): PipelineEvent | null {
+  const base = {
+    id: `${event.runId}-${event.timestamp}-${event.type}`,
+    timestamp: new Date(event.timestamp).toLocaleTimeString('zh-CN', {
+      hour12: false,
+    }),
+  };
+
+  switch (event.type) {
+    case 'assistant.delta':
+      return null;
+    case 'run.started':
+      return {
+        ...base,
+        stage: 'request',
+        status: 'running',
+        title: 'Worker 已接管运行',
+        detail: '队列任务已启动，正在隔离工作区中执行',
+      };
+    case 'model.retry':
+      return {
+        ...base,
+        stage: 'retry',
+        status: 'warning',
+        title: `${event.model} 正在重试`,
+        detail: `第 ${event.attempt} 次尝试将在 ${event.delayMs}ms 后执行 · ${event.reason}`,
+      };
+    case 'model.fallback':
+      return {
+        ...base,
+        stage: 'fallback',
+        status: 'warning',
+        title: `模型已切换至 ${event.to}`,
+        detail: `${event.from} 暂不可用 · ${event.reason}`,
+      };
+    case 'tool.started':
+      return {
+        ...base,
+        stage: 'request',
+        status: 'running',
+        title: `正在调用 ${event.tool}`,
+        detail: `tool invocation ${event.invocationId.slice(0, 8)}`,
+      };
+    case 'tool.completed':
+      return {
+        ...base,
+        stage: 'verify',
+        status: 'success',
+        title: `${event.tool} 已完成`,
+        detail: `tool invocation ${event.invocationId.slice(0, 8)}`,
+      };
+    case 'todo.updated': {
+      const completed = event.todos.filter((todo) => todo.status === 'completed').length;
+      return {
+        ...base,
+        stage: 'request',
+        status: 'running',
+        title: '任务计划已更新',
+        detail: `${completed}/${event.todos.length} 项已完成`,
+      };
+    }
+    case 'approval.required':
+      return {
+        ...base,
+        stage: 'verify',
+        status: 'warning',
+        title: '等待人工审批',
+        detail: `${event.actions.length} 个高风险操作需要确认`,
+      };
+    case 'question.required':
+      return {
+        ...base,
+        stage: 'verify',
+        status: 'warning',
+        title: 'Agent 正在等待你的选择',
+        detail: event.question.question,
+      };
+    case 'artifact.created':
+      return {
+        ...base,
+        stage: 'verify',
+        status: 'success',
+        title: `已保存产物 ${event.name}`,
+        detail: event.contentType,
+      };
+    case 'run.completed':
+      return {
+        ...base,
+        stage: 'done',
+        status: 'success',
+        title: '运行已完成',
+        detail: '事件、检查点和最终状态已持久化',
+      };
+    case 'run.cancelled':
+      return {
+        ...base,
+        stage: 'done',
+        status: 'warning',
+        title: '运行已取消',
+        detail: 'Worker 已收到取消信号并释放资源',
+      };
+    case 'run.failed':
+      return {
+        ...base,
+        stage: 'done',
+        status: 'error',
+        title: `运行失败 · ${event.code}`,
+        detail: event.message,
+      };
+  }
+}
+
 function countSseFrames(text: string) {
   return text
     .split('\n\n')
@@ -273,7 +398,6 @@ function AppSkeleton() {
           <div className="skeleton-copy short" />
         </div>
       </section>
-      <aside className="trace-panel skeleton-panel" />
     </main>
   );
 }
@@ -286,7 +410,12 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     () => new Set(),
   );
   const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
-  const [mobileTraceOpen, setMobileTraceOpen] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [pendingInterrupt, setPendingInterrupt] =
+    useState<PendingInterrupt | null>(null);
+  const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
+  const [interactionBusy, setInteractionBusy] = useState(false);
+  const [interactionError, setInteractionError] = useState<string | null>(null);
   const [sessionStats, setSessionStats] = useState({
     revision: 0,
     messages: 0,
@@ -352,6 +481,32 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     throttle: 24,
     transport,
     onData: (part) => {
+      if (part.type === 'data-agent') {
+        const event = part.data;
+        const mapped = agentEventToTrace(event);
+        if (mapped) {
+          setTrace((current) =>
+            current.some((item) => item.id === mapped.id)
+              ? current
+              : [...current.slice(-11), mapped],
+          );
+        }
+        if (event.type === 'todo.updated') setAgentTodos(event.todos);
+        if (
+          event.type === 'approval.required' ||
+          event.type === 'question.required'
+        ) {
+          setPendingInterrupt(event);
+          setInteractionError(null);
+        }
+        if (
+          event.type === 'run.completed' ||
+          event.type === 'run.cancelled' ||
+          event.type === 'run.failed'
+        ) {
+          setPendingInterrupt(null);
+        }
+      }
       if (part.type === 'data-pipeline') {
         setTrace((current) => [...current.slice(-9), part.data]);
       }
@@ -422,7 +577,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       behavior: reducedMotion ? 'auto' : 'smooth',
       block: 'end',
     });
-  }, [messages, error]);
+  }, [messages, error, pendingInterrupt]);
 
   async function submitText(value: string) {
     const trimmed = value.trim();
@@ -451,6 +606,12 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
   }
 
   function handleNewChat() {
+    const currentRun = readPersistedRun();
+    if (currentRun?.pending) {
+      void fetch(`/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`, {
+        method: 'POST',
+      });
+    }
     void stop();
     clearError();
     clearPersistedRun();
@@ -459,8 +620,77 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     setSuggestions([]);
     setTrace(initialTrace);
     setDismissedCards(new Set());
+    setPendingInterrupt(null);
+    setAgentTodos([]);
+    setInteractionError(null);
     sessionRef.current = new ResilientSession();
     setSessionStats(sessionRef.current.stats);
+  }
+
+  async function respondToInterrupt(
+    interrupt: PendingInterrupt,
+    body: { decision: 'approve' | 'reject'; message?: string } | QuestionAnswer,
+  ) {
+    setInteractionBusy(true);
+    setInteractionError(null);
+    const segment =
+      interrupt.type === 'approval.required' ? 'approvals' : 'questions';
+    try {
+      const response = await fetch(
+        `/api/agent/runs/${encodeURIComponent(interrupt.runId)}/${segment}/${encodeURIComponent(interrupt.interruptId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      setPendingInterrupt(null);
+      setTrace((current) => [
+        ...current.slice(-11),
+        localEvent(
+          'request',
+          'running',
+          '已提交人工响应',
+          '任务已重新进入 Worker 队列',
+        ),
+      ]);
+    } catch (caught) {
+      setInteractionError(
+        caught instanceof Error ? caught.message : '提交失败，请稍后重试',
+      );
+    } finally {
+      setInteractionBusy(false);
+    }
+  }
+
+  async function handleStop() {
+    const currentRun = readPersistedRun();
+    if (!currentRun?.runId) {
+      await stop();
+      return;
+    }
+    try {
+      const response = await fetch(
+        `/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`,
+        { method: 'POST' },
+      );
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      setTrace((current) => [
+        ...current.slice(-11),
+        localEvent('transport', 'warning', '正在取消运行', '取消信号已发送至 Worker'),
+      ]);
+      if (response.status === 404) await stop();
+    } catch {
+      await stop();
+    }
   }
 
   async function copyMessage(id: string, text: string) {
@@ -472,7 +702,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
   const persisted = typeof window === 'undefined' ? null : readPersistedRun();
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${traceOpen ? 'is-trace-open' : ''}`}>
       <Sidebar
         active={hasConversation}
         onNewChat={handleNewChat}
@@ -486,17 +716,17 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
               className="mobile-icon-button"
               type="button"
               aria-label="打开可靠性轨迹"
-              aria-expanded={mobileTraceOpen}
-              onClick={() => setMobileTraceOpen(true)}
+              aria-expanded={traceOpen}
+              onClick={() => setTraceOpen(true)}
             >
               <Icon name="menu" />
             </button>
             <div>
               <div className="title-line">
-                <h1>AI Support Copilot</h1>
-                <span className="local-badge">LOCAL DEMO</span>
+                <h1>AI Coding Agent</h1>
+                <span className="local-badge">NODE AGENT</span>
               </div>
-              <p>Resilient streaming workspace</p>
+              <p>Durable multi-tenant coding workspace</p>
             </div>
           </div>
           <div className="topbar-actions">
@@ -510,6 +740,15 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
                     ? '等待恢复'
                     : '全部系统正常'}
             </span>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={traceOpen ? '隐藏 Agent 运行轨迹' : '显示 Agent 运行轨迹'}
+              aria-expanded={traceOpen}
+              onClick={() => setTraceOpen((current) => !current)}
+            >
+              <Icon name="panel" />
+            </button>
             <button
               className="icon-button"
               type="button"
@@ -552,6 +791,21 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
                 />
               ))}
               {status === 'submitted' && <ThinkingRow />}
+              {agentTodos.length > 0 && <AgentTodoList todos={agentTodos} />}
+              {pendingInterrupt && (
+                <PendingInteraction
+                  key={pendingInterrupt.interruptId}
+                  busy={interactionBusy}
+                  error={interactionError}
+                  interrupt={pendingInterrupt}
+                  onApproval={(decision) =>
+                    respondToInterrupt(pendingInterrupt, { decision })
+                  }
+                  onQuestion={(answer) =>
+                    respondToInterrupt(pendingInterrupt, answer)
+                  }
+                />
+              )}
               {error && (
                 <div className="error-banner" role="alert">
                   <div className="error-icon">
@@ -577,7 +831,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
           input={input}
           isBusy={isBusy}
           onChange={setInput}
-          onStop={() => void stop()}
+          onStop={() => void handleStop()}
           onSubmit={handleSubmit}
           onSuggestion={submitText}
           suggestions={suggestions}
@@ -586,19 +840,19 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
         <div className="persistence-strip">
           <span>
             <Icon name="shield" size={14} />
-            会话已由 Conversationalist 保护
+            事件已持久化到 Postgres
           </span>
           <code>
             {persisted?.runId
               ? `run ${persisted.runId.slice(0, 8)} · offset ${persisted.chunkIndex}`
-              : '等待首个 workflow run'}
+              : '等待首个 agent run'}
           </code>
         </div>
       </section>
 
       <TracePanel
-        mobileOpen={mobileTraceOpen}
-        onClose={() => setMobileTraceOpen(false)}
+        open={traceOpen}
+        onClose={() => setTraceOpen(false)}
         trace={trace}
       />
     </main>
@@ -621,12 +875,17 @@ function Sidebar({
           <Icon name="layers" size={20} />
         </span>
         <span>
-          <strong>Resilient</strong>
-          <small>AI RELIABILITY LAB</small>
+          <strong>Agent Platform</strong>
+          <small>MULTI-TENANT RUNTIME</small>
         </span>
       </div>
 
-      <button className="new-chat-button" type="button" onClick={onNewChat}>
+      <button
+        aria-label="新建对话"
+        className="new-chat-button"
+        type="button"
+        onClick={onNewChat}
+      >
         <Icon name="plus" size={17} />
         <span>新建对话</span>
       </button>
@@ -634,6 +893,7 @@ function Sidebar({
       <nav aria-label="对话列表" className="session-nav">
         <span className="nav-label">工作区</span>
         <button
+          aria-label={active ? '当前 Agent 会话' : '等待第一条任务'}
           className={active ? 'session-item is-active' : 'session-item'}
           type="button"
         >
@@ -641,8 +901,8 @@ function Sidebar({
             <Icon name="shield" size={16} />
           </span>
           <span>
-            <strong>{active ? '当前可靠会话' : '等待第一条消息'}</strong>
-            <small>{active ? '刚刚更新' : '本地演示'}</small>
+            <strong>{active ? '当前 Agent 会话' : '等待第一条任务'}</strong>
+            <small>{active ? '刚刚更新' : '持久化工作区'}</small>
           </span>
           <Icon name="chevron" size={15} />
         </button>
@@ -656,7 +916,7 @@ function Sidebar({
           <strong>{String(sessionStats.revision).padStart(2, '0')}</strong>
         </div>
         <div>
-          <span>SAFE MESSAGES</span>
+          <span>MESSAGES</span>
           <strong>{String(sessionStats.messages).padStart(2, '0')}</strong>
         </div>
       </div>
@@ -664,9 +924,9 @@ function Sidebar({
       <div className="system-card">
         <div className="system-card-head">
           <span className="status-dot" />
-          <strong>Protection active</strong>
+          <strong>Services connected</strong>
         </div>
-        <p>6 个可靠性保护层已连接</p>
+        <p>API · Queue · Worker · Storage</p>
         <div className="protection-meter">
           {Array.from({ length: 6 }).map((_, index) => (
             <span key={index} />
@@ -687,11 +947,11 @@ function Welcome({ onPrompt }: { onPrompt: (prompt: string) => Promise<void> }) 
           <Icon name="shield" size={31} />
         </span>
       </div>
-      <span className="eyebrow">FAULT-TOLERANT BY DESIGN</span>
-      <h2>故障不会打断对话</h2>
+      <span className="eyebrow">HEADLESS AGENT · DURABLE RUNTIME</span>
+      <h2>让 Agent 在你的项目里工作</h2>
       <p>
-        这不是一张静态架构图。发送任意消息，右侧会实时展示重试、熔断、
-        模型降级、结构校验与断点续传的实际执行轨迹。
+        Web 通过 Node API 创建持久化运行，Worker 在隔离工作区中调用 coding
+        agent。执行命令或改文件前，会在这里等待你的审批。
       </p>
 
       <div className="prompt-grid">
@@ -742,12 +1002,22 @@ function Message({
       </div>
       <div className="message-body">
         <div className="message-meta">
-          <strong>{isUser ? '你' : 'Resilient Copilot'}</strong>
+          <strong>{isUser ? '你' : 'Coding Agent'}</strong>
           {!isUser && message.metadata?.model && (
             <span>{message.metadata.model}</span>
           )}
         </div>
-        <div className="message-copy">{text || <StreamingDots />}</div>
+        <div className={`message-copy ${isUser ? '' : 'markdown-content'}`}>
+          {text ? (
+            isUser ? (
+              text
+            ) : (
+              <MarkdownContent content={text} />
+            )
+          ) : (
+            <StreamingDots />
+          )}
+        </div>
 
         {!isUser && !dismissedCards.has(message.id) &&
           cards.map((part, index) =>
@@ -785,7 +1055,7 @@ function Message({
 
 function GeneratedInsightCard({ data }: { data: InsightCard }) {
   if (data.kind !== 'reliability-summary') {
-    throw new Error('Unsupported generative UI widget');
+    return null;
   }
 
   return (
@@ -800,6 +1070,23 @@ function GeneratedInsightCard({ data }: { data: InsightCard }) {
         <small>{data.metric_label}</small>
       </div>
     </section>
+  );
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ children, href }) => (
+          <a href={href} rel="noreferrer" target="_blank">
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
   );
 }
 
@@ -821,12 +1108,165 @@ function ThinkingRow() {
       </div>
       <div className="message-body">
         <div className="message-meta">
-          <strong>Resilient Copilot</strong>
-          <span>正在执行保护管线</span>
+          <strong>Coding Agent</strong>
+          <span>正在等待 Worker 启动</span>
         </div>
         <StreamingDots />
       </div>
     </article>
+  );
+}
+
+function AgentTodoList({ todos }: { todos: AgentTodo[] }) {
+  return (
+    <section className="agent-todos" aria-label="Agent 任务计划">
+      <div className="agent-panel-head">
+        <span className="eyebrow">TASK PLAN</span>
+        <strong>
+          {todos.filter((todo) => todo.status === 'completed').length}/
+          {todos.length}
+        </strong>
+      </div>
+      <ol>
+        {todos.map((todo, index) => (
+          <li className={`is-${todo.status}`} key={`${index}-${todo.content}`}>
+            <span>
+              {todo.status === 'completed' ? (
+                <Icon name="check" size={12} />
+              ) : todo.status === 'in_progress' ? (
+                <span className="pulse-dot" />
+              ) : (
+                index + 1
+              )}
+            </span>
+            {todo.content}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function PendingInteraction({
+  busy,
+  error,
+  interrupt,
+  onApproval,
+  onQuestion,
+}: {
+  busy: boolean;
+  error: string | null;
+  interrupt: PendingInterrupt;
+  onApproval: (decision: 'approve' | 'reject') => Promise<void>;
+  onQuestion: (answer: QuestionAnswer) => Promise<void>;
+}) {
+  const [selected, setSelected] = useState<number[]>([]);
+  const [customText, setCustomText] = useState('');
+
+  if (interrupt.type === 'approval.required') {
+    return (
+      <section className="agent-interrupt" aria-label="等待操作审批">
+        <div className="agent-panel-head">
+          <span className="eyebrow">APPROVAL REQUIRED</span>
+          <strong>{interrupt.actions.length} 项</strong>
+        </div>
+        <h3>Agent 准备执行以下操作</h3>
+        <ul>
+          {interrupt.actions.map((action, index) => (
+            <li key={`${index}-${action.name}`}>
+              <code>{action.name}</code>
+              <span>{action.summary}</span>
+            </li>
+          ))}
+        </ul>
+        {error && <p className="interaction-error">{error}</p>}
+        <div className="interaction-actions">
+          <button
+            className="secondary-action"
+            disabled={busy}
+            type="button"
+            onClick={() => void onApproval('reject')}
+          >
+            拒绝
+          </button>
+          <button
+            className="primary-action"
+            disabled={busy}
+            type="button"
+            onClick={() => void onApproval('approve')}
+          >
+            {busy ? '正在提交…' : '批准并继续'}
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  const canSubmit = selected.length > 0 || customText.trim().length > 0;
+
+  return (
+    <section className="agent-interrupt" aria-label="等待问题回答">
+      <div className="agent-panel-head">
+        <span className="eyebrow">INPUT REQUIRED</span>
+        <strong>{interrupt.question.multiple ? '可多选' : '单选'}</strong>
+      </div>
+      <h3>{interrupt.question.question}</h3>
+      <div className="question-options">
+        {interrupt.question.options.map((option, index) => {
+          const active = selected.includes(index);
+          return (
+            <button
+              aria-pressed={active}
+              className={active ? 'is-selected' : ''}
+              disabled={busy}
+              key={`${index}-${option.label}`}
+              type="button"
+              onClick={() => {
+                setSelected((current) =>
+                  interrupt.question.multiple
+                    ? current.includes(index)
+                      ? current.filter((item) => item !== index)
+                      : [...current, index]
+                    : [index],
+                );
+              }}
+            >
+              <strong>{option.label}</strong>
+              {option.description && <small>{option.description}</small>}
+            </button>
+          );
+        })}
+      </div>
+      {interrupt.question.allowCustom && (
+        <input
+          className="custom-answer"
+          disabled={busy}
+          placeholder="或者输入自定义答案"
+          value={customText}
+          onChange={(event) => setCustomText(event.target.value)}
+        />
+      )}
+      {error && <p className="interaction-error">{error}</p>}
+      <div className="interaction-actions">
+        <button
+          className="primary-action"
+          disabled={busy || !canSubmit}
+          type="button"
+          onClick={() => {
+            const answer: QuestionAnswer = {
+              selections: selected.map((index) => ({
+                index,
+                label: interrupt.question.options[index]?.label ?? '',
+              })),
+              ...(customText.trim() ? { customText: customText.trim() } : {}),
+            };
+            void onQuestion(answer);
+          }}
+        >
+          {busy ? '正在提交…' : '提交并继续'}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -873,7 +1313,7 @@ function Composer({
           rows={1}
           value={input}
           disabled={disabled || isBusy}
-          placeholder={disabled ? '请先重新生成失败的响应' : '输入消息，或选择上方的故障演练…'}
+          placeholder={disabled ? '请先重新生成失败的响应' : '描述要在项目中完成的任务…'}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
@@ -902,23 +1342,23 @@ function Composer({
           </button>
         )}
       </form>
-      <p>Enter 发送 · Shift + Enter 换行 · 所有模型调用均为本地模拟</p>
+      <p>Enter 发送 · Shift + Enter 换行 · 持久化事件 · 人工审批 · 隔离工作区</p>
     </div>
   );
 }
 
 function TracePanel({
-  mobileOpen,
+  open,
   onClose,
   trace,
 }: {
-  mobileOpen: boolean;
+  open: boolean;
   onClose: () => void;
   trace: PipelineEvent[];
 }) {
   return (
     <>
-      {mobileOpen && (
+      {open && (
         <button
           className="trace-scrim"
           type="button"
@@ -926,14 +1366,18 @@ function TracePanel({
           onClick={onClose}
         />
       )}
-      <aside className={`trace-panel ${mobileOpen ? 'is-open' : ''}`}>
+      <aside
+        aria-hidden={!open}
+        className={`trace-panel ${open ? 'is-open' : ''}`}
+        inert={!open}
+      >
         <div className="trace-head">
           <div>
             <span className="eyebrow">LIVE OBSERVABILITY</span>
-            <h2>可靠性轨迹</h2>
+            <h2>Agent 运行轨迹</h2>
           </div>
           <button
-            className="mobile-icon-button"
+            className="icon-button trace-close-button"
             type="button"
             aria-label="关闭可靠性轨迹"
             onClick={onClose}
@@ -944,12 +1388,12 @@ function TracePanel({
 
         <div className="trace-summary">
           <div>
-            <span>传输</span>
-            <strong>RESUMABLE</strong>
+            <span>事件流</span>
+            <strong>DURABLE SSE</strong>
           </div>
           <div>
-            <span>输出锁</span>
-            <strong>ENFORCED</strong>
+            <span>任务执行</span>
+            <strong>QUEUED</strong>
           </div>
         </div>
 
@@ -981,8 +1425,8 @@ function TracePanel({
         </ol>
 
         <div className="model-chain">
-          <span className="nav-label">降级模型链</span>
-          {['gpt-4o', 'claude-sonnet-4', 'gpt-4o-mini', 'claude-3-5-haiku'].map(
+          <span className="nav-label">模型降级链</span>
+          {['primary model', 'fallback 1', 'fallback 2', 'fallback 3'].map(
             (model, index) => (
               <div key={model}>
                 <span>{index + 1}</span>

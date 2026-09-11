@@ -1,16 +1,29 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
 build/
 dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
 node_modules/
 .env
+.env.local
+.turbo/
+coverage/
+/data/
 workspace/
 sessions/
 skills/
 test/
+!apps/api/test/
+!apps/api/test/**
+!apps/worker/test/
+!apps/worker/test/**
+!packages/agent-core/test/
+!packages/agent-core/test/**
+!packages/artifacts/test/
+!packages/artifacts/test/**
+!packages/contracts/test/
+!packages/contracts/test/**
+!packages/db/test/
+!packages/db/test/**
+
+# Python helper scripts are still shipped as optional ai-cli skill assets.
+.venv/
+__pycache__/
+*.pyc
