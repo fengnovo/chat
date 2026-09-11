@@ -1,0 +1,14 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  # 显式排除 Python 后端，它由 uv 管理，不属于 Node 依赖图
+  - "!apps/api"
+allowBuilds:
+  '@swc/core': true
+  better-sqlite3: true
+  canvas: true
+  cbor-extract: true
+  esbuild: false
+  protobufjs: true
+  tree-sitter: true
+  unrs-resolver: true

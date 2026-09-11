@@ -1,0 +1,30 @@
+{
+  "name": "chat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "scripts": {
+    "setup": "pnpm install && uv sync --all-packages",
+    "dev": "concurrently -n web,api -c blue,green \"pnpm --filter web dev\" \"uv run --package api uvicorn api.main:app --reload --port 8000 --app-dir apps/api\"",
+    "dev:api": "uv run --package api uvicorn api.main:app --reload --port 8000",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "dev:web": "turbo run dev --filter=web"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.24.0",
+      "onFail": "download"
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "turbo": "^2.10.12"
+  },
+  "packageManager": "pnpm@11.24.0",
+  "type": "module"
+}
