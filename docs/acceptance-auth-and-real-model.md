@@ -9,11 +9,13 @@
 | API 多租户隔离 | 已实现基础能力 | JWT 中的可信 `tenant_id` 决定数据范围，Repository 查询强制带 tenant |
 | API OIDC/JWT 校验 | 已实现 | 校验签名、issuer、audience、过期时间、`sub` 和 `tenant_id` |
 | Web 登录页与会话 | 尚未实现 | 当前 Web 不会登录，也不会向 API 注入 Bearer Token |
+| Web 会话管理 | 已完成 | 新建会话会立即创建独立 session/thread/workspace；支持历史恢复、切换、重命名、软删除和游标分页 |
 | 角色级 RBAC | 尚未完整实现 | 能解析 `owner/admin/member`，但业务路由还没有细分角色权限 |
-| 用户项目导入 | 尚未实现 | Web 创建的是新的隔离 workspace，目前没有 Git clone、仓库授权或上传入口 |
+| 用户项目导入 | 已完成基础能力 | 可选择已有项目、浅克隆公开 HTTPS Git 仓库或上传不超过 20 MB 的目录；Worker 会在首次运行前恢复到会话 workspace |
+| 开发/测试数据隔离 | 已完成 | 本地开发使用 `agent` 数据库，集成测试使用独立端口和卷中的 `agent_test` 数据库 |
 | 生产 Sandbox | 尚未完成 | 默认 local workspace 只是路径隔离，不等同于容器或 microVM 安全边界 |
 
-因此，“能否和真实模型聊天”的答案是可以；“能否作为完整的多租户生产 Coding Agent 上线”的答案是还不可以。当前缺少的关键产品链路是 Web 登录、Token 传递、项目接入和生产 Sandbox。
+因此，“能否和真实模型聊天、恢复历史并让 Agent 读取导入项目”的答案是可以；“能否作为完整的多租户生产 Coding Agent 上线”的答案仍然是还不可以。当前缺少的关键产品链路是 Web 登录、Token 传递、私有仓库授权和生产 Sandbox。
 
 ## 为什么本地页面不要求登录
 
@@ -56,6 +58,7 @@ cp .env.example .env
 pnpm install
 pnpm infra:up
 pnpm db:migrate
+pnpm db:migrate:test
 pnpm dev
 ```
 
@@ -79,10 +82,11 @@ docker compose -f infra/compose.yaml ps
 ## 二、默认 Demo 全链路验收
 
 1. 打开 <http://localhost:3000>。
-2. 点击“检查项目”，或输入任意消息。
-3. 观察页面运行轨迹从 queued/running 进入 completed。
-4. 确认回答中出现“Node Agent Worker 已收到任务”。
-5. 刷新页面，确认已完成内容仍存在，并且没有创建第二个 Run。
+2. 点击“新建对话”，选择空白工作区、已有项目、公开 Git 仓库或本地目录。
+3. 确认新会话立即出现在左侧；输入消息后观察运行轨迹从 queued/running 进入 completed。
+4. 切换到另一条会话再切回来，确认用户消息和 Agent 回复都能恢复，且只显示一个 `Coding Agent`。
+5. 使用会话右侧菜单验收重命名和删除；历史超过一页时点击“加载更多”。
+6. 刷新页面，确认已完成内容仍存在，并且没有创建第二个 Run。
 
 查询持久化证据：
 
@@ -101,6 +105,16 @@ docker compose -f infra/compose.yaml exec -T postgres \
 ```
 
 通过标准：最新 Run 为 `completed`，事件 seq 单调递增，Outbox 的 `published` 和 `consumed` 都为 `true`。
+
+### 集成测试数据隔离
+
+`pnpm infra:up` 会同时启动开发库 `127.0.0.1:55432/agent` 和测试库 `127.0.0.1:55433/agent_test`。运行：
+
+```bash
+pnpm test:integration
+```
+
+脚本会把 `DATABASE_URL` 明确指向 `agent_test`；测试代码还会校验数据库名必须包含 `test`，防止误清理开发数据。普通 `pnpm test` 不会向开发库写测试会话。
 
 ## 三、真实大模型验收
 
@@ -352,7 +366,7 @@ curl -fsS http://127.0.0.1:8001/health/ready
 2. 再用 `deep + dev auth` 验收真实模型、审批、恢复和取消。
 3. 接入身份供应商后，用两个真实 tenant Token 做 API 隔离测试。
 4. 实现 Web 登录和 Token 注入，再做浏览器多用户验收。
-5. 实现仓库 provisioning 和生产 Sandbox，再验收真实项目修改。
+5. 接入私有仓库授权和生产 Sandbox，再验收不受信任项目的真实修改。
 6. 最后进行并发、限流、队列积压、Worker 崩溃、Redis 重启和对象存储故障测试。
 
-在第 4、5 步完成之前，可以验收“多租户 Agent 平台纵切”，但不能宣称完成“多用户生产 Coding Agent”。
+在第 4、5 步完成之前，可以验收“多租户 Agent 平台纵切、持久化会话和项目导入”，但不能宣称完成“多用户生产 Coding Agent”。

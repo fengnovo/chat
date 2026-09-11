@@ -37,6 +37,10 @@ export function artifactObjectKey(
   return `tenants/${tenantId}/runs/${runId}/${artifactId}/${safeName}`;
 }
 
+export function projectSnapshotObjectKey(tenantId: string, projectId: string) {
+  return `tenants/${tenantId}/projects/${projectId}/snapshot-v1.json`;
+}
+
 function isMissingBucket(error: unknown): boolean {
   const candidate = error as {
     name?: string;
@@ -138,6 +142,29 @@ export class S3ArtifactStore {
     if (object.Metadata?.sha256 !== expected.sha256) {
       throw new ArtifactVerificationError('Artifact checksum metadata does not match');
     }
+  }
+
+  async putObject(
+    objectKey: string,
+    body: Uint8Array,
+    contentType: string,
+  ): Promise<void> {
+    await this.internalClient.send(
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: objectKey,
+        Body: body,
+        ContentType: contentType,
+      }),
+    );
+  }
+
+  async getObjectBytes(objectKey: string): Promise<Uint8Array> {
+    const object = await this.internalClient.send(
+      new GetObjectCommand({ Bucket: this.config.bucket, Key: objectKey }),
+    );
+    if (!object.Body) throw new Error('Object body is empty');
+    return object.Body.transformToByteArray();
   }
 
   async createDownloadUrl(objectKey: string, expiresInSeconds = 300) {

@@ -3,13 +3,14 @@
 import { useChat } from '@ai-sdk/react';
 import { WorkflowChatTransport } from '@ai-sdk/workflow';
 import { AIBoundary } from '@cognicatch/react';
-import type { AgentEvent } from '@repo/contracts';
+import type { AgentEvent, RunStatus } from '@repo/contracts';
 import type { UIMessage } from 'ai';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   type FormEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -52,6 +53,7 @@ type InsightCard = {
 };
 
 type MessageMetadata = {
+  createdAt?: string;
   model?: string;
   runId?: string;
 };
@@ -73,6 +75,62 @@ type QuestionAnswer = {
   selections: Array<{ index: number; label: string }>;
   customText?: string;
 };
+
+type SessionSummary = {
+  id: string;
+  title: string;
+  externalKey: string | null;
+  projectId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type WebSessionSummary = SessionSummary & { externalKey: string };
+
+type ProjectSummary = {
+  id: string;
+  name: string;
+  sourceType: 'empty' | 'git' | 'upload';
+  sourceRef: string | null;
+  sourceRevision: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type SessionPage = {
+  data: WebSessionSummary[];
+  nextCursor: string | null;
+};
+
+type HistoryMessage = {
+  id: string;
+  runId: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+};
+
+type SessionHistory = {
+  session: SessionSummary;
+  messages: HistoryMessage[];
+  latestRun: {
+    id: string;
+    status: RunStatus;
+  } | null;
+};
+
+type ConversationSeed = {
+  chatId: string;
+  messages: ResilientMessage[];
+  projectId: string | null;
+  resumeRun: PersistedRun | null;
+};
+
+type SessionDialog =
+  | { kind: 'rename'; session: WebSessionSummary }
+  | { kind: 'delete'; session: WebSessionSummary };
+
+const projectUploadMaxBytes = 20_000_000;
 
 const starterPrompts = [
   {
@@ -134,15 +192,21 @@ type IconName =
   | 'check'
   | 'chevron'
   | 'copy'
+  | 'edit'
+  | 'folder'
+  | 'git'
   | 'layers'
   | 'menu'
+  | 'more'
   | 'panel'
   | 'plus'
   | 'refresh'
   | 'shield'
   | 'shuffle'
   | 'square'
+  | 'trash'
   | 'triangle'
+  | 'upload'
   | 'user'
   | 'x';
 
@@ -153,15 +217,21 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     check: <path d="m5 12 4 4L19 6" />,
     chevron: <path d="m9 18 6-6-6-6" />,
     copy: <><rect width="12" height="12" x="9" y="9" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>,
+    edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>,
+    folder: <path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />,
+    git: <><circle cx="6" cy="4" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="6" cy="20" r="2" /><path d="M6 6v12M8 7c5 0 4-1 8-1" /></>,
     layers: <><path d="m12.83 2.18 8 4a1 1 0 0 1 0 1.79l-8 4a2 2 0 0 1-1.66 0l-8-4a1 1 0 0 1 0-1.79l8-4a2 2 0 0 1 1.66 0Z" /><path d="m22 12.5-9.17 4.59a2 2 0 0 1-1.66 0L2 12.5m20 5-9.17 4.59a2 2 0 0 1-1.66 0L2 17.5" /></>,
     menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+    more: <><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" /></>,
     panel: <><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18M9 9h12" /></>,
     plus: <path d="M12 5v14M5 12h14" />,
     refresh: <><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18.5 9a7 7 0 0 0-11.7-2.6L4 11m16 2-2.8 4.6A7 7 0 0 1 5.5 15" /></>,
     shield: <><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z" /><path d="m9 12 2 2 4-4" /></>,
     shuffle: <><path d="m18 14 4 4-4 4" /><path d="m18 2 4 4-4 4" /><path d="M2 18h1.4a8 8 0 0 0 6.7-3.6l3.8-5.8A8 8 0 0 1 20.6 5H22M2 6h1.9a8 8 0 0 1 6.7 3.6l.7 1" /></>,
     square: <rect width="12" height="12" x="6" y="6" rx="1" fill="currentColor" stroke="none" />,
+    trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 4v7m4-7v7" /></>,
     triangle: <><path d="M21.7 16 14 2.7a2.3 2.3 0 0 0-4 0L2.3 16A2.3 2.3 0 0 0 4.3 19h15.4a2.3 2.3 0 0 0 2-3Z" /><path d="M12 9v4m0 3h.01" /></>,
+    upload: <><path d="M12 16V4m-4 4 4-4 4 4" /><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></>,
     user: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>,
     x: <path d="m6 6 12 12M18 6 6 18" />,
   };
@@ -188,6 +258,84 @@ function messageText(message: ResilientMessage) {
     .filter((part) => part.type === 'text')
     .map((part) => part.text)
     .join('');
+}
+
+function messagesFromHistory(messages: HistoryMessage[]): ResilientMessage[] {
+  return messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    metadata: {
+      createdAt: message.createdAt,
+      runId: message.runId,
+    },
+    parts: [{ type: 'text', text: message.text }],
+  }));
+}
+
+function isPendingStatus(status: RunStatus) {
+  return !['completed', 'failed', 'cancelled'].includes(status);
+}
+
+function formatSessionTime(value: string) {
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - Date.parse(value)) / 1_000),
+  );
+  if (elapsedSeconds < 60) return '刚刚更新';
+  if (elapsedSeconds < 3_600) return `${Math.floor(elapsedSeconds / 60)} 分钟前`;
+  if (elapsedSeconds < 86_400) return `${Math.floor(elapsedSeconds / 3_600)} 小时前`;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(value));
+}
+
+async function fetchSessionPage(cursor?: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ limit: '20' });
+  if (cursor) query.set('cursor', cursor);
+  const response = await fetch(`/api/agent/sessions?${query}`, { signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = (await response.json()) as {
+    data: SessionSummary[];
+    nextCursor: string | null;
+  };
+  return {
+    data: payload.data.filter(
+      (session): session is WebSessionSummary =>
+        typeof session.externalKey === 'string' && session.externalKey.length > 0,
+    ),
+    nextCursor: payload.nextCursor,
+  } satisfies SessionPage;
+}
+
+async function fetchProjects(signal?: AbortSignal) {
+  const response = await fetch('/api/agent/projects', { signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = (await response.json()) as { data: ProjectSummary[] };
+  return payload.data;
+}
+
+async function responseError(response: Response, fallback: string) {
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string }
+    | null;
+  const knownErrors: Record<string, string> = {
+    project_upload_too_large: '上传内容不能超过 20 MB',
+    project_not_found: '所选项目不存在或已不可用',
+    session_has_active_run: '这条会话仍在运行，请先停止任务再删除',
+    session_not_found: '这条会话不存在或已被删除',
+  };
+  return payload?.error ? knownErrors[payload.error] ?? fallback : fallback;
+}
+
+async function fileToBase64(file: File) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function localEvent(
@@ -403,6 +551,12 @@ function AppSkeleton() {
 }
 
 function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
+  const [conversation, setConversation] = useState<ConversationSeed>(() => ({
+    chatId: initialRun?.chatId ?? crypto.randomUUID(),
+    messages: (initialRun?.messages ?? []) as ResilientMessage[],
+    projectId: null,
+    resumeRun: initialRun?.pending ? initialRun : null,
+  }));
   const [input, setInput] = useState('');
   const [trace, setTrace] = useState<PipelineEvent[]>(initialTrace);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -410,35 +564,68 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     () => new Set(),
   );
   const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
-  const [sessionStats, setSessionStats] = useState({
-    revision: 0,
-    messages: 0,
-    canUndo: false,
-  });
+  const [sessions, setSessions] = useState<WebSessionSummary[]>([]);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [sessionsNextCursor, setSessionsNextCursor] = useState<string | null>(null);
+  const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
+  const [switchingSessionId, setSwitchingSessionId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [projectDialogBusy, setProjectDialogBusy] = useState(false);
+  const [projectDialogError, setProjectDialogError] = useState<string | null>(null);
+  const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(null);
+  const [sessionDialogBusy, setSessionDialogBusy] = useState(false);
+  const [sessionDialogError, setSessionDialogError] = useState<string | null>(null);
+  const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const sessionRef = useRef(new ResilientSession());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarWasOpenRef = useRef(false);
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const page = await fetchSessionPage();
+      setSessions(page.data);
+      setSessionsNextCursor(page.nextCursor);
+      setSessionsError(null);
+    } catch {
+      setSessionsError('历史记录加载失败');
+    } finally {
+      setSessionsLoaded(true);
+    }
+  }, []);
 
   const transport = useMemo(() => {
     return new WorkflowChatTransport<ResilientMessage>({
         api: '/api/chat',
         fetch: createTrackedFetch(),
         maxConsecutiveErrors: 3,
-        initialStartIndex: initialRun?.chunkIndex ?? 0,
+        initialStartIndex: conversation.resumeRun?.chunkIndex ?? 0,
         prepareSendMessagesRequest: ({ id, messages, trigger }) => ({
-          body: { messages, chat_id: id, trigger },
+          body: {
+            messages,
+            chat_id: id,
+            project_id: conversation.projectId ?? undefined,
+            trigger,
+          },
           headers: { 'Content-Type': 'application/json' },
         }),
         prepareReconnectToStreamRequest: ({ api }) => {
           const pendingRun =
-            initialRun?.pending &&
-            api.endsWith(`/${encodeURIComponent(initialRun.chatId)}/stream`)
-              ? initialRun
+            conversation.resumeRun?.pending &&
+            api.endsWith(`/${encodeURIComponent(conversation.chatId)}/stream`)
+              ? conversation.resumeRun
               : null;
           if (!pendingRun) return { api };
           return {
@@ -456,6 +643,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
             messages: options.messages,
             pending: true,
           });
+          void refreshSessions();
         },
         onChatEnd: ({ chunkIndex }) => {
           const current = readPersistedRun();
@@ -463,7 +651,12 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
           writePersistedRun({ ...current, chunkIndex });
         },
       });
-  }, [initialRun]);
+  }, [
+    conversation.chatId,
+    conversation.projectId,
+    conversation.resumeRun,
+    refreshSessions,
+  ]);
 
   const {
     clearError,
@@ -471,13 +664,12 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     messages,
     regenerate: reload,
     sendMessage,
-    setMessages,
     status,
     stop,
   } = useChat<ResilientMessage>({
-    id: initialRun?.chatId,
-    messages: (initialRun?.messages ?? []) as ResilientMessage[],
-    resume: Boolean(initialRun?.pending && initialRun.runId),
+    id: conversation.chatId,
+    messages: conversation.messages,
+    resume: Boolean(conversation.resumeRun?.pending && conversation.resumeRun.runId),
     throttle: 24,
     transport,
     onData: (part) => {
@@ -516,7 +708,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     },
     onError: (caught) => {
       const rolledBack = sessionRef.current.rollbackAssistant();
-      setSessionStats(sessionRef.current.stats);
       setTrace((current) => [
         ...current.slice(-9),
         localEvent(
@@ -534,7 +725,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       const text = messageText(message);
       if (!isError && text) {
         sessionRef.current.commitAssistant(text);
-        setSessionStats(sessionRef.current.stats);
       }
       if (isError) return;
 
@@ -542,13 +732,19 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       const runId = message.metadata?.runId ?? persisted?.runId ?? '';
       if (runId) {
         writePersistedRun({
-          chatId: initialRun?.chatId ?? persisted?.chatId ?? '',
+          chatId: conversation.chatId,
           runId,
           chunkIndex: persisted?.chunkIndex ?? 0,
           messages: finishedMessages,
           pending: false,
         });
       }
+      void refreshSessions();
+      setConversation((current) =>
+        current.chatId === conversation.chatId
+          ? { ...current, resumeRun: null }
+          : current,
+      );
       if (isAbort) {
         setTrace((current) => [
           ...current.slice(-9),
@@ -560,14 +756,108 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
 
   const isBusy = status === 'submitted' || status === 'streaming';
   const hasConversation = messages.length > 0;
+  const hasAssistantPlaceholder =
+    messages.at(-1)?.role === 'assistant' && !messageText(messages.at(-1) as ResilientMessage);
   const lastAssistant = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant');
+  const currentProject = conversation.projectId
+    ? projects.find((project) => project.id === conversation.projectId) ?? null
+    : null;
 
   useEffect(() => {
     if (status !== 'streaming' || !lastAssistant) return;
     sessionRef.current.stageAssistant(messageText(lastAssistant));
   }, [lastAssistant, status]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    fetchSessionPage(undefined, controller.signal)
+      .then((page) => {
+        if (!active) return;
+        setSessions(page.data);
+        setSessionsNextCursor(page.nextCursor);
+        setSessionsError(null);
+      })
+      .catch((caught: unknown) => {
+        if (
+          !active ||
+          (caught instanceof DOMException && caught.name === 'AbortError')
+        ) {
+          return;
+        }
+        setSessionsError('历史记录加载失败');
+      })
+      .finally(() => {
+        if (active) setSessionsLoaded(true);
+      });
+    fetchProjects(controller.signal)
+      .then((loadedProjects) => {
+        if (active) setProjects(loadedProjects);
+      })
+      .catch((caught: unknown) => {
+        if (
+          !active ||
+          (caught instanceof DOMException && caught.name === 'AbortError')
+        ) {
+          return;
+        }
+        setProjectDialogError('项目列表加载失败，可稍后重试');
+      })
+      .finally(() => {
+        if (active) setProjectsLoaded(true);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(null), 2400);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  useEffect(() => {
+    if (sidebarWasOpenRef.current && !sidebarOpen) {
+      mobileMenuButtonRef.current?.focus();
+    }
+    sidebarWasOpenRef.current = sidebarOpen;
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    if (projectDialogOpen || sessionDialog || !dialogReturnFocusRef.current) {
+      return;
+    }
+    const returnTarget = dialogReturnFocusRef.current;
+    dialogReturnFocusRef.current = null;
+    window.requestAnimationFrame(() => returnTarget.focus());
+  }, [projectDialogOpen, sessionDialog]);
+
+  useEffect(() => {
+    if (!projectDialogOpen && !sessionDialog && !sessionMenuId && !sidebarOpen) {
+      return;
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (sessionDialogBusy || projectDialogBusy) return;
+      setProjectDialogOpen(false);
+      setSessionDialog(null);
+      setSessionMenuId(null);
+      setSidebarOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [
+    projectDialogBusy,
+    projectDialogOpen,
+    sessionDialog,
+    sessionDialogBusy,
+    sessionMenuId,
+    sidebarOpen,
+  ]);
 
   useEffect(() => {
     const reducedMotion = window.matchMedia(
@@ -579,13 +869,59 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     });
   }, [messages, error, pendingInterrupt]);
 
+  async function selectSession(session: WebSessionSummary) {
+    if (isBusy || session.externalKey === conversation.chatId) return;
+    setSwitchingSessionId(session.id);
+    setSessionsError(null);
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(session.id)}/history`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const history = (await response.json()) as SessionHistory;
+      const restoredMessages = messagesFromHistory(history.messages);
+      const latestRun = history.latestRun;
+      const persistedRun = latestRun
+        ? {
+            chatId: session.externalKey,
+            runId: latestRun.id,
+            chunkIndex: 0,
+            messages: restoredMessages,
+            pending: isPendingStatus(latestRun.status),
+          }
+        : null;
+
+      await stop();
+      clearError();
+      if (persistedRun) writePersistedRun(persistedRun);
+      else clearPersistedRun();
+      setConversation({
+        chatId: session.externalKey,
+        messages: restoredMessages,
+        projectId: history.session.projectId,
+        resumeRun: persistedRun?.pending ? persistedRun : null,
+      });
+      setInput('');
+      setSuggestions([]);
+      setTrace(initialTrace);
+      setDismissedCards(new Set());
+      setPendingInterrupt(null);
+      setAgentTodos([]);
+      setInteractionError(null);
+      sessionRef.current = new ResilientSession();
+    } catch {
+      setSessionsError('无法打开这条历史记录');
+    } finally {
+      setSwitchingSessionId(null);
+    }
+  }
+
   async function submitText(value: string) {
     const trimmed = value.trim();
     if (!trimmed || isBusy || error) return;
     setInput('');
     setSuggestions([]);
     sessionRef.current.addUserMessage(trimmed);
-    setSessionStats(sessionRef.current.stats);
     setTrace([
       localEvent('request', 'running', '正在提交新消息', 'useChat 已锁定输入并创建请求'),
     ]);
@@ -605,17 +941,26 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     await reload();
   }
 
-  function handleNewChat() {
+  async function stopCurrentConversation() {
     const currentRun = readPersistedRun();
     if (currentRun?.pending) {
-      void fetch(`/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`, {
-        method: 'POST',
-      });
+      await fetch(
+        `/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`,
+        { method: 'POST' },
+      ).catch(() => null);
     }
-    void stop();
+    await stop();
+  }
+
+  function resetConversation(chatId: string, projectId: string | null) {
     clearError();
     clearPersistedRun();
-    setMessages([]);
+    setConversation({
+      chatId,
+      messages: [],
+      projectId,
+      resumeRun: null,
+    });
     setInput('');
     setSuggestions([]);
     setTrace(initialTrace);
@@ -624,7 +969,210 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     setAgentTodos([]);
     setInteractionError(null);
     sessionRef.current = new ResilientSession();
-    setSessionStats(sessionRef.current.stats);
+  }
+
+  function handleNewChat() {
+    dialogReturnFocusRef.current = document.activeElement as HTMLElement | null;
+    setSessionMenuId(null);
+    setProjectDialogError(null);
+    setProjectDialogOpen(true);
+  }
+
+  async function createSession(projectId: string | null) {
+    setProjectDialogBusy(true);
+    setProjectDialogError(null);
+    const externalKey = crypto.randomUUID();
+    try {
+      const response = await fetch('/api/agent/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          externalKey,
+          projectId: projectId ?? undefined,
+          title: '新会话',
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response, '新建会话失败'));
+      }
+      await stopCurrentConversation();
+      resetConversation(externalKey, projectId);
+      setProjectDialogOpen(false);
+      setNotice('已创建全新的隔离会话');
+      await refreshSessions();
+    } catch (caught) {
+      setProjectDialogError(
+        caught instanceof Error ? caught.message : '新建会话失败',
+      );
+    } finally {
+      setProjectDialogBusy(false);
+    }
+  }
+
+  async function createGitProject(input: {
+    name: string;
+    repositoryUrl: string;
+    ref?: string;
+  }) {
+    setProjectDialogBusy(true);
+    setProjectDialogError(null);
+    try {
+      const response = await fetch('/api/agent/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: input.name,
+          source: {
+            type: 'git',
+            url: input.repositoryUrl,
+            ref: input.ref || undefined,
+          },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response, '创建仓库项目失败'));
+      }
+      const project = (await response.json()) as ProjectSummary;
+      setProjects((current) => [project, ...current]);
+      setProjectDialogBusy(false);
+      await createSession(project.id);
+    } catch (caught) {
+      setProjectDialogError(
+        caught instanceof Error ? caught.message : '创建仓库项目失败',
+      );
+      setProjectDialogBusy(false);
+    }
+  }
+
+  async function createUploadProject(name: string, files: File[]) {
+    const totalBytes = files.reduce((total, file) => total + file.size, 0);
+    if (totalBytes > projectUploadMaxBytes) {
+      setProjectDialogError('上传内容不能超过 20 MB');
+      return;
+    }
+    setProjectDialogBusy(true);
+    setProjectDialogError(null);
+    try {
+      const relativePaths = files.map((file) => file.webkitRelativePath || file.name);
+      const rootDirectory = relativePaths[0]?.split('/')[0];
+      const stripRoot = Boolean(
+        rootDirectory &&
+          relativePaths.every((path) => path.startsWith(`${rootDirectory}/`)),
+      );
+      const encodedFiles = await Promise.all(
+        files.map(async (file, index) => ({
+          path: stripRoot
+            ? relativePaths[index]!.slice(rootDirectory!.length + 1)
+            : relativePaths[index]!,
+          contentBase64: await fileToBase64(file),
+        })),
+      );
+      const response = await fetch('/api/agent/projects/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, files: encodedFiles }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response, '上传项目失败'));
+      }
+      const project = (await response.json()) as ProjectSummary;
+      setProjects((current) => [project, ...current]);
+      setProjectDialogBusy(false);
+      await createSession(project.id);
+    } catch (caught) {
+      setProjectDialogError(
+        caught instanceof Error ? caught.message : '上传项目失败',
+      );
+      setProjectDialogBusy(false);
+    }
+  }
+
+  async function loadMoreSessions() {
+    if (!sessionsNextCursor || loadingMoreSessions) return;
+    setLoadingMoreSessions(true);
+    try {
+      const page = await fetchSessionPage(sessionsNextCursor);
+      setSessions((current) => {
+        const known = new Set(current.map((session) => session.id));
+        return [
+          ...current,
+          ...page.data.filter((session) => !known.has(session.id)),
+        ];
+      });
+      setSessionsNextCursor(page.nextCursor);
+      setSessionsError(null);
+    } catch {
+      setSessionsError('更多历史记录加载失败');
+    } finally {
+      setLoadingMoreSessions(false);
+    }
+  }
+
+  async function renameSession(title: string) {
+    if (!sessionDialog || sessionDialog.kind !== 'rename') return;
+    setSessionDialogBusy(true);
+    setSessionDialogError(null);
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(sessionDialog.session.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await responseError(response, '重命名失败'));
+      }
+      const updated = (await response.json()) as WebSessionSummary;
+      setSessions((current) =>
+        current.map((session) => (session.id === updated.id ? updated : session)),
+      );
+      setSessionDialog(null);
+      setNotice('会话名称已更新');
+    } catch (caught) {
+      setSessionDialogError(
+        caught instanceof Error ? caught.message : '重命名失败',
+      );
+    } finally {
+      setSessionDialogBusy(false);
+    }
+  }
+
+  async function deleteSession() {
+    if (!sessionDialog || sessionDialog.kind !== 'delete') return;
+    setSessionDialogBusy(true);
+    setSessionDialogError(null);
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(sessionDialog.session.id)}`,
+        { method: 'DELETE' },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await responseError(
+            response,
+            response.status === 409 ? '运行中的会话不能删除' : '删除失败',
+          ),
+        );
+      }
+      const deleted = sessionDialog.session;
+      setSessions((current) =>
+        current.filter((session) => session.id !== deleted.id),
+      );
+      if (deleted.externalKey === conversation.chatId) {
+        await stopCurrentConversation();
+        resetConversation(crypto.randomUUID(), null);
+      }
+      setSessionDialog(null);
+      setNotice('会话已删除');
+    } catch (caught) {
+      setSessionDialogError(
+        caught instanceof Error ? caught.message : '删除失败',
+      );
+    } finally {
+      setSessionDialogBusy(false);
+    }
   }
 
   async function respondToInterrupt(
@@ -699,25 +1247,78 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     window.setTimeout(() => setCopiedMessage(null), 1400);
   }
 
-  const persisted = typeof window === 'undefined' ? null : readPersistedRun();
-
   return (
-    <main className={`app-shell ${traceOpen ? 'is-trace-open' : ''}`}>
+    <main
+      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''}`}
+    >
       <Sidebar
-        active={hasConversation}
-        onNewChat={handleNewChat}
-        sessionStats={sessionStats}
+        activeChatId={conversation.chatId}
+        busy={isBusy}
+        error={sessionsError}
+        loaded={sessionsLoaded}
+        hasMore={Boolean(sessionsNextCursor)}
+        loadingMore={loadingMoreSessions}
+        menuSessionId={sessionMenuId}
+        inactive={projectDialogOpen || Boolean(sessionDialog)}
+        onDelete={(session) => {
+          dialogReturnFocusRef.current = document.activeElement
+            ?.closest('.session-item')
+            ?.querySelector<HTMLElement>('.session-more') ?? null;
+          setSessionMenuId(null);
+          setSessionDialogError(null);
+          setSessionDialog({ kind: 'delete', session });
+        }}
+        onLoadMore={() => void loadMoreSessions()}
+        onMenu={setSessionMenuId}
+        onClose={() => setSidebarOpen(false)}
+        onNewChat={() => {
+          setSidebarOpen(false);
+          handleNewChat();
+        }}
+        onRename={(session) => {
+          dialogReturnFocusRef.current = document.activeElement
+            ?.closest('.session-item')
+            ?.querySelector<HTMLElement>('.session-more') ?? null;
+          setSessionMenuId(null);
+          setSessionDialogError(null);
+          setSessionDialog({ kind: 'rename', session });
+        }}
+        onRefresh={() => void refreshSessions()}
+        onSelect={(session) => {
+          setSidebarOpen(false);
+          void selectSession(session);
+        }}
+        sessions={sessions}
+        open={sidebarOpen}
+        switchingSessionId={switchingSessionId}
       />
 
-      <section className="chat-column">
+      {sidebarOpen && (
+        <button
+          aria-label="关闭历史对话"
+          className="sidebar-scrim"
+          type="button"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <section
+        className="chat-column"
+        inert={
+          sidebarOpen || projectDialogOpen || Boolean(sessionDialog)
+            ? true
+            : undefined
+        }
+      >
         <header className="topbar">
           <div className="topbar-title">
             <button
               className="mobile-icon-button"
+              ref={mobileMenuButtonRef}
               type="button"
-              aria-label="打开可靠性轨迹"
-              aria-expanded={traceOpen}
-              onClick={() => setTraceOpen(true)}
+              aria-label="打开历史对话"
+              aria-expanded={sidebarOpen}
+              onClick={() => setSidebarOpen(true)}
             >
               <Icon name="menu" />
             </button>
@@ -726,7 +1327,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
                 <h1>AI Coding Agent</h1>
                 <span className="local-badge">NODE AGENT</span>
               </div>
-              <p>Durable multi-tenant coding workspace</p>
             </div>
           </div>
           <div className="topbar-actions">
@@ -762,7 +1362,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
 
         <div className="conversation" aria-live="polite">
           {!hasConversation ? (
-            <Welcome onPrompt={submitText} />
+            <Welcome project={currentProject} onPrompt={submitText} />
           ) : (
             <div className="message-list">
               {messages.map((message) => (
@@ -790,7 +1390,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
                   }}
                 />
               ))}
-              {status === 'submitted' && <ThinkingRow />}
+              {status === 'submitted' && !hasAssistantPlaceholder && <ThinkingRow />}
               {agentTodos.length > 0 && <AgentTodoList todos={agentTodos} />}
               {pendingInterrupt && (
                 <PendingInteraction
@@ -837,47 +1437,119 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
           suggestions={suggestions}
         />
 
-        <div className="persistence-strip">
-          <span>
-            <Icon name="shield" size={14} />
-            事件已持久化到 Postgres
-          </span>
-          <code>
-            {persisted?.runId
-              ? `run ${persisted.runId.slice(0, 8)} · offset ${persisted.chunkIndex}`
-              : '等待首个 agent run'}
-          </code>
-        </div>
       </section>
 
       <TracePanel
+        inactive={sidebarOpen || projectDialogOpen || Boolean(sessionDialog)}
         open={traceOpen}
         onClose={() => setTraceOpen(false)}
         trace={trace}
       />
+
+      {projectDialogOpen && (
+        <ProjectDialog
+          busy={projectDialogBusy}
+          error={projectDialogError}
+          loaded={projectsLoaded}
+          projects={projects}
+          onBlank={() => void createSession(null)}
+          onClose={() => {
+            if (!projectDialogBusy) setProjectDialogOpen(false);
+          }}
+          onGit={(input) => void createGitProject(input)}
+          onSelect={(project) => void createSession(project.id)}
+          onUpload={(name, files) => void createUploadProject(name, files)}
+        />
+      )}
+
+      {sessionDialog && (
+        <SessionActionDialog
+          busy={sessionDialogBusy}
+          dialog={sessionDialog}
+          error={sessionDialogError}
+          onClose={() => {
+            if (!sessionDialogBusy) setSessionDialog(null);
+          }}
+          onDelete={() => void deleteSession()}
+          onRename={(title) => void renameSession(title)}
+        />
+      )}
+
+      {notice && (
+        <div className="toast" role="status">
+          <Icon name="check" size={16} />
+          {notice}
+        </div>
+      )}
     </main>
   );
 }
 
 function Sidebar({
-  active,
+  activeChatId,
+  busy,
+  error,
+  hasMore,
+  inactive,
+  loaded,
+  loadingMore,
+  menuSessionId,
+  onDelete,
+  onClose,
+  onLoadMore,
+  onMenu,
   onNewChat,
-  sessionStats,
+  onRename,
+  onRefresh,
+  onSelect,
+  open,
+  sessions,
+  switchingSessionId,
 }: {
-  active: boolean;
+  activeChatId: string;
+  busy: boolean;
+  error: string | null;
+  hasMore: boolean;
+  inactive: boolean;
+  loaded: boolean;
+  loadingMore: boolean;
+  menuSessionId: string | null;
+  onDelete: (session: WebSessionSummary) => void;
+  onClose: () => void;
+  onLoadMore: () => void;
+  onMenu: (sessionId: string | null) => void;
   onNewChat: () => void;
-  sessionStats: { revision: number; messages: number; canUndo: boolean };
+  onRename: (session: WebSessionSummary) => void;
+  onRefresh: () => void;
+  onSelect: (session: WebSessionSummary) => void;
+  open: boolean;
+  sessions: WebSessionSummary[];
+  switchingSessionId: string | null;
 }) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (open) closeButtonRef.current?.focus();
+  }, [open]);
+
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" inert={inactive || undefined}>
       <div className="brand">
         <span className="brand-mark">
           <Icon name="layers" size={20} />
         </span>
         <span>
-          <strong>Agent Platform</strong>
-          <small>MULTI-TENANT RUNTIME</small>
+          <strong>Keen Agent</strong>
         </span>
+        <button
+          aria-label="关闭历史对话"
+          className="sidebar-close"
+          ref={closeButtonRef}
+          type="button"
+          onClick={onClose}
+        >
+          <Icon name="x" size={18} />
+        </button>
       </div>
 
       <button
@@ -890,36 +1562,90 @@ function Sidebar({
         <span>新建对话</span>
       </button>
 
-      <nav aria-label="对话列表" className="session-nav">
-        <span className="nav-label">工作区</span>
-        <button
-          aria-label={active ? '当前 Agent 会话' : '等待第一条任务'}
-          className={active ? 'session-item is-active' : 'session-item'}
-          type="button"
-        >
-          <span className="session-icon">
-            <Icon name="shield" size={16} />
-          </span>
-          <span>
-            <strong>{active ? '当前 Agent 会话' : '等待第一条任务'}</strong>
-            <small>{active ? '刚刚更新' : '持久化工作区'}</small>
-          </span>
-          <Icon name="chevron" size={15} />
-        </button>
+      <nav aria-label="历史对话" className="session-nav">
+        {!loaded && <p className="session-list-status">正在加载历史记录…</p>}
+        {loaded && error && (
+          <button className="session-list-retry" type="button" onClick={onRefresh}>
+            {error}，重新加载
+          </button>
+        )}
+        {loaded && !error && sessions.length === 0 && (
+          <p className="session-list-status">还没有历史对话</p>
+        )}
+        {sessions.map((session) => {
+          const active = session.externalKey === activeChatId;
+          const switching = switchingSessionId === session.id;
+          const menuOpen = menuSessionId === session.id;
+          return (
+            <div
+              className={active ? 'session-item is-active' : 'session-item'}
+              key={session.id}
+            >
+              <button
+                aria-current={active ? 'page' : undefined}
+                aria-label={`打开对话：${session.title}`}
+                className="session-main"
+                disabled={busy || switchingSessionId !== null}
+                type="button"
+                onClick={() => onSelect(session)}
+              >
+                <span className="session-icon">
+                  <Icon name="shield" size={16} />
+                </span>
+                <span className="session-copy">
+                  <strong>{session.title}</strong>
+                  <small>
+                    {switching
+                      ? '正在载入…'
+                      : formatSessionTime(session.updatedAt)}
+                  </small>
+                </span>
+              </button>
+              <button
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                aria-label={`管理对话：${session.title}`}
+                className="session-more"
+                type="button"
+                onClick={() => onMenu(menuOpen ? null : session.id)}
+              >
+                <Icon name="more" size={17} />
+              </button>
+              {menuOpen && (
+                <div className="session-menu" role="menu">
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => onRename(session)}
+                  >
+                    <Icon name="edit" size={15} />
+                    重命名
+                  </button>
+                  <button
+                    className="is-danger"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => onDelete(session)}
+                  >
+                    <Icon name="trash" size={15} />
+                    删除
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {loaded && !error && hasMore && (
+          <button
+            className="load-more-button"
+            disabled={loadingMore}
+            type="button"
+            onClick={onLoadMore}
+          >
+            {loadingMore ? '正在加载…' : '加载更多'}
+          </button>
+        )}
       </nav>
-
-      <div className="sidebar-spacer" />
-
-      <div className="session-stats">
-        <div>
-          <span>STATE REVISION</span>
-          <strong>{String(sessionStats.revision).padStart(2, '0')}</strong>
-        </div>
-        <div>
-          <span>MESSAGES</span>
-          <strong>{String(sessionStats.messages).padStart(2, '0')}</strong>
-        </div>
-      </div>
 
       <div className="system-card">
         <div className="system-card-head">
@@ -937,7 +1663,13 @@ function Sidebar({
   );
 }
 
-function Welcome({ onPrompt }: { onPrompt: (prompt: string) => Promise<void> }) {
+function Welcome({
+  onPrompt,
+  project,
+}: {
+  onPrompt: (prompt: string) => Promise<void>;
+  project: ProjectSummary | null;
+}) {
   return (
     <section className="welcome">
       <div className="welcome-symbol">
@@ -947,7 +1679,10 @@ function Welcome({ onPrompt }: { onPrompt: (prompt: string) => Promise<void> }) 
           <Icon name="shield" size={31} />
         </span>
       </div>
-      <span className="eyebrow">HEADLESS AGENT · DURABLE RUNTIME</span>
+      <span className="project-context">
+        <Icon name={project?.sourceType === 'git' ? 'git' : 'folder'} size={14} />
+        {project?.name ?? '空白工作区'}
+      </span>
       <h2>让 Agent 在你的项目里工作</h2>
       <p>
         Web 通过 Node API 创建持久化运行，Worker 在隔离工作区中调用 coding
@@ -973,6 +1708,345 @@ function Welcome({ onPrompt }: { onPrompt: (prompt: string) => Promise<void> }) 
         ))}
       </div>
     </section>
+  );
+}
+
+function ProjectDialog({
+  busy,
+  error,
+  loaded,
+  onBlank,
+  onClose,
+  onGit,
+  onSelect,
+  onUpload,
+  projects,
+}: {
+  busy: boolean;
+  error: string | null;
+  loaded: boolean;
+  onBlank: () => void;
+  onClose: () => void;
+  onGit: (input: {
+    name: string;
+    repositoryUrl: string;
+    ref?: string;
+  }) => void;
+  onSelect: (project: ProjectSummary) => void;
+  onUpload: (name: string, files: File[]) => void;
+  projects: ProjectSummary[];
+}) {
+  const [mode, setMode] = useState<'existing' | 'git' | 'upload'>('existing');
+  const [projectName, setProjectName] = useState('');
+  const [repositoryUrl, setRepositoryUrl] = useState('');
+  const [repositoryRef, setRepositoryRef] = useState('');
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+
+  return (
+    <div className="modal-layer">
+      <button
+        aria-label="关闭新建对话窗口"
+        className="modal-scrim"
+        disabled={busy}
+        type="button"
+        onClick={onClose}
+      />
+      <section
+        aria-labelledby="project-dialog-title"
+        aria-modal="true"
+        className="modal-card project-dialog"
+        role="dialog"
+      >
+        <header className="modal-head">
+          <div>
+            <span>NEW SESSION</span>
+            <h2 id="project-dialog-title">选择这次对话使用的项目</h2>
+            <p>每条会话都会获得独立的 workspace，项目内容会由 Worker 安全载入。</p>
+          </div>
+          <button
+            aria-label="关闭"
+            autoFocus={mode === 'existing'}
+            className="modal-close"
+            disabled={busy}
+            type="button"
+            onClick={onClose}
+          >
+            <Icon name="x" size={18} />
+          </button>
+        </header>
+
+        <div className="dialog-tabs" role="tablist" aria-label="项目来源">
+          {([
+            ['existing', '已有项目'],
+            ['git', 'Git 仓库'],
+            ['upload', '本地上传'],
+          ] as const).map(([value, label]) => (
+            <button
+              aria-selected={mode === value}
+              className={mode === value ? 'is-active' : ''}
+              disabled={busy}
+              key={value}
+              role="tab"
+              type="button"
+              onClick={() => setMode(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mode === 'existing' && (
+          <div className="project-list" role="tabpanel">
+            <button
+              className="project-option"
+              disabled={busy}
+              type="button"
+              onClick={onBlank}
+            >
+              <span className="project-option-icon"><Icon name="folder" /></span>
+              <span><strong>空白工作区</strong><small>从一个干净目录开始</small></span>
+              <Icon name="chevron" size={16} />
+            </button>
+            {!loaded && <p className="dialog-status">正在加载项目…</p>}
+            {loaded && projects.length === 0 && (
+              <p className="dialog-status">还没有保存的项目，可从 Git 或本地创建。</p>
+            )}
+            {projects.map((project) => (
+              <button
+                className="project-option"
+                disabled={busy}
+                key={project.id}
+                type="button"
+                onClick={() => onSelect(project)}
+              >
+                <span className="project-option-icon">
+                  <Icon name={project.sourceType === 'git' ? 'git' : 'upload'} />
+                </span>
+                <span>
+                  <strong>{project.name}</strong>
+                  <small>
+                    {project.sourceType === 'git'
+                      ? project.sourceRef
+                      : project.sourceType === 'upload'
+                        ? '已上传的项目快照'
+                        : '空白项目'}
+                  </small>
+                </span>
+                <Icon name="chevron" size={16} />
+              </button>
+            ))}
+          </div>
+        )}
+
+        {mode === 'git' && (
+          <form
+            className="dialog-form"
+            role="tabpanel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onGit({
+                name: projectName.trim(),
+                repositoryUrl: repositoryUrl.trim(),
+                ref: repositoryRef.trim() || undefined,
+              });
+            }}
+          >
+            <label>
+              项目名称
+              <input
+                autoFocus
+                disabled={busy}
+                maxLength={120}
+                placeholder="例如：官网前端"
+                required
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+              />
+            </label>
+            <label>
+              HTTPS 仓库地址
+              <input
+                disabled={busy}
+                inputMode="url"
+                placeholder="https://github.com/org/repository.git"
+                required
+                type="url"
+                value={repositoryUrl}
+                onChange={(event) => setRepositoryUrl(event.target.value)}
+              />
+            </label>
+            <label>
+              分支或 Tag <span>可选</span>
+              <input
+                disabled={busy}
+                placeholder="main"
+                value={repositoryRef}
+                onChange={(event) => setRepositoryRef(event.target.value)}
+              />
+            </label>
+            <p className="form-help">首次运行时由 Worker 浅克隆公开仓库，不接受地址中的账号或密码。</p>
+            <button className="primary-action dialog-submit" disabled={busy} type="submit">
+              {busy ? '正在创建…' : '创建项目并开始对话'}
+            </button>
+          </form>
+        )}
+
+        {mode === 'upload' && (
+          <form
+            className="dialog-form"
+            role="tabpanel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onUpload(projectName.trim(), uploadFiles);
+            }}
+          >
+            <label>
+              项目名称
+              <input
+                autoFocus
+                disabled={busy}
+                maxLength={120}
+                placeholder="例如：本地演示项目"
+                required
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+              />
+            </label>
+            <label className="upload-field">
+              选择项目文件夹
+              <input
+                disabled={busy}
+                multiple
+                required
+                type="file"
+                {...({ webkitdirectory: '' } as Record<string, string>)}
+                onChange={(event) =>
+                  setUploadFiles(Array.from(event.target.files ?? []))
+                }
+              />
+              <span>
+                <Icon name="upload" size={19} />
+                {uploadFiles.length > 0
+                  ? `已选择 ${uploadFiles.length} 个文件`
+                  : '选择一个不超过 20 MB 的目录'}
+              </span>
+            </label>
+            <p className="form-help">文件将保存为项目快照，并在会话的隔离 workspace 中恢复。</p>
+            <button
+              className="primary-action dialog-submit"
+              disabled={busy || uploadFiles.length === 0}
+              type="submit"
+            >
+              {busy ? '正在上传…' : '上传并开始对话'}
+            </button>
+          </form>
+        )}
+
+        {error && <p className="dialog-error" role="alert">{error}</p>}
+      </section>
+    </div>
+  );
+}
+
+function SessionActionDialog({
+  busy,
+  dialog,
+  error,
+  onClose,
+  onDelete,
+  onRename,
+}: {
+  busy: boolean;
+  dialog: SessionDialog;
+  error: string | null;
+  onClose: () => void;
+  onDelete: () => void;
+  onRename: (title: string) => void;
+}) {
+  const [title, setTitle] = useState(dialog.session.title);
+  const deleting = dialog.kind === 'delete';
+
+  return (
+    <div className="modal-layer">
+      <button
+        aria-label="关闭会话操作窗口"
+        className="modal-scrim"
+        disabled={busy}
+        type="button"
+        onClick={onClose}
+      />
+      <section
+        aria-labelledby="session-dialog-title"
+        aria-modal="true"
+        className="modal-card session-dialog"
+        role="dialog"
+      >
+        <header className="modal-head">
+          <div>
+            <span>{deleting ? 'DELETE SESSION' : 'RENAME SESSION'}</span>
+            <h2 id="session-dialog-title">
+              {deleting ? '删除这条会话？' : '重命名会话'}
+            </h2>
+          </div>
+          <button
+            aria-label="关闭"
+            autoFocus={deleting}
+            className="modal-close"
+            disabled={busy}
+            type="button"
+            onClick={onClose}
+          >
+            <Icon name="x" size={18} />
+          </button>
+        </header>
+
+        {deleting ? (
+          <p className="delete-copy">
+            “{dialog.session.title}” 将从历史记录中移除。正在运行的会话需要先停止，避免丢失进行中的结果。
+          </p>
+        ) : (
+          <form
+            className="dialog-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onRename(title.trim());
+            }}
+          >
+            <label>
+              会话名称
+              <input
+                autoFocus
+                disabled={busy}
+                maxLength={120}
+                required
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </label>
+            <div className="dialog-actions">
+              <button className="secondary-action" disabled={busy} type="button" onClick={onClose}>
+                取消
+              </button>
+              <button className="primary-action" disabled={busy || !title.trim()} type="submit">
+                {busy ? '正在保存…' : '保存'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {deleting && (
+          <div className="dialog-actions">
+            <button className="secondary-action" disabled={busy} type="button" onClick={onClose}>
+              取消
+            </button>
+            <button className="danger-action" disabled={busy} type="button" onClick={onDelete}>
+              {busy ? '正在删除…' : '确认删除'}
+            </button>
+          </div>
+        )}
+        {error && <p className="dialog-error" role="alert">{error}</p>}
+      </section>
+    </div>
   );
 }
 
@@ -1083,6 +2157,7 @@ function MarkdownContent({ content }: { content: string }) {
             {children}
           </a>
         ),
+        pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
       }}
     >
       {content}
@@ -1342,23 +2417,24 @@ function Composer({
           </button>
         )}
       </form>
-      <p>Enter 发送 · Shift + Enter 换行 · 持久化事件 · 人工审批 · 隔离工作区</p>
     </div>
   );
 }
 
 function TracePanel({
+  inactive,
   open,
   onClose,
   trace,
 }: {
+  inactive: boolean;
   open: boolean;
   onClose: () => void;
   trace: PipelineEvent[];
 }) {
   return (
     <>
-      {open && (
+      {open && !inactive && (
         <button
           className="trace-scrim"
           type="button"
@@ -1369,7 +2445,7 @@ function TracePanel({
       <aside
         aria-hidden={!open}
         className={`trace-panel ${open ? 'is-open' : ''}`}
-        inert={!open}
+        inert={!open || inactive}
       >
         <div className="trace-head">
           <div>

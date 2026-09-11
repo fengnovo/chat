@@ -35,6 +35,7 @@ flowchart TB
     subgraph ControlPlane["控制面"]
         API --> Auth["OIDC 鉴权<br/>租户与角色校验"]
         API --> RunService["Session / Run<br/>审批 / 取消"]
+        API --> ProjectService["Project Source<br/>Git / Upload"]
         API --> SSE["Durable SSE<br/>cursor 重放"]
         RunService --> Dispatcher["Transactional Outbox<br/>租约重试 · 丢失任务对账"]
         Dispatcher --> Queue["BullMQ Queue"]
@@ -49,11 +50,14 @@ flowchart TB
     API --> PG
     API --> Redis
     API --> Object
+    ProjectService --> PG
+    ProjectService --> Object
     Dispatcher --> PG
     Queue --> Redis
 
     subgraph ExecutionPlane["执行面 · Agent Worker Pool"]
-        Worker["Agent Worker"] --> Core["Headless Agent Core"]
+        Worker["Agent Worker"] --> Provisioner["Workspace Provisioner<br/>Git clone / Snapshot restore"]
+        Provisioner --> Core["Headless Agent Core"]
         Core --> Router["模型重试 · 熔断 · Fallback"]
         Core --> MCP["MCP Tools"]
         Core --> Sandbox["隔离 Sandbox / Workspace"]
@@ -147,7 +151,10 @@ sequenceDiagram
 - PostgreSQL 事务 Outbox、稳定 BullMQ job id、发布租约重试与丢失任务自动对账。
 - 从 `ai-cli` 抽出的 Headless Agent Core、MCP、重试和模型 fallback；CLI 已改为复用 Core。
 - Web 的 durable SSE、断点续传、Todo、审批、问题和取消交互。
+- Web 的会话历史、切换与恢复、重命名、软删除和 keyset 游标分页。
+- 项目选择、公开 HTTPS Git 浅克隆、本地目录快照上传，以及 Worker 侧 workspace 恢复。
 - S3/MinIO artifact 预签名上传、大小/SHA-256 校验和预签名下载。
+- 独立 `agent_test` PostgreSQL 服务与卷，避免集成测试污染本地开发会话。
 - 无模型密钥可运行的 demo driver，以及 Web/API/Worker 真实端到端验证。
 
 进入正式生产前仍需完成：容器或 microVM Sandbox provider、Worker 自动归档大型日志与 diff、细粒度配额/计费、审计日志、Outbox 积压告警与可观测性告警。

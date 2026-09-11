@@ -115,6 +115,57 @@ export type PersistedAgentEvent = z.infer<typeof persistedAgentEventSchema>;
 export const createSessionSchema = z.object({
   title: z.string().trim().min(1).max(120).default('新会话'),
   projectId: z.uuid().optional(),
+  externalKey: z.string().trim().min(1).max(200).optional(),
+});
+
+export const updateSessionSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+});
+
+export const gitProjectSourceSchema = z.object({
+  type: z.literal('git'),
+  url: z
+    .url()
+    .refine((value) => new URL(value).protocol === 'https:', {
+      message: 'Only HTTPS Git repositories are supported',
+    })
+    .refine((value) => {
+      const url = new URL(value);
+      return !url.username && !url.password;
+    }, 'Credentials must not be embedded in the Git URL'),
+  ref: z.string().trim().min(1).max(200).optional(),
+});
+
+export const workspaceSourceSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('empty') }),
+  gitProjectSourceSchema,
+  z.object({
+    type: z.literal('upload'),
+    objectKey: z.string().min(1).max(1_000),
+  }),
+]);
+
+export type WorkspaceSource = z.infer<typeof workspaceSourceSchema>;
+
+export const createProjectSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  source: z.discriminatedUnion('type', [
+    z.object({ type: z.literal('empty') }),
+    gitProjectSourceSchema,
+  ]),
+});
+
+export const uploadProjectSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  files: z
+    .array(
+      z.object({
+        path: z.string().trim().min(1).max(1_000),
+        contentBase64: z.string().min(1),
+      }),
+    )
+    .min(1)
+    .max(1_000),
 });
 
 export const createRunSchema = z.object({
@@ -152,6 +203,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     runId: z.uuid(),
     message: z.string(),
     workspacePath: z.string(),
+    workspaceSource: workspaceSourceSchema.optional(),
   }),
   z.object({
     kind: z.literal('resume-approval'),

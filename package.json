@@ -13,10 +13,12 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:integration": "pnpm infra:up && pnpm db:migrate:test && RUN_INTEGRATION_TESTS=1 DATABASE_URL=${DATABASE_TEST_URL:-postgresql://agent:agent@127.0.0.1:55433/agent_test} pnpm --filter @repo/db test",
     "dev:web": "turbo run dev --filter=web",
     "infra:up": "docker compose -f infra/compose.yaml up -d --wait",
     "infra:down": "docker compose -f infra/compose.yaml down",
-    "db:migrate": "pnpm --filter @repo/db migrate"
+    "db:migrate": "pnpm --filter @repo/db migrate",
+    "db:migrate:test": "DATABASE_URL=${DATABASE_TEST_URL:-postgresql://agent:agent@127.0.0.1:55433/agent_test} pnpm --filter @repo/db migrate"
   },
   "keywords": [],
   "author": "",

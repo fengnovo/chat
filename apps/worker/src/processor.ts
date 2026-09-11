@@ -7,6 +7,7 @@ import {
   type AgentDriver,
   type HeadlessAgentRuntime,
 } from '@repo/agent-core';
+import type { S3ArtifactStore } from '@repo/artifacts';
 import {
   agentEventSchema,
   runEventsChannel,
@@ -21,7 +22,7 @@ import type { Redis } from 'ioredis';
 import type { WorkerConfig } from './config.js';
 import { withSessionLock } from './lock.js';
 import { RedisCircuitBreakerStore } from './redis-circuit-breaker.js';
-import { ensureWorkspace } from './workspace.js';
+import { prepareWorkspace } from './workspace.js';
 
 interface ProcessorServices {
   config: WorkerConfig;
@@ -29,6 +30,7 @@ interface ProcessorServices {
   redis: Redis;
   publisher: Redis;
   checkpointer: PostgresSaver;
+  artifacts: S3ArtifactStore;
   controllers: Map<string, AbortController>;
 }
 
@@ -120,10 +122,6 @@ export function createRunProcessor(services: ProcessorServices) {
         return;
       }
 
-      job.workspacePath = await ensureWorkspace(
-        services.config.WORKSPACE_ROOT,
-        job.workspacePath,
-      );
       const claimed = await services.repository.tryMarkRunRunning(
         job.tenantId,
         job.runId,
@@ -134,6 +132,13 @@ export function createRunProcessor(services: ProcessorServices) {
       let runtime: HeadlessAgentRuntime | null = null;
       let terminalEventWritten = false;
       try {
+        job.workspacePath = await prepareWorkspace(
+          services.config.WORKSPACE_ROOT,
+          job.workspacePath,
+          job.kind === 'start' ? job.workspaceSource : undefined,
+          (objectKey) => services.artifacts.getObjectBytes(objectKey),
+          controller.signal,
+        );
         runtime = await createRuntime(services, job, controller.signal);
         const events =
           job.kind === 'start'

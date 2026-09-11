@@ -10,5 +10,8 @@ test('production refuses development authentication', () => {
 test('development config has local infrastructure defaults', () => {
   const config = loadConfig({ NODE_ENV: 'test' });
   assert.equal(config.API_PORT, 8000);
-  assert.match(config.DATABASE_URL, /postgresql:/);
+  assert.equal(
+    config.DATABASE_URL,
+    'postgresql://agent:agent@127.0.0.1:55433/agent_test',
+  );
 });

@@ -21,7 +21,10 @@ interface BuildAppOptions {
 }
 
 export async function buildApp(options: BuildAppOptions) {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: true,
+    bodyLimit: Math.max(1_048_576, options.config.PROJECT_UPLOAD_MAX_BYTES * 2),
+  });
   const publisher =
     options.publisher ??
     new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -61,7 +64,7 @@ export async function buildApp(options: BuildAppOptions) {
   await app.register(cors, {
     origin: options.config.WEB_ORIGIN,
     credentials: true,
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     exposedHeaders: ['x-agent-run-id'],
   });
 

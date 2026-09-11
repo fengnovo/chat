@@ -50,6 +50,11 @@ function textOf(content: unknown): string {
     .join('');
 }
 
+export function assistantTextOf(message: unknown): string {
+  if (!AIMessage.isInstance(message)) return '';
+  return textOf(message.content);
+}
+
 function summarizeArgs(name: string, args: Record<string, unknown>): string {
   if (name === 'execute') return `$ ${String(args.command ?? '?')}`;
   if (name === 'write_file' || name === 'edit_file') {
@@ -176,7 +181,7 @@ export async function createDeepAgentRuntime(
     memory: options.memory ?? [],
     systemPrompt: [
       `你是运行在隔离工作区中的 coding agent，工作目录是：${options.workspacePath}`,
-      '先检查项目结构；多步任务使用 todo；修改完成后运行相关测试或类型检查。',
+      '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。',
       '文件写入、删除和命令执行必须经过人工审批。不要读取工作区之外的路径。',
       '遇到会显著改变结果且无法从上下文判断的问题时使用 ask_user。',
     ].join('\n'),
@@ -230,7 +235,7 @@ export async function createDeepAgentRuntime(
           if (event) yield event;
         }
         if (mode === 'messages') {
-          const text = textOf(payload[0] && (payload[0] as { content?: unknown }).content);
+          const text = assistantTextOf(payload[0]);
           if (text) {
             yield { runId: options.runId, timestamp: timestamp(), type: 'assistant.delta', text };
           }

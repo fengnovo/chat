@@ -39,7 +39,11 @@ export const projects = pgTable('projects', {
   id: uuid('id').primaryKey(),
   tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
   name: text('name').notNull(),
+  sourceType: text('source_type').notNull().default('empty'),
+  sourceRef: text('source_ref'),
+  sourceRevision: text('source_revision'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const workspaces = pgTable(
@@ -67,6 +71,7 @@ export const agentSessions = pgTable(
     title: text('title').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => [
     index('agent_sessions_tenant_updated_idx').on(table.tenantId, table.updatedAt),

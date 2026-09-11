@@ -17,7 +17,10 @@ Next.js Web ──HTTP/SSE──> Fastify Agent API ──Outbox/BullMQ──> A
 
 - OIDC JWT 鉴权接口，以及仅允许开发环境使用的固定 dev identity。
 - 强制带租户上下文的 Session、Run、审批、提问、取消 API。
+- Web 会话历史、切换、恢复、重命名、软删除与 keyset 游标分页。
+- 空白项目、公开 HTTPS Git 浅克隆和本地目录上传；每条会话绑定独立 workspace。
 - PostgreSQL 持久化会话、运行、事件 cursor、interrupt 和 LangGraph checkpoint。
+- 开发库与独立 `agent_test` 测试库/卷隔离，集成测试不会污染本地会话列表。
 - BullMQ Worker Pool、session 分布式锁和 Redis 共享模型熔断状态。
 - PostgreSQL 事务 Outbox、稳定 job id、发布重试和 Redis 丢失任务自动对账。
 - 可恢复 SSE：断线后从 PostgreSQL 重放事件，不会重新执行 Agent。
@@ -37,6 +40,7 @@ apps/
 packages/
 ├── agent-core/   与 UI、HTTP、队列无关的 Headless Agent Runtime
 ├── ai-cli/       Ink CLI 适配器
+├── artifacts/    S3/MinIO 项目快照与运行产物
 ├── contracts/    Zod API、事件与队列协议
 └── db/           PostgreSQL schema、migration 与 repository
 
@@ -53,6 +57,7 @@ cp .env.example .env
 pnpm install
 pnpm infra:up
 pnpm db:migrate
+pnpm db:migrate:test
 pnpm dev
 ```
 
@@ -81,6 +86,7 @@ OPENAI_API_KEY=...
 ```bash
 pnpm typecheck
 pnpm test
+pnpm test:integration
 pnpm build
 pnpm cli
 pnpm infra:down
@@ -98,8 +104,14 @@ pnpm --filter @repo/agent-worker start:prod
 
 ```text
 POST /api/agent/sessions
-GET  /api/agent/sessions
+GET  /api/agent/sessions?limit=20&cursor=...
 GET  /api/agent/sessions/:sessionId
+GET  /api/agent/sessions/:sessionId/history
+PATCH /api/agent/sessions/:sessionId
+DELETE /api/agent/sessions/:sessionId
+GET  /api/agent/projects
+POST /api/agent/projects
+POST /api/agent/projects/upload
 POST /api/agent/sessions/:sessionId/runs
 GET  /api/agent/runs/:runId
 GET  /api/agent/runs/:runId/events

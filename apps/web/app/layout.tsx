@@ -3,7 +3,7 @@ import './globals.css';
 import '@cognicatch/react/style.css';
 
 export const metadata: Metadata = {
-  title: 'Node Coding Agent Platform',
+  title: 'Keen Agent',
   description: '多租户、可恢复、支持人工审批的 Headless Coding Agent 平台。',
 };
 

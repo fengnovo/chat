@@ -17,6 +17,22 @@ services:
       timeout: 3s
       retries: 20
 
+  postgres-test:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: agent_test
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+    ports:
+      - "55433:5432"
+    volumes:
+      - agent-postgres-test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -49,5 +65,6 @@ services:
 
 volumes:
   agent-postgres:
+  agent-postgres-test:
   agent-redis:
   agent-minio:

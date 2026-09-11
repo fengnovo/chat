@@ -4,15 +4,19 @@ import path from 'node:path';
 import {
   artifactObjectKey,
   ArtifactVerificationError,
+  projectSnapshotObjectKey,
 } from '@repo/artifacts';
 import {
   approvalDecisionSchema,
+  createProjectSchema,
   createArtifactUploadSchema,
   createRunSchema,
   createSessionSchema,
   questionAnswerSchema,
   runCancellationChannel,
   runEventsChannel,
+  updateSessionSchema,
+  uploadProjectSchema,
 } from '@repo/contracts';
 import { RepositoryNotFoundError } from '@repo/db';
 import type { FastifyInstance } from 'fastify';
@@ -26,6 +30,44 @@ function idempotencyKey(value: string | string[] | undefined): string | undefine
   const resolved = Array.isArray(value) ? value[0] : value;
   const trimmed = resolved?.trim();
   return trimmed ? trimmed.slice(0, 200) : undefined;
+}
+
+const sessionListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().max(1_000).optional(),
+});
+
+const sessionCursorSchema = z.object({
+  updatedAt: z.string().datetime(),
+  id: z.uuid(),
+});
+
+function encodeSessionCursor(cursor: { updatedAt: string; id: string }) {
+  return Buffer.from(JSON.stringify(cursor)).toString('base64url');
+}
+
+function decodeSessionCursor(value?: string) {
+  if (!value) return undefined;
+  try {
+    return sessionCursorSchema.parse(
+      JSON.parse(Buffer.from(value, 'base64url').toString('utf8')),
+    );
+  } catch {
+    throw new z.ZodError([
+      {
+        code: 'custom',
+        path: ['cursor'],
+        message: 'Invalid session cursor',
+      },
+    ]);
+  }
+}
+
+function projectUploadBytes(files: Array<{ contentBase64: string }>) {
+  return files.reduce(
+    (total, file) => total + Buffer.byteLength(file.contentBase64, 'base64'),
+    0,
+  );
 }
 
 export async function registerRoutes(app: FastifyInstance, services: ApiServices) {
@@ -49,22 +91,156 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       request.auth.tenantId,
       workspaceToken,
     );
-    const session = await services.repository.createSession(request.auth, {
-      title: input.title,
-      workspacePath,
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-    });
-    return reply.code(201).send(session);
+    try {
+      const session = await services.repository.createSession(request.auth, {
+        title: input.title,
+        workspacePath,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.externalKey ? { externalKey: input.externalKey } : {}),
+      });
+      return reply.code(201).send(session);
+    } catch (error) {
+      if (error instanceof RepositoryNotFoundError) {
+        return reply.code(404).send({ error: `${error.resource}_not_found` });
+      }
+      throw error;
+    }
   });
 
   app.get('/api/agent/sessions', async (request) => {
-    return { data: await services.repository.listSessions(request.auth) };
+    const query = sessionListQuerySchema.parse(request.query ?? {});
+    const cursor = decodeSessionCursor(query.cursor);
+    const sessions = await services.repository.listSessions(request.auth, {
+      limit: query.limit + 1,
+      ...(cursor ? { cursor } : {}),
+    });
+    const hasMore = sessions.length > query.limit;
+    const data = hasMore ? sessions.slice(0, query.limit) : sessions;
+    const last = data.at(-1);
+    return {
+      data,
+      nextCursor:
+        hasMore && last
+          ? encodeSessionCursor({ updatedAt: last.updatedAt, id: last.id })
+          : null,
+    };
   });
 
   app.get('/api/agent/sessions/:sessionId', async (request, reply) => {
     const { sessionId } = request.params as { sessionId: string };
     const session = await services.repository.getSession(request.auth, sessionId);
     return session ?? reply.code(404).send({ error: 'session_not_found' });
+  });
+
+  app.patch('/api/agent/sessions/:sessionId', async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const input = updateSessionSchema.parse(request.body);
+    const session = await services.repository.renameSession(
+      request.auth,
+      sessionId,
+      input.title,
+    );
+    return session ?? reply.code(404).send({ error: 'session_not_found' });
+  });
+
+  app.delete('/api/agent/sessions/:sessionId', async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const result = await services.repository.deleteSession(request.auth, sessionId);
+    if (result === 'not_found') {
+      return reply.code(404).send({ error: 'session_not_found' });
+    }
+    if (result === 'active') {
+      return reply.code(409).send({ error: 'session_has_active_run' });
+    }
+    return reply.code(204).send();
+  });
+
+  app.get('/api/agent/projects', async (request) => ({
+    data: await services.repository.listProjects(request.auth),
+  }));
+
+  app.post('/api/agent/projects', async (request, reply) => {
+    const input = createProjectSchema.parse(request.body);
+    const project = await services.repository.createProject(request.auth, {
+      name: input.name,
+      sourceType: input.source.type,
+      ...(input.source.type === 'git'
+        ? {
+            sourceRef: input.source.url,
+            ...(input.source.ref ? { sourceRevision: input.source.ref } : {}),
+          }
+        : {}),
+    });
+    return reply.code(201).send(project);
+  });
+
+  app.post('/api/agent/projects/upload', async (request, reply) => {
+    const input = uploadProjectSchema.parse(request.body);
+    const sizeBytes = projectUploadBytes(input.files);
+    if (sizeBytes > services.config.PROJECT_UPLOAD_MAX_BYTES) {
+      return reply.code(413).send({ error: 'project_upload_too_large' });
+    }
+    const projectId = randomUUID();
+    const objectKey = projectSnapshotObjectKey(request.auth.tenantId, projectId);
+    const manifest = Buffer.from(
+      JSON.stringify({ version: 1, files: input.files }),
+      'utf8',
+    );
+    await services.artifacts.putObject(
+      objectKey,
+      manifest,
+      'application/vnd.keen-agent.project+json',
+    );
+    const project = await services.repository.createProject(request.auth, {
+      id: projectId,
+      name: input.name,
+      sourceType: 'upload',
+      sourceRef: objectKey,
+    });
+    return reply.code(201).send(project);
+  });
+
+  app.get('/api/agent/sessions/:sessionId/history', async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const session = await services.repository.getSession(request.auth, sessionId);
+    if (!session) return reply.code(404).send({ error: 'session_not_found' });
+
+    const runs = await services.repository.listSessionRuns(request.auth, sessionId);
+    const eventGroups = await Promise.all(
+      runs.map((run) => services.repository.listEvents(request.auth, run.id, 0, 100_000)),
+    );
+    const messages = runs.flatMap((run, index) => {
+      const assistantText = (eventGroups[index] ?? [])
+        .filter((event) => event.type === 'assistant.delta')
+        .map((event) => event.text)
+        .join('');
+      return [
+        {
+          id: `user-${run.id}`,
+          runId: run.id,
+          role: 'user' as const,
+          text: run.userMessage,
+          createdAt: run.createdAt,
+        },
+        ...(assistantText
+          ? [
+              {
+                id: `message-${run.id}`,
+                runId: run.id,
+                role: 'assistant' as const,
+                text: assistantText,
+                createdAt: run.updatedAt,
+              },
+            ]
+          : []),
+      ];
+    });
+
+    return {
+      session,
+      messages,
+      latestRun: runs.at(-1) ?? null,
+    };
   });
 
   app.post('/api/agent/sessions/:sessionId/runs', async (request, reply) => {
@@ -252,6 +428,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
 
   const chatRequestSchema = z.object({
     chat_id: z.string().min(1).max(200).optional(),
+    project_id: z.uuid().optional(),
     messages: z.array(z.record(z.string(), z.unknown())),
   });
 
@@ -275,16 +452,20 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
 
     const externalKey = input.chat_id ?? randomUUID();
     const workspaceToken = randomUUID();
-    const session = await services.repository.getOrCreateExternalSession(request.auth, {
-      externalKey,
-      title: message.trim().split('\n')[0]?.slice(0, 120) || '新会话',
-      workspacePath: path.join(
-        services.config.WORKSPACE_ROOT,
-        request.auth.tenantId,
-        workspaceToken,
-      ),
-    });
     try {
+      const session = await services.repository.getOrCreateExternalSession(
+        request.auth,
+        {
+          externalKey,
+          title: message.trim().split('\n')[0]?.slice(0, 120) || '新会话',
+          workspacePath: path.join(
+            services.config.WORKSPACE_ROOT,
+            request.auth.tenantId,
+            workspaceToken,
+          ),
+          ...(input.project_id ? { projectId: input.project_id } : {}),
+        },
+      );
       const result = await services.repository.createRun(request.auth, {
         sessionId: session.id,
         message: message.trim(),
@@ -294,6 +475,9 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     } catch (error) {
       if ((error as { code?: string }).code === '23505') {
         return reply.code(409).send({ error: 'session_has_active_run' });
+      }
+      if (error instanceof RepositoryNotFoundError) {
+        return reply.code(404).send({ error: `${error.resource}_not_found` });
       }
       throw error;
     }

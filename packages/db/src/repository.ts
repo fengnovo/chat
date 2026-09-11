@@ -6,6 +6,7 @@ import type {
   PersistedAgentEvent,
   RunJob,
   RunStatus,
+  WorkspaceSource,
 } from '@repo/contracts';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -14,10 +15,28 @@ export interface SessionRecord {
   tenantId: string;
   userId: string;
   title: string;
+  externalKey: string | null;
+  projectId: string | null;
   workspaceId: string;
   workspacePath: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectRecord {
+  id: string;
+  tenantId: string;
+  name: string;
+  sourceType: WorkspaceSource['type'];
+  sourceRef: string | null;
+  sourceRevision: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionListCursor {
+  updatedAt: string;
+  id: string;
 }
 
 export interface RunRecord {
@@ -80,11 +99,45 @@ function sessionOf(row: QueryResultRow): SessionRecord {
     tenantId: String(row.tenant_id),
     userId: String(row.user_id),
     title: String(row.title),
+    externalKey: row.external_key ? String(row.external_key) : null,
+    projectId: row.project_id ? String(row.project_id) : null,
     workspaceId: String(row.workspace_id),
     workspacePath: String(row.workspace_path),
     createdAt: iso(row.created_at as Date),
     updatedAt: iso(row.updated_at as Date),
   };
+}
+
+function projectOf(row: QueryResultRow): ProjectRecord {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    name: String(row.name),
+    sourceType: row.source_type as WorkspaceSource['type'],
+    sourceRef: row.source_ref ? String(row.source_ref) : null,
+    sourceRevision:
+      row.source_revision ? String(row.source_revision) : null,
+    createdAt: iso(row.created_at as Date),
+    updatedAt: iso(row.updated_at as Date),
+  };
+}
+
+function workspaceSourceOf(row: QueryResultRow): WorkspaceSource | undefined {
+  if (!row.source_type) return undefined;
+  if (row.source_type === 'empty') return { type: 'empty' };
+  if (row.source_type === 'git' && row.source_ref) {
+    return {
+      type: 'git',
+      url: String(row.source_ref),
+      ...(row.source_revision
+        ? { ref: String(row.source_revision) }
+        : {}),
+    };
+  }
+  if (row.source_type === 'upload' && row.source_ref) {
+    return { type: 'upload', objectKey: String(row.source_ref) };
+  }
+  throw new Error('Project workspace source is incomplete');
 }
 
 function runOf(row: QueryResultRow): RunRecord {
@@ -174,11 +227,74 @@ export class AgentRepository {
     });
   }
 
+  async createProject(
+    context: AuthContext,
+    input: {
+      id?: string;
+      name: string;
+      sourceType: WorkspaceSource['type'];
+      sourceRef?: string;
+      sourceRevision?: string;
+    },
+  ): Promise<ProjectRecord> {
+    const id = input.id ?? randomUUID();
+    const result = await this.pool.query(
+      `INSERT INTO projects
+         (id, tenant_id, name, source_type, source_ref, source_revision)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [
+        id,
+        context.tenantId,
+        input.name,
+        input.sourceType,
+        input.sourceRef ?? null,
+        input.sourceRevision ?? null,
+      ],
+    );
+    return projectOf(result.rows[0]);
+  }
+
+  async listProjects(context: AuthContext): Promise<ProjectRecord[]> {
+    const result = await this.pool.query(
+      `SELECT *
+       FROM projects
+       WHERE tenant_id = $1
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 100`,
+      [context.tenantId],
+    );
+    return result.rows.map(projectOf);
+  }
+
+  async getProject(
+    context: AuthContext,
+    projectId: string,
+  ): Promise<ProjectRecord | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM projects WHERE tenant_id = $1 AND id = $2',
+      [context.tenantId, projectId],
+    );
+    return result.rows[0] ? projectOf(result.rows[0]) : null;
+  }
+
   async createSession(
     context: AuthContext,
-    input: { title: string; projectId?: string; workspacePath: string },
+    input: {
+      title: string;
+      projectId?: string;
+      externalKey?: string;
+      workspacePath: string;
+    },
   ): Promise<SessionRecord> {
     return inTransaction(this.pool, async (client) => {
+      if (input.projectId) {
+        const project = await client.query(
+          'SELECT 1 FROM projects WHERE tenant_id = $1 AND id = $2',
+          [context.tenantId, input.projectId],
+        );
+        if (!project.rows[0]) throw new RepositoryNotFoundError('project');
+      }
       const workspaceId = randomUUID();
       const sessionId = randomUUID();
       await client.query(
@@ -188,15 +304,16 @@ export class AgentRepository {
       );
       const result = await client.query(
         `INSERT INTO agent_sessions
-           (id, tenant_id, user_id, project_id, workspace_id, title)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING *, $7::text AS workspace_path`,
+           (id, tenant_id, user_id, project_id, workspace_id, external_key, title)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *, $8::text AS workspace_path`,
         [
           sessionId,
           context.tenantId,
           context.userId,
           input.projectId ?? null,
           workspaceId,
+          input.externalKey ?? null,
           input.title,
           input.workspacePath,
         ],
@@ -207,36 +324,70 @@ export class AgentRepository {
 
   async getOrCreateExternalSession(
     context: AuthContext,
-    input: { externalKey: string; title: string; workspacePath: string },
+    input: {
+      externalKey: string;
+      title: string;
+      workspacePath: string;
+      projectId?: string;
+    },
   ): Promise<SessionRecord> {
     return inTransaction(this.pool, async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-        `${context.tenantId}:${input.externalKey}`,
+        `${context.tenantId}:${context.userId}:${input.externalKey}`,
       ]);
       const existing = await client.query(
         `SELECT s.*, w.path AS workspace_path
          FROM agent_sessions s
          JOIN workspaces w ON w.id = s.workspace_id
-         WHERE s.tenant_id = $1 AND s.external_key = $2`,
-        [context.tenantId, input.externalKey],
+         WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.external_key = $3
+           AND s.deleted_at IS NULL`,
+        [context.tenantId, context.userId, input.externalKey],
       );
-      if (existing.rows[0]) return sessionOf(existing.rows[0]);
+      if (existing.rows[0]) {
+        if (String(existing.rows[0].title) === '新会话' && input.title !== '新会话') {
+          const renamed = await client.query(
+            `UPDATE agent_sessions
+             SET title = $4, updated_at = now()
+             WHERE tenant_id = $1 AND user_id = $2 AND id = $3
+             RETURNING *, $5::text AS workspace_path`,
+            [
+              context.tenantId,
+              context.userId,
+              String(existing.rows[0].id),
+              input.title,
+              String(existing.rows[0].workspace_path),
+            ],
+          );
+          return sessionOf(renamed.rows[0]);
+        }
+        return sessionOf(existing.rows[0]);
+      }
+
+      if (input.projectId) {
+        const project = await client.query(
+          'SELECT 1 FROM projects WHERE tenant_id = $1 AND id = $2',
+          [context.tenantId, input.projectId],
+        );
+        if (!project.rows[0]) throw new RepositoryNotFoundError('project');
+      }
 
       const workspaceId = randomUUID();
       const sessionId = randomUUID();
       await client.query(
-        `INSERT INTO workspaces (id, tenant_id, path) VALUES ($1, $2, $3)`,
-        [workspaceId, context.tenantId, input.workspacePath],
+        `INSERT INTO workspaces (id, tenant_id, project_id, path)
+         VALUES ($1, $2, $3, $4)`,
+        [workspaceId, context.tenantId, input.projectId ?? null, input.workspacePath],
       );
       const created = await client.query(
         `INSERT INTO agent_sessions
-           (id, tenant_id, user_id, workspace_id, external_key, title)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING *, $7::text AS workspace_path`,
+           (id, tenant_id, user_id, project_id, workspace_id, external_key, title)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *, $8::text AS workspace_path`,
         [
           sessionId,
           context.tenantId,
           context.userId,
+          input.projectId ?? null,
           workspaceId,
           input.externalKey,
           input.title,
@@ -247,14 +398,28 @@ export class AgentRepository {
     });
   }
 
-  async listSessions(context: AuthContext): Promise<SessionRecord[]> {
+  async listSessions(
+    context: AuthContext,
+    input: { limit: number; cursor?: SessionListCursor },
+  ): Promise<SessionRecord[]> {
     const result = await this.pool.query(
       `SELECT s.*, w.path AS workspace_path
        FROM agent_sessions s
        JOIN workspaces w ON w.id = s.workspace_id
-       WHERE s.tenant_id = $1
-       ORDER BY s.updated_at DESC`,
-      [context.tenantId],
+       WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.deleted_at IS NULL
+         AND (
+           $3::timestamptz IS NULL
+           OR (s.updated_at, s.id) < ($3::timestamptz, $4::uuid)
+         )
+       ORDER BY s.updated_at DESC, s.id DESC
+       LIMIT $5`,
+      [
+        context.tenantId,
+        context.userId,
+        input.cursor?.updatedAt ?? null,
+        input.cursor?.id ?? null,
+        input.limit,
+      ],
     );
     return result.rows.map(sessionOf);
   }
@@ -264,10 +429,72 @@ export class AgentRepository {
       `SELECT s.*, w.path AS workspace_path
        FROM agent_sessions s
        JOIN workspaces w ON w.id = s.workspace_id
-       WHERE s.tenant_id = $1 AND s.id = $2`,
-      [context.tenantId, sessionId],
+       WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.id = $3
+         AND s.deleted_at IS NULL`,
+      [context.tenantId, context.userId, sessionId],
     );
     return result.rows[0] ? sessionOf(result.rows[0]) : null;
+  }
+
+  async renameSession(
+    context: AuthContext,
+    sessionId: string,
+    title: string,
+  ): Promise<SessionRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE agent_sessions AS s
+       SET title = $4, updated_at = now()
+       FROM workspaces w
+       WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.id = $3
+         AND s.deleted_at IS NULL AND w.id = s.workspace_id
+       RETURNING s.*, w.path AS workspace_path`,
+      [context.tenantId, context.userId, sessionId, title],
+    );
+    return result.rows[0] ? sessionOf(result.rows[0]) : null;
+  }
+
+  async deleteSession(
+    context: AuthContext,
+    sessionId: string,
+  ): Promise<'deleted' | 'active' | 'not_found'> {
+    return inTransaction(this.pool, async (client) => {
+      const session = await client.query(
+        `SELECT id
+         FROM agent_sessions
+         WHERE tenant_id = $1 AND user_id = $2 AND id = $3
+           AND deleted_at IS NULL
+         FOR UPDATE`,
+        [context.tenantId, context.userId, sessionId],
+      );
+      if (!session.rows[0]) return 'not_found';
+      const activeRun = await client.query(
+        `SELECT 1
+         FROM agent_runs
+         WHERE tenant_id = $1 AND session_id = $2
+           AND status IN ('queued', 'running', 'waiting_approval', 'waiting_question')
+         LIMIT 1`,
+        [context.tenantId, sessionId],
+      );
+      if (activeRun.rows[0]) return 'active';
+      await client.query(
+        `UPDATE agent_sessions
+         SET deleted_at = now(), updated_at = now()
+         WHERE tenant_id = $1 AND user_id = $2 AND id = $3`,
+        [context.tenantId, context.userId, sessionId],
+      );
+      return 'deleted';
+    });
+  }
+
+  async listSessionRuns(context: AuthContext, sessionId: string): Promise<RunRecord[]> {
+    const result = await this.pool.query(
+      `SELECT *
+       FROM agent_runs
+       WHERE tenant_id = $1 AND user_id = $2 AND session_id = $3
+       ORDER BY created_at ASC`,
+      [context.tenantId, context.userId, sessionId],
+    );
+    return result.rows.map(runOf);
   }
 
   async createRun(
@@ -284,12 +511,15 @@ export class AgentRepository {
       }
 
       const session = await client.query(
-        `SELECT s.id, w.path AS workspace_path
+        `SELECT s.id, w.path AS workspace_path,
+                p.source_type, p.source_ref, p.source_revision
          FROM agent_sessions s
          JOIN workspaces w ON w.id = s.workspace_id
-         WHERE s.tenant_id = $1 AND s.id = $2
+         LEFT JOIN projects p ON p.id = s.project_id AND p.tenant_id = s.tenant_id
+         WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.id = $3
+           AND s.deleted_at IS NULL
          FOR UPDATE OF s`,
-        [context.tenantId, input.sessionId],
+        [context.tenantId, context.userId, input.sessionId],
       );
       if (!session.rows[0]) throw new RepositoryNotFoundError('session');
 
@@ -312,6 +542,7 @@ export class AgentRepository {
         input.sessionId,
       ]);
       const run = runOf(result.rows[0]);
+      const workspaceSource = workspaceSourceOf(session.rows[0]);
       const outboxId = await insertDispatch(client, {
         kind: 'start',
         tenantId: context.tenantId,
@@ -320,6 +551,7 @@ export class AgentRepository {
         runId: run.id,
         message: input.message,
         workspacePath: String(session.rows[0].workspace_path),
+        ...(workspaceSource ? { workspaceSource } : {}),
       });
       return { run, created: true, outboxId };
     });

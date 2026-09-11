@@ -22,6 +22,7 @@ const schema = z
     S3_ACCESS_KEY: z.string().default('agent'),
     S3_SECRET_KEY: z.string().default('agent-local-secret'),
     ARTIFACT_MAX_BYTES: z.coerce.number().int().positive().default(100_000_000),
+    PROJECT_UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(20_000_000),
     RATE_LIMIT_REQUESTS: z.coerce.number().int().positive().default(300),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(500),
@@ -61,8 +62,14 @@ export type ApiConfig = ReturnType<typeof loadConfig>;
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
   const value = schema.parse(environment);
+  const databaseUrl =
+    environment.DATABASE_URL ??
+    (value.NODE_ENV === 'test'
+      ? 'postgresql://agent:agent@127.0.0.1:55433/agent_test'
+      : value.DATABASE_URL);
   return {
     ...value,
+    DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: path.resolve(value.WORKSPACE_ROOT),
   };
 }
