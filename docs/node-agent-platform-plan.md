@@ -164,7 +164,7 @@ sequenceDiagram
 - PostgreSQL：租户、会话、运行、审批、事件、工具调用、LangGraph checkpoint。
 - Redis：BullMQ、分布式锁、限流、共享熔断状态、SSE 实时通知。
 - S3/MinIO：大型命令日志、diff、补丁和构建产物。
-- Sandbox：开发环境连接本机 E2B-compatible Docker 服务；生产环境使用 E2B Cloud。
+- Sandbox：通过 `SANDBOX_RUNTIME` 选择；`local-e2b` 连接本机 E2B-compatible Docker 服务，`e2b-cloud`（默认）使用 E2B Cloud。dev 与线上环境都可用同一开关配置。
 
 ## 设计原则
 
@@ -327,11 +327,11 @@ Workspace 与 Sandbox 是两个生命周期不同的概念：
 - Session 持有 `workspace_id`；Run 获取 sandbox lease，把 workspace 恢复到沙箱路径，执行后再持久化变更和产物。
 - 当前版本仍用 E2B pause/sandbox ID 保存会话文件，适合作为第一阶段；生产完善时应把 workspace snapshot/volume 独立持久化，不能把 E2B 实例磁盘当唯一事实来源。
 
-开发环境：
+本地 Docker 沙箱（`SANDBOX_RUNTIME=local-e2b`）：
 
-- E2B SDK 默认连接 `localhost:10086` 的 E2B-compatible Docker endpoint。
+- E2B SDK 默认连接 `localhost:10087` 的 E2B-compatible Docker endpoint。
 - 每条 session 创建独立 workspace 记录，并从沙箱内空目录开始。
-- 控制面与 sandbox proxy 若使用不同端口，通过两个开发环境变量分别配置。
+- 控制面与 sandbox proxy 若使用不同端口，通过 `E2B_API_URL` / `E2B_SANDBOX_URL` 分别配置。
 - 不继承完整宿主机环境变量。
 - 写入、删除和命令执行继续要求审批。
 

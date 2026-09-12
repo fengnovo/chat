@@ -39,7 +39,7 @@ function safeRelativePath(relativePath: string): string {
 
 export function remoteWorkspacePath(configuredPath: string): string {
   if (!configuredPath.startsWith('/') || configuredPath.includes('\0')) {
-    throw new Error('E2B workspace path must be absolute');
+    throw new Error('Sandbox workspace path must be absolute');
   }
   return path.posix.resolve('/', configuredPath);
 }

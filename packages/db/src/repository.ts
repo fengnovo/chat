@@ -43,7 +43,7 @@ export interface SessionListCursor {
 export interface WorkspaceSandboxRecord {
   workspaceId: string;
   sandboxId: string | null;
-  sandboxProvider: 'e2b';
+  sandboxProvider: 'e2b' | 'docker';
 }
 
 export interface RunRecord {
@@ -690,7 +690,7 @@ export class AgentRepository {
       ? {
           workspaceId: String(row.workspace_id),
           sandboxId: row.sandbox_id ? String(row.sandbox_id) : null,
-          sandboxProvider: row.sandbox_provider as 'e2b',
+          sandboxProvider: row.sandbox_provider as 'e2b' | 'docker',
         }
       : null;
   }
@@ -702,7 +702,7 @@ export class AgentRepository {
   ): Promise<boolean> {
     const result = await this.pool.query(
       `UPDATE workspaces
-       SET sandbox_id = $3, sandbox_provider = 'e2b'
+       SET sandbox_id = $3, sandbox_provider = 'docker'
        WHERE tenant_id = $1 AND id = $2 AND sandbox_id IS NULL`,
       [tenantId, workspaceId, sandboxId],
     );

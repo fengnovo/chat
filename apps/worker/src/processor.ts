@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import {
   createDeepAgentRuntime,
+  DockerSandboxBackend,
   E2BSandbox,
   type HeadlessAgentRuntime,
 } from '@repo/agent-core';
@@ -74,20 +75,80 @@ async function persistEvent(
   }
 }
 
+type SandboxInstance = DockerSandboxBackend | E2BSandbox;
+
+/**
+ * 按配置创建本轮沙箱。
+ * docker 模式下每次 run 复用同一宿主会话目录，因此不需要持久化沙箱 ID；
+ * e2b-cloud 模式仍复用 E2B 的沙箱标识。
+ */
+async function acquireSandbox(
+  services: ProcessorServices,
+  job: RunJob,
+  workspace: { workspaceId: string; sandboxId: string | null },
+  signal: AbortSignal,
+): Promise<SandboxInstance> {
+  const config = services.config;
+  if (config.SANDBOX_RUNTIME === 'docker') {
+    return DockerSandboxBackend.create({
+      sessionId: workspace.workspaceId,
+      rootDirectory: config.DOCKER_SANDBOX_SESSIONS_ROOT,
+      image: config.DOCKER_SANDBOX_IMAGE,
+      commandTimeoutMs: config.DOCKER_SANDBOX_COMMAND_TIMEOUT_MS,
+    });
+  }
+
+  const apiKey = config.E2B_API_KEY;
+  if (!apiKey) throw new Error('E2B_API_KEY is required for e2b-cloud');
+  const sandboxOptions = {
+    apiKey,
+    ...(config.E2B_API_URL ? { apiUrl: config.E2B_API_URL } : {}),
+    ...(config.E2B_SANDBOX_URL ? { sandboxUrl: config.E2B_SANDBOX_URL } : {}),
+    template: config.E2B_TEMPLATE,
+    timeoutMs: config.E2B_TIMEOUT_MS,
+    signal,
+  };
+  if (workspace.sandboxId) {
+    try {
+      return await E2BSandbox.connect(workspace.sandboxId, sandboxOptions);
+    } catch {
+      await services.repository
+        .clearWorkspaceSandboxId(
+          job.tenantId,
+          workspace.workspaceId,
+          workspace.sandboxId,
+        )
+        .catch(() => undefined);
+    }
+  }
+  const sandbox = await E2BSandbox.create(sandboxOptions);
+  const saved = await services.repository.saveWorkspaceSandboxId(
+    job.tenantId,
+    workspace.workspaceId,
+    sandbox.id,
+  );
+  if (!saved) {
+    await sandbox.kill().catch(() => undefined);
+    throw new Error('Workspace sandbox identity changed concurrently');
+  }
+  return sandbox;
+}
+
 async function createRuntime(
   services: ProcessorServices,
   job: RunJob,
   workspacePath: string,
-  backend: E2BSandbox | undefined,
+  backend: SandboxInstance,
   signal: AbortSignal,
 ): Promise<HeadlessAgentRuntime> {
-  if (!backend) throw new Error('Deep agent requires an E2B sandbox');
+  if (!backend) throw new Error('Deep agent requires a sandbox backend');
   const root = fileURLToPath(new URL('../../..', import.meta.url));
   return createDeepAgentRuntime({
     runId: job.runId,
     sessionId: job.sessionId,
     workspacePath,
     backend,
+    backendMode: services.config.SANDBOX_RUNTIME === 'docker' ? 'docker' : 'e2b',
     checkpointer: services.checkpointer,
     models: services.config.models,
     circuitBreaker: new RedisCircuitBreakerStore(
@@ -101,15 +162,35 @@ async function createRuntime(
   });
 }
 
+/**
+ * 取消或失败时清理沙箱。
+ * docker 模式删除宿主会话目录；e2b-cloud 模式 kill 远程沙箱并清除持久化标识。
+ */
 async function killPersistedSandbox(services: ProcessorServices, job: RunJob): Promise<void> {
+  if (services.config.SANDBOX_RUNTIME === 'docker') {
+    const workspace = await services.repository
+      .getWorkspaceSandboxForWorker(job.tenantId, job.sessionId)
+      .catch(() => null);
+    if (!workspace) return;
+    const sandbox = await DockerSandboxBackend.create({
+      sessionId: workspace.workspaceId,
+      rootDirectory: services.config.DOCKER_SANDBOX_SESSIONS_ROOT,
+      image: services.config.DOCKER_SANDBOX_IMAGE,
+      commandTimeoutMs: services.config.DOCKER_SANDBOX_COMMAND_TIMEOUT_MS,
+    }).catch(() => null);
+    await sandbox?.destroy().catch(() => undefined);
+    return;
+  }
+
   const workspace = await services.repository.getWorkspaceSandboxForWorker(
     job.tenantId,
     job.sessionId,
   ).catch(() => null);
-  if (!workspace?.sandboxId || !services.config.E2B_API_KEY) return;
+  const apiKey = services.config.E2B_API_KEY;
+  if (!workspace?.sandboxId || !apiKey) return;
   try {
     const sandbox = await E2BSandbox.connect(workspace.sandboxId, {
-      apiKey: services.config.E2B_API_KEY,
+      apiKey,
       ...(services.config.E2B_API_URL
         ? { apiUrl: services.config.E2B_API_URL }
         : {}),
@@ -155,7 +236,7 @@ export function createRunProcessor(services: ProcessorServices) {
       const controller = new AbortController();
       services.controllers.set(job.runId, controller);
       let runtime: HeadlessAgentRuntime | null = null;
-      let sandbox: E2BSandbox | null = null;
+      let sandbox: SandboxInstance | null = null;
       let workspaceId: string | null = null;
       let terminalEventWritten = false;
       let shouldKill = false;
@@ -166,42 +247,10 @@ export function createRunProcessor(services: ProcessorServices) {
         );
         if (!workspace) throw new Error('Workspace no longer exists');
         workspaceId = workspace.workspaceId;
-        const sandboxOptions = {
-          apiKey: services.config.E2B_API_KEY,
-          ...(services.config.E2B_API_URL
-            ? { apiUrl: services.config.E2B_API_URL }
-            : {}),
-          ...(services.config.E2B_SANDBOX_URL
-            ? { sandboxUrl: services.config.E2B_SANDBOX_URL }
-            : {}),
-          template: services.config.E2B_TEMPLATE,
-          timeoutMs: services.config.E2B_TIMEOUT_MS,
-          signal: controller.signal,
-        };
-        if (workspace.sandboxId) {
-          try {
-            sandbox = await E2BSandbox.connect(workspace.sandboxId, sandboxOptions);
-          } catch {
-            await services.repository.clearWorkspaceSandboxId(
-              job.tenantId,
-              workspace.workspaceId,
-              workspace.sandboxId,
-            );
-          }
-        }
-        if (!sandbox) {
-          sandbox = await E2BSandbox.create(sandboxOptions);
-          const saved = await services.repository.saveWorkspaceSandboxId(
-            job.tenantId,
-            workspace.workspaceId,
-            sandbox.id,
-          );
-          if (!saved) {
-            await sandbox.kill();
-            throw new Error('Workspace sandbox identity changed concurrently');
-          }
-        }
-        const remotePath = remoteWorkspacePath(services.config.E2B_WORKSPACE_PATH);
+        sandbox = await acquireSandbox(services, job, workspace, controller.signal);
+        const remotePath = services.config.SANDBOX_RUNTIME === 'docker'
+          ? remoteWorkspacePath(services.config.DOCKER_SANDBOX_WORKSPACE_PATH)
+          : remoteWorkspacePath(services.config.E2B_WORKSPACE_PATH);
         await prepareWorkspace(
           sandbox,
           remotePath,
@@ -262,7 +311,15 @@ export function createRunProcessor(services: ProcessorServices) {
         services.controllers.delete(job.runId);
         await runtime?.dispose().catch(() => undefined);
         if (sandbox) {
-          if (shouldKill) {
+          if (sandbox instanceof DockerSandboxBackend) {
+            // 容器本身是 --rm 短生命周期，无需 kill/pause；
+            // 仅在取消或失败时删除宿主会话目录。
+            if (shouldKill) {
+              await sandbox.destroy().catch(() => undefined);
+            } else {
+              await sandbox.close().catch(() => undefined);
+            }
+          } else if (shouldKill) {
             await sandbox.kill().catch(() => undefined);
             if (workspaceId) {
               await services.repository.clearWorkspaceSandboxId(

@@ -18,6 +18,24 @@ export interface E2BSandboxOptions {
 
 const MAX_OUTPUT_BYTES = 200_000;
 
+/** Default endpoint of a local E2B-compatible Docker sandbox service. */
+export const DEFAULT_LOCAL_E2B_ENDPOINT = 'http://localhost:10087';
+
+/** Resolves the E2B endpoints from environment-style options. */
+export function resolveE2BEndpoints(
+  runtime: string | undefined,
+  apiUrl: string | undefined,
+  sandboxUrl: string | undefined,
+): { apiUrl?: string; sandboxUrl?: string } {
+  const fallback = runtime?.trim() === 'local-e2b' ? DEFAULT_LOCAL_E2B_ENDPOINT : undefined;
+  const resolvedApiUrl = apiUrl?.trim() || fallback;
+  const resolvedSandboxUrl = sandboxUrl?.trim() || fallback;
+  return {
+    ...(resolvedApiUrl ? { apiUrl: resolvedApiUrl } : {}),
+    ...(resolvedSandboxUrl ? { sandboxUrl: resolvedSandboxUrl } : {}),
+  };
+}
+
 function classifyFileError(message: string): FileOperationError {
   const normalized = message.toLowerCase();
   if (normalized.includes('not found') || normalized.includes('no such file')) return 'file_not_found';

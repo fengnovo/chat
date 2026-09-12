@@ -1,0 +1,11 @@
+.app-shell {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell.is-trace-open {
+  grid-template-columns: 264px minmax(0, 1fr) 360px;
+}

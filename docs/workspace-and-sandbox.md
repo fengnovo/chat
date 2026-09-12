@@ -41,13 +41,17 @@ workspace 的持久层；否则使用对象存储中的压缩 snapshot/增量清
 ## 本地 endpoint 要求
 
 Worker 使用的是 E2B SDK，因此本地服务必须同时提供 E2B-compatible 控制面和 sandbox
-proxy。默认开发配置为：
+proxy。沙箱模式由 `SANDBOX_RUNTIME` 显式决定，dev 和线上环境都可用：
 
 ```dotenv
-DEV_E2B_API_KEY=<本地控制面的密钥，可与云端相同时省略>
-DEV_E2B_API_URL=http://localhost:10086
-DEV_E2B_SANDBOX_URL=http://localhost:10086
+# e2b-cloud（默认）或 local-e2b
+SANDBOX_RUNTIME=local-e2b
+E2B_API_KEY=<本地控制面的密钥>
+E2B_API_URL=http://localhost:10087
+E2B_SANDBOX_URL=http://localhost:10087
 ```
 
-如果 Docker 部署实际暴露两个端口，应分别填写。普通 Web 应用、预览地址或 Langfuse
-页面不能作为 sandbox endpoint；它们没有创建/恢复 sandbox、执行命令和文件传输协议。
+`SANDBOX_RUNTIME=local-e2b` 且未设置 `E2B_API_URL` / `E2B_SANDBOX_URL` 时，回退到
+`http://localhost:10087`。如果 Docker 部署实际暴露两个端口，应分别填写。普通 Web
+应用、预览地址或 Langfuse 页面不能作为 sandbox endpoint；它们没有创建/恢复 sandbox、
+执行命令和文件传输协议。

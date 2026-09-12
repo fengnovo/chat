@@ -13,7 +13,7 @@
 | 角色级 RBAC                         | 尚未完整实现      | 能解析 `owner/admin/member`，但业务路由还没有细分角色权限                                                           |
 | 会话工作区                            | 已完成         | 新建会话直接创建独立空白 workspace；Web 不再要求选择项目、Git 仓库或本地目录                                             |
 | 开发/测试数据隔离                        | 已完成         | 本地开发使用 `agent` 数据库，集成测试使用独立端口和卷中的 `agent_test` 数据库                                                |
-| Sandbox                          | 配置已接入       | 开发默认连接本机 E2B-compatible Docker endpoint；生产默认连接 E2B Cloud；本机端点需单独验收                  |
+| Sandbox                          | 配置已接入       | `SANDBOX_RUNTIME` 显式选择 `local-e2b`（本机 E2B-compatible Docker endpoint）或 `e2b-cloud`，dev 与线上环境均可配置；本机端点需单独验收                  |
 
 因此，“能否和真实模型聊天、恢复历史并让 Agent 在会话的空白 workspace 工作”的答案是可以；“能否作为完整的多租户生产 Coding Agent 上线”的答案仍然是还不可以。当前缺少的关键产品链路是 Web 登录、Token 传递、资源配额，以及与 Sandbox 脱钩的 workspace 持久化。
 
@@ -77,7 +77,7 @@ docker compose -f infra/compose.yaml ps
 - `health/live` 返回 `{"status":"ok"}`。
 - `health/ready` 返回 `{"status":"ready"}`。
 - Postgres、Redis、MinIO 均为 `healthy`。
-- Worker 日志显示 `Agent worker ready: driver=deep, sandbox=local-e2b`。
+- Worker 日志显示 `Agent worker ready: driver=deep, sandbox=local-e2b`（配置 `SANDBOX_RUNTIME=local-e2b` 时；使用 E2B Cloud 时为 `sandbox=e2b-cloud`）。
 
 ## 二、默认全链路验收
 
@@ -388,14 +388,16 @@ curl -fsS http://127.0.0.1:8001/health/ready
 11. 新增数据库迁移 007\_e2b\_workspace\_sandbox.sql 。
 12. 核心适配器位于 e2b-sandbox.ts 。
 
-开发环境会把 E2B SDK 的控制面和 sandbox proxy 指向：
+本地 E2B-compatible Docker 沙箱通过显式开关启用，dev 与线上环境均可使用：
 
 ```dotenv
-DEV_E2B_API_KEY=<本地控制面的密钥，可与云端相同时省略>
-DEV_E2B_API_URL=http://localhost:10086
-DEV_E2B_SANDBOX_URL=http://localhost:10086
+SANDBOX_RUNTIME=local-e2b
+E2B_API_KEY=<本地控制面的密钥>
+E2B_API_URL=http://localhost:10087
+E2B_SANDBOX_URL=http://localhost:10087
 ```
 
-生产环境不会使用这两个开发变量，仍走 E2B Cloud。若本地部署把控制面和 proxy
+`SANDBOX_RUNTIME=local-e2b` 且未设置这两个 URL 时回退到 `http://localhost:10087`；
+`SANDBOX_RUNTIME=e2b-cloud`（默认）走 E2B Cloud。若本地部署把控制面和 proxy
 暴露在不同端口，应分别覆盖这两个值；本地服务必须兼容 E2B API，而不能只是普通
 Web 页面或应用预览端口。

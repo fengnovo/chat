@@ -77,16 +77,17 @@ AGENT_DRIVER=deep
 MODEL=openai:gpt-4o-mini
 OPENAI_API_KEY=...
 E2B_API_KEY=...
-# 开发环境默认值；本机服务必须兼容 E2B API
-DEV_E2B_API_KEY=... # 本地控制面的密钥与云端不同时设置
-DEV_E2B_API_URL=http://localhost:10086
-DEV_E2B_SANDBOX_URL=http://localhost:10086
+# 沙箱运行时：e2b-cloud（默认）或 local-e2b（本机 E2B-compatible Docker 服务）
+SANDBOX_RUNTIME=e2b-cloud
+# 可选 endpoint 覆盖，dev 与线上环境均生效；local-e2b 未设置时回退到以下地址
+E2B_API_URL=http://localhost:10087
+E2B_SANDBOX_URL=http://localhost:10087
 # FALLBACK_MODELS=anthropic:claude-sonnet-4
 # ANTHROPIC_API_KEY=...
 # MCP_CONFIG_PATH=/absolute/path/to/mcp.json
 ```
 
-生产环境必须设置 `NODE_ENV=production`、`AUTH_MODE=oidc`、OIDC issuer/audience/JWKS，并替换数据库、Redis 和对象存储配置。Worker 在生产环境不读取 `DEV_E2B_*`，使用 `E2B_API_KEY` 连接 E2B Cloud。JWT 的 `sub` 和 `tenant_id` 需由身份网关映射为平台内部 UUID；API 会拒绝以 dev identity 在生产环境启动。
+生产环境必须设置 `NODE_ENV=production`、`AUTH_MODE=oidc`、OIDC issuer/audience/JWKS，并替换数据库、Redis 和对象存储配置。沙箱模式不再由 `NODE_ENV` 决定，任何环境只要设置 `SANDBOX_RUNTIME=local-e2b` 即可连接本机 E2B-compatible Docker 服务；未设置 `E2B_API_URL` / `E2B_SANDBOX_URL` 时回退到 `http://localhost:10087`。默认 `e2b-cloud` 使用 `E2B_API_KEY` 连接 E2B Cloud。JWT 的 `sub` 和 `tenant_id` 需由身份网关映射为平台内部 UUID；API 会拒绝以 dev identity 在生产环境启动。
 
 ## 常用命令
 

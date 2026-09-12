@@ -148,7 +148,8 @@ export async function createDeepAgentRuntime(
       if (normalized) pendingRouterEvents.push(normalized);
     },
   });
-  if (!options.backend) throw new Error('DeepAgent requires an external E2B backend');
+  if (!options.backend) throw new Error('DeepAgent requires an external sandbox backend');
+  const backendMode = options.backendMode ?? 'e2b';
   const mcp = await loadMcpTools(options.mcpConfigPath);
   const mcpApprovalRules = Object.fromEntries(
     mcp.tools
@@ -172,7 +173,7 @@ export async function createDeepAgentRuntime(
     skills: options.skills ?? [],
     memory: options.memory ?? [],
     systemPrompt: [
-      `你运行在 E2B 云沙箱中，工作目录是：${options.workspacePath}。Worker/CLI 宿主机路径不可访问。`,
+      `你运行在一个隔离的容器沙箱中，工作目录是：${options.workspacePath}。Host/Worker 宿主机路径不可访问。`,
       '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。启动网络服务时必须监听 0.0.0.0，并用后台命令启动。',
       options.autoApproveTools
         ? '用户已允许本会话自动执行工具。不要读取工作区之外的路径。'
@@ -206,11 +207,11 @@ export async function createDeepAgentRuntime(
     configurable: { thread_id: options.sessionId },
     recursionLimit: 80,
     runName: 'web-coding-agent',
-    tags: ['coding-agent', 'e2b'],
+    tags: ['coding-agent', backendMode],
     metadata: {
       run_id: options.runId,
       thread_id: options.sessionId,
-      backend: 'e2b',
+      backend: backendMode,
       cwd: options.workspacePath,
     },
     streamMode: ['values', 'messages', 'tools'] as Array<'values' | 'messages' | 'tools'>,
@@ -385,7 +386,7 @@ export async function createDeepAgentRuntime(
   }
 
   return {
-    backendMode: 'e2b',
+    backendMode,
     workspacePath: options.workspacePath,
     mcpStatus: mcp.status,
     run(message: string) {

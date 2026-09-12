@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   createDeepAgentRuntime,
+  DockerSandboxBackend,
   E2BSandbox,
   type HeadlessAgentRuntime,
   type ModelSpec,
@@ -37,8 +38,16 @@ function modelSpec(raw: string): ModelSpec {
   };
 }
 
+/** CLI 可用的沙箱后端类型。 */
+type SandboxInstance = DockerSandboxBackend | E2BSandbox;
+
+interface SandboxLike {
+  execute(command: string): Promise<{ output: string; exitCode: number | null }>;
+  uploadFiles(files: Array<[string, Uint8Array]>): Promise<Array<{ path: string; error: string | null }>>;
+}
+
 async function uploadAgentResources(
-  sandbox: E2BSandbox,
+  sandbox: SandboxLike,
   settings: CliSettings,
   workspacePath: string,
 ): Promise<{ skills: string[]; memory: string[] }> {
@@ -75,19 +84,42 @@ async function uploadAgentResources(
   };
 }
 
-export async function createAgentRuntime(
-  settings: CliSettings,
+/**
+ * 按配置创建沙箱。
+ * docker 模式使用本地 Docker 容器沙箱；e2b 模式使用 E2B 云沙箱。
+ */
+async function acquireSandbox(
   sessionStore: SessionStore,
   threadId: string,
-): Promise<HeadlessAgentRuntime> {
-  const models = [requiredEnv('MODEL'), ...(process.env.FALLBACK_MODELS?.split(',') ?? [])]
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map(modelSpec);
+): Promise<{ sandbox: SandboxInstance; workspacePath: string; release: () => Promise<void> }> {
+  const runtime = process.env.SANDBOX_RUNTIME?.trim() || 'docker';
+
+  if (runtime === 'docker') {
+    const workspacePath = process.env.DOCKER_SANDBOX_WORKSPACE_PATH?.trim()
+      || '/mnt/user-data/workspace';
+    if (!workspacePath.startsWith('/') || workspacePath.includes('\0')) {
+      throw new Error('DOCKER_SANDBOX_WORKSPACE_PATH 必须是绝对路径。');
+    }
+    const sandbox = await DockerSandboxBackend.create({
+      sessionId: threadId,
+      ...(process.env.DOCKER_SANDBOX_IMAGE ? { image: process.env.DOCKER_SANDBOX_IMAGE.trim() } : {}),
+      ...(process.env.DOCKER_SANDBOX_SESSIONS_ROOT ? { rootDirectory: process.env.DOCKER_SANDBOX_SESSIONS_ROOT.trim() } : {}),
+      ...(process.env.DOCKER_SANDBOX_COMMAND_TIMEOUT_MS ? { commandTimeoutMs: Number(process.env.DOCKER_SANDBOX_COMMAND_TIMEOUT_MS) } : {}),
+    });
+    return {
+      sandbox,
+      workspacePath,
+      release: () => sandbox.close().catch(() => undefined),
+    };
+  }
+
+  // e2b-cloud 模式
   const sandboxOptions = {
     apiKey: requiredEnv('E2B_API_KEY'),
     template: process.env.E2B_TEMPLATE?.trim() || 'base',
     timeoutMs: Number(process.env.E2B_TIMEOUT_MS ?? 3_600_000),
+    ...(process.env.E2B_API_URL ? { apiUrl: process.env.E2B_API_URL.trim() } : {}),
+    ...(process.env.E2B_SANDBOX_URL ? { sandboxUrl: process.env.E2B_SANDBOX_URL.trim() } : {}),
   };
   const existingSandboxId = sessionStore.getSandboxId(threadId);
   let sandbox: E2BSandbox;
@@ -115,6 +147,25 @@ export async function createAgentRuntime(
     sessionStore.clearSandboxId(threadId);
     throw new Error(prepared.output);
   }
+  return {
+    sandbox,
+    workspacePath,
+    release: () => sandbox.pause().catch(() => undefined),
+  };
+}
+
+export async function createAgentRuntime(
+  settings: CliSettings,
+  sessionStore: SessionStore,
+  threadId: string,
+): Promise<HeadlessAgentRuntime> {
+  const models = [requiredEnv('MODEL'), ...(process.env.FALLBACK_MODELS?.split(',') ?? [])]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(modelSpec);
+
+  const { sandbox, workspacePath, release } = await acquireSandbox(sessionStore, threadId);
+
   let runtime: HeadlessAgentRuntime;
   try {
     const resources = await uploadAgentResources(sandbox, settings, workspacePath);
@@ -123,6 +174,7 @@ export async function createAgentRuntime(
       sessionId: threadId,
       workspacePath,
       backend: sandbox,
+      backendMode: (process.env.SANDBOX_RUNTIME?.trim() || 'docker') === 'docker' ? 'docker' : 'e2b',
       checkpointer: SqliteSaver.fromConnString(sessionStore.dbPath),
       models,
       mcpConfigPath: settings.mcpConfigPath,
@@ -130,15 +182,19 @@ export async function createAgentRuntime(
       memory: resources.memory,
     });
   } catch (error) {
-    await sandbox.kill().catch(() => undefined);
-    sessionStore.clearSandboxId(threadId);
+    if (sandbox instanceof DockerSandboxBackend) {
+      await sandbox.destroy().catch(() => undefined);
+    } else {
+      await sandbox.kill().catch(() => undefined);
+      sessionStore.clearSandboxId(threadId);
+    }
     throw error;
   }
   return {
     ...runtime,
     async dispose() {
       await runtime.dispose().catch(() => undefined);
-      await sandbox.pause().catch(() => undefined);
+      await release();
     },
   };
 }

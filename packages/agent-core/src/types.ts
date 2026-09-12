@@ -24,11 +24,15 @@ export interface CircuitBreakerStore {
   recordFailure(key: string): Promise<void>;
 }
 
+/** Agent 运行所依赖的沙箱后端类型。 */
+export type AgentBackendMode = 'e2b' | 'docker';
+
 export interface HeadlessAgentOptions {
   runId: string;
   sessionId: string;
   workspacePath: string;
   backend: unknown;
+  backendMode?: AgentBackendMode;
   checkpointer: unknown;
   models: ModelSpec[];
   circuitBreaker?: CircuitBreakerStore;
@@ -54,7 +58,7 @@ export type AgentResumeInput =
     };
 
 export interface HeadlessAgentRuntime {
-  readonly backendMode: 'e2b';
+  readonly backendMode: AgentBackendMode;
   readonly workspacePath: string;
   readonly mcpStatus: string;
   run(message: string): AsyncIterable<AgentEvent>;

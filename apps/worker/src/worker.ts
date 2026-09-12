@@ -64,8 +64,14 @@ worker.on('completed', (job) => console.log(`Run job ${job.id} completed`));
 worker.on('failed', (job, error) => console.error(`Run job ${job?.id} failed`, error));
 worker.on('error', (error) => console.error('Worker error', error));
 
+const sandboxDetail =
+  config.SANDBOX_RUNTIME === 'docker'
+    ? ` (${config.DOCKER_SANDBOX_IMAGE})`
+    : config.E2B_API_URL
+      ? ` (${config.E2B_API_URL})`
+      : '';
 console.log(
-  `Agent worker ready: driver=${config.AGENT_DRIVER}, sandbox=${config.SANDBOX_RUNTIME}${config.E2B_API_URL ? ` (${config.E2B_API_URL})` : ''}, concurrency=${config.WORKER_CONCURRENCY}`,
+  `Agent worker ready: driver=${config.AGENT_DRIVER}, sandbox=${config.SANDBOX_RUNTIME}${sandboxDetail}, concurrency=${config.WORKER_CONCURRENCY}`,
 );
 
 let shuttingDown = false;

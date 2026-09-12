@@ -1,0 +1,131 @@
+.composer-wrap {
+  background: var(--surface);
+  padding: 0 30px 16px;
+}
+
+.composer-activity {
+  align-items: center;
+  color: var(--ink-muted);
+  display: flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+  margin: 0 auto 9px;
+  max-width: 1050px;
+  min-height: 20px;
+}
+
+.activity-spinner {
+  animation: activity-spin 850ms linear infinite;
+  border: 2px solid #ded8fa;
+  border-radius: 999px;
+  border-top-color: var(--violet);
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 15px;
+  width: 15px;
+}
+
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.composer {
+  align-items: flex-end;
+  background: white;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 5px 18px rgb(30 25 43 / 7%);
+  display: flex;
+  gap: 10px;
+  margin: 0 auto;
+  max-width: 1050px;
+  padding: 7px 7px 7px 14px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.composer:focus-within {
+  border-color: #a89af1;
+  box-shadow: 0 0 0 3px rgb(109 74 255 / 9%),
+    0 6px 20px rgb(30 25 43 / 8%);
+}
+
+.composer textarea {
+  background: transparent;
+  border: 0;
+  line-height: 1.5;
+  max-height: 120px;
+  min-height: 34px;
+  outline: 0;
+  padding: 7px 0 5px;
+  resize: none;
+  width: 100%;
+}
+
+.composer textarea::placeholder {
+  color: #aaa6b0;
+}
+
+.composer textarea:disabled {
+  opacity: 0.55;
+}
+
+.send-button {
+  align-items: center;
+  background: var(--violet);
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  display: flex;
+  flex: 0 0 auto;
+  height: 38px;
+  justify-content: center;
+  transition: background 160ms ease, opacity 160ms ease;
+  width: 38px;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--violet-dark);
+}
+
+.send-button:disabled {
+  opacity: 0.34;
+}
+
+.send-button.is-stop {
+  background: #44404d;
+}
+
+.suggestions {
+  display: flex;
+  gap: 6px;
+  margin: 0 auto 8px;
+  max-width: 730px;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: none;
+}
+
+.suggestions::-webkit-scrollbar {
+  display: none;
+}
+
+.suggestions button {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  flex: 0 0 auto;
+  font-size: 10px;
+  min-height: 31px;
+  padding: 0 11px;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.suggestions button:hover {
+  background: var(--violet-soft);
+  border-color: #cfc5ff;
+  color: var(--violet-dark);
+}

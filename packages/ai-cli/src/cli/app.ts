@@ -22,7 +22,7 @@ import { TaskRunner } from './task-runner.js';
 
 function showBanner(settings: CliSettings, runtime: AgentRuntime): void {
   tuiShowBanner({
-    mode: '☁️ E2B 云沙箱',
+    mode: '🐳 Docker 沙箱',
     cwd: runtime.workspacePath,
     skills:
       settings.skillCount > 0
@@ -88,7 +88,7 @@ export async function runCli(): Promise<void> {
   const runtime = await createAgentRuntime(settings, sessionStore, threadId);
   const taskRunner = new TaskRunner(runtime, sessionStore, threadId);
   tuiSetHeader(
-    `DeepAgents Coding Agent · 模式: ☁️ E2B 云沙箱 · 工作目录: ${runtime.workspacePath}`,
+    `DeepAgents Coding Agent · 模式: 🐳 Docker 沙箱 · 工作目录: ${runtime.workspacePath}`,
   );
   showBanner(settings, runtime);
 

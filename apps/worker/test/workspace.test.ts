@@ -24,10 +24,10 @@ class FakeSandbox implements RemoteWorkspaceSandbox {
   }
 }
 
-test('remote workspace path must be an absolute E2B path', () => {
-  assert.equal(remoteWorkspacePath('/home/user/workspace'), '/home/user/workspace');
+test('remote workspace path must be an absolute sandbox path', () => {
+  assert.equal(remoteWorkspacePath('/mnt/user-data/workspace'), '/mnt/user-data/workspace');
   assert.throws(() => remoteWorkspacePath('../../escape'));
-  assert.throws(() => remoteWorkspacePath('/home/user/workspace\0escape'));
+  assert.throws(() => remoteWorkspacePath('/mnt/user-data/workspace\0escape'));
 });
 
 test('uploaded project manifest is restored through sandbox upload', async () => {
@@ -38,22 +38,22 @@ test('uploaded project manifest is restored through sandbox upload', async () =>
   }));
   await prepareWorkspace(
     sandbox,
-    '/home/user/workspaces/session',
+    '/mnt/user-data/workspace',
     { type: 'upload', objectKey: 'snapshot' },
     async () => snapshot,
     true,
   );
   assert.equal(
-    Buffer.from(sandbox.files.get('/home/user/workspaces/session/src/index.ts')!).toString(),
+    Buffer.from(sandbox.files.get('/mnt/user-data/workspace/src/index.ts')!).toString(),
     'ready',
   );
 });
 
-test('git clone executes inside E2B and resume does not initialize source again', async () => {
+test('git clone executes inside the sandbox and resume does not initialize source again', async () => {
   const sandbox = new FakeSandbox();
   await prepareWorkspace(
     sandbox,
-    '/home/user/workspaces/session',
+    '/mnt/user-data/workspace',
     { type: 'git', url: 'https://example.test/repo.git', ref: 'main' },
     async () => new Uint8Array(),
     true,
@@ -62,7 +62,7 @@ test('git clone executes inside E2B and resume does not initialize source again'
   const commandCount = sandbox.commands.length;
   await prepareWorkspace(
     sandbox,
-    '/home/user/workspaces/session',
+    '/mnt/user-data/workspace',
     { type: 'git', url: 'https://example.test/repo.git' },
     async () => new Uint8Array(),
     false,
@@ -79,7 +79,7 @@ for (const unsafePath of ['../escape', '/absolute', 'src/../escape', 'src\0escap
     }));
     await assert.rejects(() => prepareWorkspace(
       sandbox,
-      '/home/user/workspaces/session',
+      '/mnt/user-data/workspace',
       { type: 'upload', objectKey: 'snapshot' },
       async () => snapshot,
       true,
