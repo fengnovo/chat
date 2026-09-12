@@ -28,13 +28,13 @@ export interface HeadlessAgentOptions {
   runId: string;
   sessionId: string;
   workspacePath: string;
+  backend: unknown;
   checkpointer: unknown;
   models: ModelSpec[];
   circuitBreaker?: CircuitBreakerStore;
   mcpConfigPath?: string;
   skills?: string[];
   memory?: string[];
-  inheritEnv?: boolean;
   autoApproveTools?: boolean;
   signal?: AbortSignal;
 }
@@ -54,13 +54,10 @@ export type AgentResumeInput =
     };
 
 export interface HeadlessAgentRuntime {
-  readonly backendMode: 'local' | 'sandbox';
+  readonly backendMode: 'e2b';
+  readonly workspacePath: string;
   readonly mcpStatus: string;
   run(message: string): AsyncIterable<AgentEvent>;
   resume(input: AgentResumeInput): AsyncIterable<AgentEvent>;
   dispose(): Promise<void>;
-}
-
-export interface AgentDriver {
-  create(options: HeadlessAgentOptions): Promise<HeadlessAgentRuntime>;
 }

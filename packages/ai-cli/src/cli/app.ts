@@ -22,11 +22,8 @@ import { TaskRunner } from './task-runner.js';
 
 function showBanner(settings: CliSettings, runtime: AgentRuntime): void {
   tuiShowBanner({
-    mode:
-      runtime.backendMode === 'sandbox'
-        ? '☁️ LangSmith 云沙箱'
-        : '💻 本机（真实磁盘 + shell）',
-    cwd: settings.cwd,
+    mode: '☁️ E2B 云沙箱',
+    cwd: runtime.workspacePath,
     skills:
       settings.skillCount > 0
         ? `${settings.skillCount} 个技能（${settings.skillsHostDir}）`
@@ -91,7 +88,7 @@ export async function runCli(): Promise<void> {
   const runtime = await createAgentRuntime(settings, sessionStore, threadId);
   const taskRunner = new TaskRunner(runtime, sessionStore, threadId);
   tuiSetHeader(
-    `DeepAgents Coding Agent · 模式: ${runtime.backendMode === 'sandbox' ? '☁️ 云沙箱' : '💻 本机'} · 工作目录: ${settings.cwd}`,
+    `DeepAgents Coding Agent · 模式: ☁️ E2B 云沙箱 · 工作目录: ${runtime.workspacePath}`,
   );
   showBanner(settings, runtime);
 

@@ -40,6 +40,12 @@ export interface SessionListCursor {
   id: string;
 }
 
+export interface WorkspaceSandboxRecord {
+  workspaceId: string;
+  sandboxId: string | null;
+  sandboxProvider: 'e2b';
+}
+
 export interface RunRecord {
   id: string;
   tenantId: string;
@@ -666,6 +672,53 @@ export class AgentRepository {
       [tenantId, runId],
     );
     return result.rows[0] ? runOf(result.rows[0]) : null;
+  }
+
+  async getWorkspaceSandboxForWorker(
+    tenantId: string,
+    sessionId: string,
+  ): Promise<WorkspaceSandboxRecord | null> {
+    const result = await this.pool.query(
+      `SELECT w.id AS workspace_id, w.sandbox_id, w.sandbox_provider
+       FROM agent_sessions s
+       JOIN workspaces w ON w.id = s.workspace_id
+       WHERE s.tenant_id = $1 AND s.id = $2`,
+      [tenantId, sessionId],
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          workspaceId: String(row.workspace_id),
+          sandboxId: row.sandbox_id ? String(row.sandbox_id) : null,
+          sandboxProvider: row.sandbox_provider as 'e2b',
+        }
+      : null;
+  }
+
+  async saveWorkspaceSandboxId(
+    tenantId: string,
+    workspaceId: string,
+    sandboxId: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE workspaces
+       SET sandbox_id = $3, sandbox_provider = 'e2b'
+       WHERE tenant_id = $1 AND id = $2 AND sandbox_id IS NULL`,
+      [tenantId, workspaceId, sandboxId],
+    );
+    return result.rowCount === 1;
+  }
+
+  async clearWorkspaceSandboxId(
+    tenantId: string,
+    workspaceId: string,
+    sandboxId: string,
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE workspaces SET sandbox_id = NULL
+       WHERE tenant_id = $1 AND id = $2 AND sandbox_id = $3`,
+      [tenantId, workspaceId, sandboxId],
+    );
   }
 
   async updateRunStatus(

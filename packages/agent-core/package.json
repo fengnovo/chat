@@ -23,6 +23,7 @@
     "@langchain/openai": "^1.5.10",
     "@repo/contracts": "workspace:*",
     "deepagents": "^1.13.2",
+    "e2b": "^2.49.0",
     "langchain": "^1.5.10",
     "zod": "^4.6.1"
   },

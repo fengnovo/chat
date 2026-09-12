@@ -1,5 +1,3 @@
-import { spawn } from 'node:child_process';
-import { mkdir, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { WorkspaceSource } from '@repo/contracts';
@@ -18,138 +16,79 @@ const projectManifestSchema = z.object({
     .max(1_000),
 });
 
-export async function ensureWorkspace(
-  root: string,
-  requestedPath: string,
-): Promise<string> {
-  const resolvedRoot = path.resolve(root);
-  const resolvedPath = path.resolve(requestedPath);
-  if (
-    resolvedPath !== resolvedRoot &&
-    !resolvedPath.startsWith(`${resolvedRoot}${path.sep}`)
-  ) {
-    throw new Error('Workspace path escapes WORKSPACE_ROOT');
-  }
-  await mkdir(resolvedPath, { recursive: true, mode: 0o700 });
-  const [realRoot, realWorkspace] = await Promise.all([
-    realpath(resolvedRoot),
-    realpath(resolvedPath),
-  ]);
-  if (
-    realWorkspace !== realRoot &&
-    !realWorkspace.startsWith(`${realRoot}${path.sep}`)
-  ) {
-    throw new Error('Workspace symlink escapes WORKSPACE_ROOT');
-  }
-  return realWorkspace;
+export interface RemoteWorkspaceSandbox {
+  execute(command: string): Promise<{ output: string; exitCode: number | null }>;
+  uploadFiles(files: Array<[string, Uint8Array]>): Promise<Array<{ path: string; error: string | null }>>;
 }
 
-function safeUploadPath(workspace: string, relativePath: string) {
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function safeRelativePath(relativePath: string): string {
   const normalized = relativePath.replaceAll('\\', '/');
   if (
     normalized.startsWith('/') ||
     normalized.includes('\0') ||
-    normalized.split('/').some((segment) => segment === '..')
+    normalized.split('/').some((segment) => segment === '..' || segment === '')
   ) {
     throw new Error(`Uploaded file path is unsafe: ${relativePath}`);
   }
-  const target = path.resolve(workspace, normalized);
-  if (!target.startsWith(`${workspace}${path.sep}`)) {
-    throw new Error(`Uploaded file path escapes workspace: ${relativePath}`);
-  }
-  return target;
+  return normalized;
 }
 
-async function cloneRepository(
-  workspace: string,
-  source: Extract<WorkspaceSource, { type: 'git' }>,
-  signal?: AbortSignal,
-) {
-  const args = ['clone', '--depth', '1', '--single-branch'];
-  if (source.ref) args.push('--branch', source.ref);
-  args.push('--', source.url, '.');
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('git', args, {
-      cwd: workspace,
-      env: {
-        PATH: process.env.PATH,
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_CONFIG_NOSYSTEM: '1',
-      },
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    let errorOutput = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => {
-      errorOutput = `${errorOutput}${chunk}`.slice(-4_000);
-    });
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error('Git clone timed out'));
-    }, 120_000);
-    const abort = () => child.kill('SIGTERM');
-    signal?.addEventListener('abort', abort, { once: true });
-    child.once('error', (error) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', abort);
-      reject(error);
-    });
-    child.once('exit', (code) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', abort);
-      if (signal?.aborted) {
-        reject(signal.reason ?? new Error('Workspace preparation cancelled'));
-      } else if (code === 0) {
-        resolve();
-      } else {
-        reject(
-          new Error(`Git clone failed: ${errorOutput.trim() || `exit ${code}`}`),
-        );
-      }
-    });
-  });
+export function remoteWorkspacePath(configuredPath: string): string {
+  if (!configuredPath.startsWith('/') || configuredPath.includes('\0')) {
+    throw new Error('E2B workspace path must be absolute');
+  }
+  return path.posix.resolve('/', configuredPath);
 }
 
-async function restoreUpload(workspace: string, snapshot: Uint8Array) {
-  const manifest = projectManifestSchema.parse(
-    JSON.parse(Buffer.from(snapshot).toString('utf8')),
-  );
-  for (const file of manifest.files) {
-    const target = safeUploadPath(workspace, file.path);
-    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    await writeFile(target, Buffer.from(file.contentBase64, 'base64'), {
-      mode: 0o600,
-    });
-  }
+async function checkedExecute(sandbox: RemoteWorkspaceSandbox, command: string): Promise<string> {
+  const result = await sandbox.execute(command);
+  if (result.exitCode !== 0) throw new Error(result.output.trim() || `Command failed: ${command}`);
+  return result.output;
 }
 
 export async function prepareWorkspace(
-  root: string,
-  requestedPath: string,
+  sandbox: RemoteWorkspaceSandbox,
+  workspace: string,
   source: WorkspaceSource | undefined,
   loadUpload: (objectKey: string) => Promise<Uint8Array>,
-  signal?: AbortSignal,
-) {
-  const workspace = await ensureWorkspace(root, requestedPath);
-  if (
-    !source ||
-    source.type === 'empty' ||
-    (await readdir(workspace)).length > 0
-  ) {
+  initializeSource: boolean,
+): Promise<string> {
+  await checkedExecute(sandbox, `mkdir -p -- ${shellQuote(workspace)}`);
+  if (!initializeSource || !source || source.type === 'empty') return workspace;
+
+  const listing = await checkedExecute(
+    sandbox,
+    `if [ -z "$(ls -A -- ${shellQuote(workspace)})" ]; then printf empty; else printf populated; fi`,
+  );
+  if (listing !== 'empty') return workspace;
+
+  if (source.type === 'git') {
+    const branch = source.ref ? ` --branch ${shellQuote(source.ref)}` : '';
+    await checkedExecute(
+      sandbox,
+      `git -c credential.helper= -c core.askPass= clone --depth 1 --single-branch${branch} -- ${shellQuote(source.url)} ${shellQuote(`${workspace}/.restore`)}` +
+        ` && cp -a -- ${shellQuote(`${workspace}/.restore/.`)} ${shellQuote(workspace)}` +
+        ` && rm -rf -- ${shellQuote(`${workspace}/.restore`)}`,
+    );
     return workspace;
   }
 
-  try {
-    if (source.type === 'git') {
-      await cloneRepository(workspace, source, signal);
-    } else {
-      await restoreUpload(workspace, await loadUpload(source.objectKey));
-    }
-    return workspace;
-  } catch (error) {
-    await rm(workspace, { recursive: true, force: true });
-    await mkdir(workspace, { recursive: true, mode: 0o700 });
-    throw error;
+  const snapshot = await loadUpload(source.objectKey);
+  const manifest = projectManifestSchema.parse(JSON.parse(Buffer.from(snapshot).toString('utf8')));
+  const files: Array<[string, Uint8Array]> = manifest.files.map((file) => [
+    path.posix.join(workspace, safeRelativePath(file.path)),
+    Buffer.from(file.contentBase64, 'base64'),
+  ]);
+  const directories = [...new Set(files.map(([filePath]) => path.posix.dirname(filePath)))];
+  if (directories.length > 0) {
+    await checkedExecute(sandbox, `mkdir -p -- ${directories.map(shellQuote).join(' ')}`);
   }
+  const results = await sandbox.uploadFiles(files);
+  const failed = results.find((result) => result.error);
+  if (failed) throw new Error(`Upload restore failed for ${failed.path}: ${failed.error}`);
+  return workspace;
 }

@@ -7,7 +7,7 @@ import { tool } from '@langchain/core/tools';
 import { Command, interrupt, type Interrupt } from '@langchain/langgraph';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import type { AgentEvent } from '@repo/contracts';
-import { LangSmithSandbox, LocalShellBackend, createDeepAgent } from 'deepagents';
+import { createDeepAgent } from 'deepagents';
 import { humanInTheLoopMiddleware, modelCallLimitMiddleware, todoListMiddleware } from 'langchain';
 import type { HITLRequest, HITLResponse } from 'langchain';
 import { z } from 'zod';
@@ -101,22 +101,6 @@ function createAskUserTool() {
   );
 }
 
-async function createBackend(workspacePath: string, inheritEnv: boolean) {
-  if (process.env.CODE_AGENT_BACKEND === 'sandbox') {
-    const backend = await LangSmithSandbox.create({});
-    return { backend, mode: 'sandbox' as const };
-  }
-  const backend = new LocalShellBackend({
-    rootDir: workspacePath,
-    virtualMode: false,
-    timeout: 180,
-    maxOutputBytes: 200_000,
-    inheritEnv,
-  });
-  await backend.initialize();
-  return { backend, mode: 'local' as const };
-}
-
 async function loadMcpTools(configPath?: string) {
   if (!configPath || !existsSync(configPath)) {
     return { tools: [], status: 'not configured', client: null };
@@ -164,7 +148,7 @@ export async function createDeepAgentRuntime(
       if (normalized) pendingRouterEvents.push(normalized);
     },
   });
-  const backendHandle = await createBackend(options.workspacePath, options.inheritEnv ?? false);
+  if (!options.backend) throw new Error('DeepAgent requires an external E2B backend');
   const mcp = await loadMcpTools(options.mcpConfigPath);
   const mcpApprovalRules = Object.fromEntries(
     mcp.tools
@@ -183,13 +167,13 @@ export async function createDeepAgentRuntime(
   const agent = createDeepAgent({
     model: router.primary,
     checkpointer: options.checkpointer as never,
-    backend: backendHandle.backend as never,
+    backend: options.backend as never,
     tools: [createAskUserTool(), ...mcp.tools] as never,
     skills: options.skills ?? [],
     memory: options.memory ?? [],
     systemPrompt: [
-      `你是运行在隔离工作区中的 coding agent，工作目录是：${options.workspacePath}`,
-      '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。',
+      `你运行在 E2B 云沙箱中，工作目录是：${options.workspacePath}。Worker/CLI 宿主机路径不可访问。`,
+      '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。启动网络服务时必须监听 0.0.0.0，并用后台命令启动。',
       options.autoApproveTools
         ? '用户已允许本会话自动执行工具。不要读取工作区之外的路径。'
         : '文件写入、删除和命令执行必须经过人工审批。不要读取工作区之外的路径。',
@@ -222,11 +206,11 @@ export async function createDeepAgentRuntime(
     configurable: { thread_id: options.sessionId },
     recursionLimit: 80,
     runName: 'web-coding-agent',
-    tags: ['coding-agent', backendHandle.mode],
+    tags: ['coding-agent', 'e2b'],
     metadata: {
       run_id: options.runId,
       thread_id: options.sessionId,
-      backend: backendHandle.mode,
+      backend: 'e2b',
       cwd: options.workspacePath,
     },
     streamMode: ['values', 'messages', 'tools'] as Array<'values' | 'messages' | 'tools'>,
@@ -401,7 +385,8 @@ export async function createDeepAgentRuntime(
   }
 
   return {
-    backendMode: backendHandle.mode,
+    backendMode: 'e2b',
+    workspacePath: options.workspacePath,
     mcpStatus: mcp.status,
     run(message: string) {
       return runInitial(message);

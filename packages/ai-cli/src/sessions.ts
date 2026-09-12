@@ -16,6 +16,7 @@ export interface SessionMeta {
   updatedAt: number;
   /** 该会话累计执行的任务（用户输入）条数 */
   tasks: number;
+  sandboxId?: string;
 }
 
 export class SessionStore {
@@ -56,6 +57,27 @@ export class SessionStore {
    * 记录一次任务执行：新会话用 titleForNew（首条用户输入）作标题，
    * 已有会话只更新活跃时间与任务数。
    */
+  getSandboxId(threadId: string): string | undefined {
+    return this.sessions.find((session) => session.threadId === threadId)?.sandboxId;
+  }
+
+  setSandboxId(threadId: string, sandboxId: string): void {
+    const session = this.sessions.find((item) => item.threadId === threadId);
+    if (session) session.sandboxId = sandboxId;
+    else {
+      const now = Date.now();
+      this.sessions.push({ threadId, sandboxId, title: '未命名会话', createdAt: now, updatedAt: now, tasks: 0 });
+    }
+    this.persist();
+  }
+
+  clearSandboxId(threadId: string): void {
+    const session = this.sessions.find((item) => item.threadId === threadId);
+    if (!session?.sandboxId) return;
+    delete session.sandboxId;
+    this.persist();
+  }
+
   recordTask(threadId: string, titleForNew: string): void {
     const now = Date.now();
     const existing = this.sessions.find((s) => s.threadId === threadId);

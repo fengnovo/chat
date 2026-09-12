@@ -17,9 +17,14 @@ const schema = z.object({
   S3_BUCKET: z.string().default('agent-artifacts'),
   S3_ACCESS_KEY: z.string().default('agent'),
   S3_SECRET_KEY: z.string().default('agent-local-secret'),
-  AGENT_DRIVER: z.enum(['demo', 'deep']).default('demo'),
+  AGENT_DRIVER: z.literal('deep').default('deep'),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
   WORKSPACE_ROOT: z.string().default(path.join(repositoryRoot, 'data/workspaces')),
+  E2B_API_KEY: z.string().trim().optional(),
+  E2B_TEMPLATE: z.string().trim().default('base'),
+  E2B_TIMEOUT_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(3_600_000),
+  E2B_WORKSPACE_PATH: z.string().trim().startsWith('/').default('/home/user/workspace'),
+  CODE_AGENT_BACKEND: z.literal('e2b').default('e2b'),
   MODEL: z.string().default('openai:gpt-4o-mini'),
   MODEL_PROVIDER: z.string().default('openai'),
   OPENAI_API_KEY: z.string().optional(),
@@ -56,15 +61,16 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
       ? 'postgresql://agent:agent@127.0.0.1:55433/agent_test'
       : value.DATABASE_URL);
   const workspaceRoot = path.resolve(value.WORKSPACE_ROOT);
-  const models =
-    value.AGENT_DRIVER === 'deep'
-      ? [value.MODEL, ...(value.FALLBACK_MODELS?.split(',') ?? [])]
-          .map((item) => item.trim())
-          .filter(Boolean)
-          .map((item) => modelSpec(item, value))
-      : [];
+  if (!value.E2B_API_KEY) {
+    throw new Error('E2B_API_KEY is required');
+  }
+  const models = [value.MODEL, ...(value.FALLBACK_MODELS?.split(',') ?? [])]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => modelSpec(item, value));
   return {
     ...value,
+    E2B_API_KEY: value.E2B_API_KEY,
     DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: workspaceRoot,
     models,

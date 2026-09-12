@@ -2,18 +2,18 @@
 
 ## 先说结论
 
-| 能力 | 当前状态 | 说明 |
-| --- | --- | --- |
-| Web → API → Queue → Worker → SSE | 已完成 | 默认 `demo` driver 已完成浏览器和生产构建验收 |
-| 连接真实大模型 | 已接通，需用户密钥验收 | 设置 `AGENT_DRIVER=deep` 后使用 LangChain/Deep Agents；支持 OpenAI、Anthropic 和 OpenAI-compatible endpoint |
-| API 多租户隔离 | 已实现基础能力 | JWT 中的可信 `tenant_id` 决定数据范围，Repository 查询强制带 tenant |
-| API OIDC/JWT 校验 | 已实现 | 校验签名、issuer、audience、过期时间、`sub` 和 `tenant_id` |
-| Web 登录页与会话 | 尚未实现 | 当前 Web 不会登录，也不会向 API 注入 Bearer Token |
-| Web 会话管理 | 已完成 | 新建会话会立即创建独立 session/thread/workspace；支持历史恢复、切换、重命名、软删除和游标分页 |
-| 角色级 RBAC | 尚未完整实现 | 能解析 `owner/admin/member`，但业务路由还没有细分角色权限 |
-| 用户项目导入 | 已完成基础能力 | 可选择已有项目、浅克隆公开 HTTPS Git 仓库或上传不超过 20 MB 的目录；Worker 会在首次运行前恢复到会话 workspace |
-| 开发/测试数据隔离 | 已完成 | 本地开发使用 `agent` 数据库，集成测试使用独立端口和卷中的 `agent_test` 数据库 |
-| 生产 Sandbox | 尚未完成 | 默认 local workspace 只是路径隔离，不等同于容器或 microVM 安全边界 |
+| 能力                               | 当前状态        | 说明                                                                                                |
+| -------------------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
+| Web → API → Queue → Worker → SSE | 已完成         | 默认 `demo` driver 已完成浏览器和生产构建验收                                                                    |
+| 连接真实大模型                          | 已接通，需用户密钥验收 | 设置 `AGENT_DRIVER=deep` 后使用 LangChain/Deep Agents；支持 OpenAI、Anthropic 和 OpenAI-compatible endpoint |
+| API 多租户隔离                        | 已实现基础能力     | JWT 中的可信 `tenant_id` 决定数据范围，Repository 查询强制带 tenant                                               |
+| API OIDC/JWT 校验                  | 已实现         | 校验签名、issuer、audience、过期时间、`sub` 和 `tenant_id`                                                     |
+| Web 登录页与会话                       | 尚未实现        | 当前 Web 不会登录，也不会向 API 注入 Bearer Token                                                              |
+| Web 会话管理                         | 已完成         | 新建会话会立即创建独立 session/thread/workspace；支持历史恢复、切换、重命名、软删除和游标分页                                       |
+| 角色级 RBAC                         | 尚未完整实现      | 能解析 `owner/admin/member`，但业务路由还没有细分角色权限                                                           |
+| 用户项目导入                           | 已完成基础能力     | 可选择已有项目、浅克隆公开 HTTPS Git 仓库或上传不超过 20 MB 的目录；Worker 会在首次运行前恢复到会话 workspace                          |
+| 开发/测试数据隔离                        | 已完成         | 本地开发使用 `agent` 数据库，集成测试使用独立端口和卷中的 `agent_test` 数据库                                                |
+| 生产 Sandbox                       | 已完成         | Worker 强制使用`deep + E2B` ，拒绝`demo` 和`local` 配置                                                     |
 
 因此，“能否和真实模型聊天、恢复历史并让 Agent 读取导入项目”的答案是可以；“能否作为完整的多租户生产 Coding Agent 上线”的答案仍然是还不可以。当前缺少的关键产品链路是 Web 登录、Token 传递、私有仓库授权和生产 Sandbox。
 
@@ -370,3 +370,21 @@ curl -fsS http://127.0.0.1:8001/health/ready
 6. 最后进行并发、限流、队列积压、Worker 崩溃、Redis 重启和对象存储故障测试。
 
 在第 4、5 步完成之前，可以验收“多租户 Agent 平台纵切、持久化会话和项目导入”，但不能宣称完成“多用户生产 Coding Agent”。
+
+### 已完成E2B 沙箱接入和复核。
+
+主要结果：
+
+1. Worker 强制使用`deep + E2B` ，拒绝`demo` 和`local` 配置。
+2. E2B 配置缺失时直接启动失败，不再回退宿主机执行。
+3. Session/workspace 的 sandbox ID 持久化到 PostgreSQL。
+4. start/resume 自动 create/connect sandbox。
+5. 等待审批、等待回答或完成时 pause；失败、取消时 kill 并清除 sandbox ID。
+6. Git clone、上传项目恢复、文件和命令操作全部在 E2B 内执行。
+7. E2B 前台命令已接入取消信号，取消时会终止远程进程。
+8. CLI 同样强制使用 E2B，并将 skills、`AGENTS.md` 上传到远程沙箱。
+9. CLI 界面改为显示真实 E2B 工作目录。
+10. 删除 Demo Agent 实现。
+11. 新增数据库迁移 007\_e2b\_workspace\_sandbox.sql 。
+12. 核心适配器位于 e2b-sandbox.ts 。
+
