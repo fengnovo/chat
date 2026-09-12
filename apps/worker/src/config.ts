@@ -21,9 +21,12 @@ const schema = z.object({
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
   WORKSPACE_ROOT: z.string().default(path.join(repositoryRoot, 'data/workspaces')),
   E2B_API_KEY: z.string().trim().optional(),
+  DEV_E2B_API_KEY: z.string().trim().optional(),
   E2B_TEMPLATE: z.string().trim().default('base'),
   E2B_TIMEOUT_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(3_600_000),
   E2B_WORKSPACE_PATH: z.string().trim().startsWith('/').default('/home/user/workspace'),
+  DEV_E2B_API_URL: z.string().url().default('http://localhost:10086'),
+  DEV_E2B_SANDBOX_URL: z.string().url().default('http://localhost:10086'),
   CODE_AGENT_BACKEND: z.literal('e2b').default('e2b'),
   MODEL: z.string().default('openai:gpt-4o-mini'),
   MODEL_PROVIDER: z.string().default('openai'),
@@ -61,7 +64,11 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
       ? 'postgresql://agent:agent@127.0.0.1:55433/agent_test'
       : value.DATABASE_URL);
   const workspaceRoot = path.resolve(value.WORKSPACE_ROOT);
-  if (!value.E2B_API_KEY) {
+  const e2bApiKey =
+    value.NODE_ENV === 'development'
+      ? value.DEV_E2B_API_KEY ?? value.E2B_API_KEY
+      : value.E2B_API_KEY;
+  if (!e2bApiKey) {
     throw new Error('E2B_API_KEY is required');
   }
   const models = [value.MODEL, ...(value.FALLBACK_MODELS?.split(',') ?? [])]
@@ -70,9 +77,15 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
     .map((item) => modelSpec(item, value));
   return {
     ...value,
-    E2B_API_KEY: value.E2B_API_KEY,
+    E2B_API_KEY: e2bApiKey,
     DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: workspaceRoot,
+    E2B_API_URL:
+      value.NODE_ENV === 'development' ? value.DEV_E2B_API_URL : undefined,
+    E2B_SANDBOX_URL:
+      value.NODE_ENV === 'development' ? value.DEV_E2B_SANDBOX_URL : undefined,
+    SANDBOX_RUNTIME:
+      value.NODE_ENV === 'development' ? 'local-e2b' as const : 'e2b-cloud' as const,
     models,
   };
 }

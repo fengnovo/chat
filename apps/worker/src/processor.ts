@@ -110,6 +110,12 @@ async function killPersistedSandbox(services: ProcessorServices, job: RunJob): P
   try {
     const sandbox = await E2BSandbox.connect(workspace.sandboxId, {
       apiKey: services.config.E2B_API_KEY,
+      ...(services.config.E2B_API_URL
+        ? { apiUrl: services.config.E2B_API_URL }
+        : {}),
+      ...(services.config.E2B_SANDBOX_URL
+        ? { sandboxUrl: services.config.E2B_SANDBOX_URL }
+        : {}),
       template: services.config.E2B_TEMPLATE,
       timeoutMs: services.config.E2B_TIMEOUT_MS,
     });
@@ -162,6 +168,12 @@ export function createRunProcessor(services: ProcessorServices) {
         workspaceId = workspace.workspaceId;
         const sandboxOptions = {
           apiKey: services.config.E2B_API_KEY,
+          ...(services.config.E2B_API_URL
+            ? { apiUrl: services.config.E2B_API_URL }
+            : {}),
+          ...(services.config.E2B_SANDBOX_URL
+            ? { sandboxUrl: services.config.E2B_SANDBOX_URL }
+            : {}),
           template: services.config.E2B_TEMPLATE,
           timeoutMs: services.config.E2B_TIMEOUT_MS,
           signal: controller.signal,

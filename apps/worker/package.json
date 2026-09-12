@@ -7,7 +7,7 @@
     "dev": "node --env-file-if-exists=../../.env --conditions=development --import tsx --watch src/worker.ts",
     "start": "node --env-file-if-exists=../../.env --conditions=development --import tsx src/worker.ts",
     "build": "tsup --config tsup.config.ts",
-    "start:prod": "node --env-file-if-exists=../../.env dist/worker.js",
+    "start:prod": "NODE_ENV=production node --env-file-if-exists=../../.env dist/worker.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --conditions=development --import tsx --test test/**/*.test.ts"
   },

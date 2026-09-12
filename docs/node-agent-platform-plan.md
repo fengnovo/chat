@@ -152,19 +152,19 @@ sequenceDiagram
 - 从 `ai-cli` 抽出的 Headless Agent Core、MCP、重试和模型 fallback；CLI 已改为复用 Core。
 - Web 的 durable SSE、断点续传、Todo、审批、问题和取消交互。
 - Web 的会话历史、切换与恢复、重命名、软删除和 keyset 游标分页。
-- 项目选择、公开 HTTPS Git 浅克隆、本地目录快照上传，以及 Worker 侧 workspace 恢复。
+- 新建 Web 会话直接分配独立空白 workspace，不再要求用户先选择或导入项目。
 - S3/MinIO artifact 预签名上传、大小/SHA-256 校验和预签名下载。
 - 独立 `agent_test` PostgreSQL 服务与卷，避免集成测试污染本地开发会话。
-- 无模型密钥可运行的 demo driver，以及 Web/API/Worker 真实端到端验证。
+- 真实模型、E2B Sandbox 和 Web/API/Worker 端到端链路。
 
-进入正式生产前仍需完成：容器或 microVM Sandbox provider、Worker 自动归档大型日志与 diff、细粒度配额/计费、审计日志、Outbox 积压告警与可观测性告警。
+进入正式生产前仍需完成：workspace snapshot/volume 持久化与恢复、Sandbox 资源限制、Worker 自动归档大型日志与 diff、细粒度配额/计费、审计日志、Outbox 积压告警与可观测性告警。
 
 配套基础设施：
 
 - PostgreSQL：租户、会话、运行、审批、事件、工具调用、LangGraph checkpoint。
 - Redis：BullMQ、分布式锁、限流、共享熔断状态、SSE 实时通知。
 - S3/MinIO：大型命令日志、diff、补丁和构建产物。
-- Sandbox：开发环境使用受限 workspace；生产环境使用隔离容器或 Kubernetes Job。
+- Sandbox：开发环境连接本机 E2B-compatible Docker 服务；生产环境使用 E2B Cloud。
 
 ## 设计原则
 
@@ -320,10 +320,18 @@ type AuthContext = {
 
 ## Sandbox 与产物
 
+Workspace 与 Sandbox 是两个生命周期不同的概念：
+
+- Workspace 是会话拥有的持久化文件状态和版本身份，应在 sandbox 销毁后仍可恢复。
+- Sandbox 是某次执行所租用的隔离计算环境，可以暂停、替换或销毁。
+- Session 持有 `workspace_id`；Run 获取 sandbox lease，把 workspace 恢复到沙箱路径，执行后再持久化变更和产物。
+- 当前版本仍用 E2B pause/sandbox ID 保存会话文件，适合作为第一阶段；生产完善时应把 workspace snapshot/volume 独立持久化，不能把 E2B 实例磁盘当唯一事实来源。
+
 开发环境：
 
-- workspace 固定在 `data/workspaces/{tenantId}/{workspaceId}`。
-- 对输入路径做真实路径校验，禁止逃逸根目录。
+- E2B SDK 默认连接 `localhost:10086` 的 E2B-compatible Docker endpoint。
+- 每条 session 创建独立 workspace 记录，并从沙箱内空目录开始。
+- 控制面与 sandbox proxy 若使用不同端口，通过两个开发环境变量分别配置。
 - 不继承完整宿主机环境变量。
 - 写入、删除和命令执行继续要求审批。
 
@@ -374,7 +382,7 @@ main.py
 3. 建立 BullMQ Worker、事件持久化和 SSE 恢复。
 4. 完成 session、run、审批、问题、取消和 artifact API。
 5. 实现 ModelRouter、重试、熔断、fallback 和预算。
-6. 接入开发 workspace 与生产 Sandbox provider。
+6. 接入 E2B Sandbox，并将 workspace 持久化与 sandbox lease 分层。
 7. 改造 Web 展示 Agent 状态和交互中断。
 8. 切换 Node API，删除所有 Python 内容。
 9. 完成租户、安全、崩溃恢复和端到端测试。

@@ -1,6 +1,6 @@
 # Node Coding Agent Platform
 
-这是一个面向多用户服务设计的 Node.js monorepo。Next.js Web 通过 HTTP + SSE 访问 Agent API，API 将任务写入 BullMQ，独立 Worker 在隔离 workspace 中运行从 `packages/ai-cli` 抽取出的 Headless Coding Agent。
+这是一个面向多用户服务设计的 Node.js monorepo。Next.js Web 通过 HTTP + SSE 访问 Agent API，API 将任务写入 BullMQ，独立 Worker 在隔离 Sandbox 中运行从 `packages/ai-cli` 抽取出的 Headless Coding Agent。
 
 ```text
 Next.js Web ──HTTP/SSE──> Fastify Agent API ──Outbox/BullMQ──> Agent Worker
@@ -18,15 +18,15 @@ Next.js Web ──HTTP/SSE──> Fastify Agent API ──Outbox/BullMQ──> A
 - OIDC JWT 鉴权接口，以及仅允许开发环境使用的固定 dev identity。
 - 强制带租户上下文的 Session、Run、审批、提问、取消 API。
 - Web 会话历史、切换、恢复、重命名、软删除与 keyset 游标分页。
-- 空白项目、公开 HTTPS Git 浅克隆和本地目录上传；每条会话绑定独立 workspace。
+- 新建会话立即分配独立空白 workspace，无需选择项目或上传代码。
 - PostgreSQL 持久化会话、运行、事件 cursor、interrupt 和 LangGraph checkpoint。
 - 开发库与独立 `agent_test` 测试库/卷隔离，集成测试不会污染本地会话列表。
 - BullMQ Worker Pool、session 分布式锁和 Redis 共享模型熔断状态。
 - PostgreSQL 事务 Outbox、稳定 job id、发布重试和 Redis 丢失任务自动对账。
 - 可恢复 SSE：断线后从 PostgreSQL 重放事件，不会重新执行 Agent。
 - Headless Agent Core：Deep Agents、MCP、模型重试、fallback、人工审批和取消。
-- `demo` driver：不配置模型密钥也能完整验证 Web → API → Queue → Worker → SSE。
-- `deep` driver：调用真实模型，并在 workspace 中运行 coding agent。
+- `deep` driver：调用真实模型，并在 E2B-compatible Sandbox 的 workspace 中运行 coding agent。
+- 开发环境默认连接本机 Docker Sandbox；生产环境使用 E2B Cloud。
 - MinIO 本地对象存储基础设施和 artifact 数据模型。
 
 ## 目录
@@ -68,18 +68,25 @@ pnpm dev
 - API 就绪检查：<http://127.0.0.1:8000/health/ready>
 - MinIO Console：<http://127.0.0.1:59001>
 
-默认 `AGENT_DRIVER=demo`，适合无密钥启动和端到端验收。使用真实 Agent 时修改 `.env`：
+启动 Worker 前需在 `.env` 配置真实模型密钥和 Sandbox 凭据：
+
+monorepo 只读取并维护根目录这一份 `.env`，`packages/ai-cli` 不再保存独立环境文件；同名变量以根目录配置为准。
 
 ```dotenv
 AGENT_DRIVER=deep
 MODEL=openai:gpt-4o-mini
 OPENAI_API_KEY=...
+E2B_API_KEY=...
+# 开发环境默认值；本机服务必须兼容 E2B API
+DEV_E2B_API_KEY=... # 本地控制面的密钥与云端不同时设置
+DEV_E2B_API_URL=http://localhost:10086
+DEV_E2B_SANDBOX_URL=http://localhost:10086
 # FALLBACK_MODELS=anthropic:claude-sonnet-4
 # ANTHROPIC_API_KEY=...
 # MCP_CONFIG_PATH=/absolute/path/to/mcp.json
 ```
 
-生产环境必须设置 `NODE_ENV=production`、`AUTH_MODE=oidc`、OIDC issuer/audience/JWKS，并替换数据库、Redis、对象存储和 Sandbox 配置。JWT 的 `sub` 和 `tenant_id` 需由身份网关映射为平台内部 UUID；API 会拒绝以 dev identity 在生产环境启动。
+生产环境必须设置 `NODE_ENV=production`、`AUTH_MODE=oidc`、OIDC issuer/audience/JWKS，并替换数据库、Redis 和对象存储配置。Worker 在生产环境不读取 `DEV_E2B_*`，使用 `E2B_API_KEY` 连接 E2B Cloud。JWT 的 `sub` 和 `tenant_id` 需由身份网关映射为平台内部 UUID；API 会拒绝以 dev identity 在生产环境启动。
 
 ## 常用命令
 
@@ -127,4 +134,4 @@ GET  /api/agent/artifacts/:artifactId
 
 ## 当前边界
 
-本地默认使用受路径约束的 workspace；真正运行不受信任代码时，生产部署仍应配置容器或 microVM Sandbox、默认断网、资源配额和短期凭据。Artifact API 已提供带租户前缀、大小限制、SHA-256 元数据校验的 S3/MinIO 预签名上传和下载；Worker 自动提取大型日志与 diff 仍属于下一实施阶段。
+开发和生产都通过 E2B 协议运行不受信任代码，但当前 workspace 文件仍依赖 E2B sandbox ID 和 pause/resume 持续存在。生产完善时应将 workspace snapshot 或 volume 与可替换的 sandbox lease 分开管理。Artifact API 已提供带租户前缀、大小限制、SHA-256 元数据校验的 S3/MinIO 预签名上传和下载；Worker 自动提取大型日志与 diff 仍属于下一实施阶段。详细边界见 [Workspace 与 Sandbox](docs/workspace-and-sandbox.md)。

@@ -9,6 +9,8 @@ import {
 
 export interface E2BSandboxOptions {
   apiKey: string;
+  apiUrl?: string;
+  sandboxUrl?: string;
   template?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -37,6 +39,8 @@ export class E2BSandbox extends BaseSandbox {
   static async create(options: E2BSandboxOptions): Promise<E2BSandbox> {
     const sandbox = await Sandbox.create(options.template ?? 'base', {
       apiKey: options.apiKey,
+      ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
+      ...(options.sandboxUrl ? { sandboxUrl: options.sandboxUrl } : {}),
       timeoutMs: options.timeoutMs ?? 600_000,
       ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -47,6 +51,8 @@ export class E2BSandbox extends BaseSandbox {
     const timeoutMs = options.timeoutMs ?? 600_000;
     const sandbox = await Sandbox.connect(sandboxId, {
       apiKey: options.apiKey,
+      ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
+      ...(options.sandboxUrl ? { sandboxUrl: options.sandboxUrl } : {}),
       timeoutMs,
       ...(options.signal ? { signal: options.signal } : {}),
     });

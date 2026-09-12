@@ -1072,6 +1072,52 @@ textarea:disabled {
   padding: 0 10px;
 }
 
+.task-failure-banner {
+  align-items: center;
+  background: #fffbeb;
+  border: 1px solid #ead9a2;
+  border-radius: 11px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  margin: 7px 0 28px 47px;
+  padding: 12px;
+}
+
+.task-failure-icon {
+  align-items: center;
+  background: #f8edc8;
+  border-radius: 8px;
+  color: #8a6818;
+  display: flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.task-failure-banner strong {
+  color: #684f15;
+  font-size: 12px;
+}
+
+.task-failure-banner p {
+  color: #776536;
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 3px 0 0;
+}
+
+.task-failure-banner button {
+  background: white;
+  border: 1px solid #dfca8e;
+  border-radius: 7px;
+  color: #735718;
+  font-size: 10px;
+  font-weight: 650;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .agent-todos,
 .agent-interrupt {
   background: #faf9ff;
@@ -1707,104 +1753,6 @@ textarea:disabled {
   color: var(--ink);
 }
 
-.dialog-tabs {
-  background: var(--surface-soft);
-  border-radius: 9px;
-  display: grid;
-  gap: 4px;
-  grid-template-columns: repeat(3, 1fr);
-  margin: 22px 0 16px;
-  padding: 4px;
-}
-
-.dialog-tabs button {
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
-  color: var(--ink-muted);
-  font-size: 12px;
-  font-weight: 650;
-  min-height: 38px;
-}
-
-.dialog-tabs button.is-active {
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  color: var(--ink);
-}
-
-.project-list {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  max-height: 410px;
-  overflow-y: auto;
-}
-
-.project-option {
-  align-items: center;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  display: grid;
-  gap: 11px;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  min-height: 62px;
-  padding: 9px 12px;
-  text-align: left;
-  width: 100%;
-}
-
-.project-option:hover {
-  border-color: #bdb2fa;
-  box-shadow: var(--shadow-sm);
-}
-
-.project-option-icon {
-  align-items: center;
-  background: var(--violet-soft);
-  border-radius: 8px;
-  color: var(--violet);
-  display: flex;
-  height: 38px;
-  justify-content: center;
-  width: 38px;
-}
-
-.project-option > span:nth-child(2) {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.project-option strong,
-.project-option small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-option strong {
-  font-size: 13px;
-}
-
-.project-option small {
-  color: var(--ink-muted);
-  font-size: 11px;
-  margin-top: 4px;
-}
-
-.project-option > svg {
-  color: var(--ink-muted);
-}
-
-.dialog-status {
-  color: var(--ink-muted);
-  font-size: 12px;
-  line-height: 1.55;
-  margin: 10px 3px;
-}
-
 .dialog-form {
   display: flex;
   flex-direction: column;
@@ -1840,46 +1788,11 @@ textarea:disabled {
   border-color: #bbb0f8;
 }
 
-.form-help,
 .delete-copy {
   color: var(--ink-muted);
   font-size: 12px;
   line-height: 1.65;
   margin: 0;
-}
-
-.upload-field input {
-  height: 1px;
-  opacity: 0;
-  padding: 0;
-  position: absolute;
-  width: 1px;
-}
-
-.upload-field > span {
-  align-items: center;
-  border: 1px dashed #bfb6e4;
-  border-radius: 10px;
-  color: var(--ink-soft);
-  display: flex;
-  font-size: 12px;
-  gap: 9px;
-  justify-content: center;
-  min-height: 86px;
-  padding: 16px;
-}
-
-.upload-field:hover > span,
-.upload-field:focus-within > span {
-  background: #faf9ff;
-  border-color: var(--violet);
-}
-
-.dialog-submit {
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 700;
-  min-height: 43px;
 }
 
 .dialog-actions {
@@ -2259,10 +2172,6 @@ textarea:disabled {
     width: 100%;
   }
 
-  .dialog-tabs {
-    margin-top: 18px;
-  }
-
   .chat-column {
     grid-template-rows: 68px minmax(0, 1fr) auto;
   }
@@ -2364,18 +2273,21 @@ textarea:disabled {
     width: 100%;
   }
 
-  .error-banner {
+  .error-banner,
+  .task-failure-banner {
     align-items: start;
     grid-template-columns: 30px minmax(0, 1fr);
     margin-left: 0;
   }
 
-  .error-icon {
+  .error-icon,
+  .task-failure-icon {
     height: 30px;
     width: 30px;
   }
 
-  .error-banner button {
+  .error-banner button,
+  .task-failure-banner button {
     grid-column: 2;
     justify-self: start;
   }

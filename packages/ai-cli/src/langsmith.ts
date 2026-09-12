@@ -1,8 +1,8 @@
 /**
- * demo20 的 LangSmith 初始化入口。
+ * Keen Agent CLI 的 LangSmith 初始化入口。
  *
  * 这个文件只负责“可观测性”，不负责创建 Agent 或调用大模型，具体做五件事：
- * 1. 在 LangChain / LangGraph 初始化前读取 `.env`；
+ * 1. 在 LangChain / LangGraph 初始化前读取仓库根目录 `.env`；
  * 2. 根据 API Key 和开关判断是否启用追踪；
  * 3. 为没有显式设置项目名的情况提供默认项目名；
  * 4. 创建上传 Trace 所需的 LangSmith Client；
@@ -16,24 +16,17 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'langsmith';
 
-const demoEnvPath = fileURLToPath(new URL('../.env', import.meta.url));
-const repositoryEnvPath = fileURLToPath(new URL('../../.env', import.meta.url));
+const repositoryEnvPath = fileURLToPath(
+  new URL('../../../.env', import.meta.url),
+);
 
-// 读取顺序即优先级：demo20 自己的配置优先，仓库根配置只补齐缺失项。
-// dotenv 默认不会覆盖已经存在的 process.env，因此终端里显式 export 的变量
-// 仍然拥有最高优先级。
-const envCandidates = [
-  { path: demoEnvPath, label: 'demo20/.env' },
-  { path: repositoryEnvPath, label: '仓库根目录/.env' },
-];
 const loadedEnvFiles: string[] = [];
-for (const candidate of envCandidates) {
-  if (!existsSync(candidate.path)) continue;
-  dotenv.config({ path: candidate.path, quiet: true });
-  loadedEnvFiles.push(candidate.label);
+if (existsSync(repositoryEnvPath)) {
+  dotenv.config({ path: repositoryEnvPath, quiet: true });
+  loadedEnvFiles.push('仓库根目录/.env');
 }
 
-const DEFAULT_PROJECT = 'demo20-cli-todo-approval';
+const DEFAULT_PROJECT = 'keen-agent-cli';
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
 
 function isEnabled(value: string | undefined): boolean {
@@ -63,13 +56,16 @@ if (tracingRequested && !apiKey) {
 }
 
 const envSourceText =
-  loadedEnvFiles.length > 0 ? `；已读取：${loadedEnvFiles.join('、')}` : '；未找到 .env';
+  loadedEnvFiles.length > 0
+    ? `；已读取：${loadedEnvFiles.join('、')}`
+    : '；未找到 .env';
 
 // 提供给 TUI 启动横幅和 cli.ts 判断使用，不包含或输出 API Key。
 export const langSmithTracing = {
   enabled: tracingRequested && Boolean(apiKey),
   project: process.env.LANGSMITH_PROJECT,
-  endpoint: process.env.LANGSMITH_ENDPOINT?.trim() || 'https://api.smith.langchain.com',
+  endpoint:
+    process.env.LANGSMITH_ENDPOINT?.trim() || 'https://api.smith.langchain.com',
   status: tracingRequested
     ? apiKey
       ? `已启用（项目：${process.env.LANGSMITH_PROJECT}${envSourceText}）`
@@ -78,7 +74,9 @@ export const langSmithTracing = {
 } as const;
 
 // 显式创建 Client，既供 traceable 使用，也用于主动等待日志上传完成。
-export const langSmithClient = langSmithTracing.enabled ? new Client() : undefined;
+export const langSmithClient = langSmithTracing.enabled
+  ? new Client()
+  : undefined;
 
 /** 等待待上传的 Trace 批次完成，防止单任务模式退出太快而丢日志。 */
 export async function flushLangSmithTraces(): Promise<void> {

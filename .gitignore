@@ -23,7 +23,4 @@ test/
 !packages/db/test/
 !packages/db/test/**
 
-# Python helper scripts are still shipped as optional ai-cli skill assets.
-.venv/
-__pycache__/
-*.pyc
+.DS_Store

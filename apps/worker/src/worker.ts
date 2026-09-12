@@ -65,7 +65,7 @@ worker.on('failed', (job, error) => console.error(`Run job ${job?.id} failed`, e
 worker.on('error', (error) => console.error('Worker error', error));
 
 console.log(
-  `Agent worker ready: driver=${config.AGENT_DRIVER}, concurrency=${config.WORKER_CONCURRENCY}`,
+  `Agent worker ready: driver=${config.AGENT_DRIVER}, sandbox=${config.SANDBOX_RUNTIME}${config.E2B_API_URL ? ` (${config.E2B_API_URL})` : ''}, concurrency=${config.WORKER_CONCURRENCY}`,
 );
 
 let shuttingDown = false;

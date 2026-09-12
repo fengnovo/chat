@@ -36,9 +36,6 @@ function chunksFrom(runId: string, events: PersistedAgentEvent[]): UiChunk[] {
       ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)
     ) {
       if (textStarted) chunks.push({ type: 'text-end', id: textId });
-      if (event.type === 'run.failed') {
-        chunks.push({ type: 'error', errorText: event.message });
-      }
       chunks.push({
         type: 'finish',
         finishReason: event.type === 'run.completed' ? 'stop' : 'error',

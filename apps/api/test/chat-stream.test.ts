@@ -25,3 +25,26 @@ test('durable agent events map to a valid framed text response', () => {
     ['start', 'data-agent', 'text-start', 'text-delta', 'data-agent', 'text-end', 'finish'],
   );
 });
+
+test('a terminal task failure stays in the agent event channel', () => {
+  const events: PersistedAgentEvent[] = [
+    { runId, seq: 1, timestamp: new Date().toISOString(), type: 'run.started' },
+    {
+      runId,
+      seq: 2,
+      timestamp: new Date().toISOString(),
+      type: 'run.failed',
+      code: 'model_quota_exhausted',
+      message: 'The configured model quota is exhausted',
+    },
+  ];
+
+  const chunks = chunksFrom(runId, events);
+
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.type),
+    ['start', 'data-agent', 'data-agent', 'finish'],
+  );
+  assert.equal(chunks.some((chunk) => chunk.type === 'error'), false);
+  assert.equal(chunks.at(-1)?.finishReason, 'error');
+});

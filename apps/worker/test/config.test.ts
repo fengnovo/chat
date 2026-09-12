@@ -15,8 +15,33 @@ for (const NODE_ENV of ['development', 'test', 'production'] as const) {
     assert.equal(config.CODE_AGENT_BACKEND, 'e2b');
     assert.equal(config.E2B_WORKSPACE_PATH, '/home/user/workspace');
     assert.equal(config.E2B_TIMEOUT_MS, 3_600_000);
+    assert.equal(
+      config.SANDBOX_RUNTIME,
+      NODE_ENV === 'development' ? 'local-e2b' : 'e2b-cloud',
+    );
+    assert.equal(
+      config.E2B_API_URL,
+      NODE_ENV === 'development' ? 'http://localhost:10086' : undefined,
+    );
+    assert.equal(
+      config.E2B_SANDBOX_URL,
+      NODE_ENV === 'development' ? 'http://localhost:10086' : undefined,
+    );
   });
 }
+
+test('development sandbox endpoints can be overridden independently', () => {
+  const config = loadWorkerConfig({
+    NODE_ENV: 'development',
+    ...requiredKeys,
+    DEV_E2B_API_URL: 'http://localhost:3000',
+    DEV_E2B_API_KEY: 'local-e2b-key',
+    DEV_E2B_SANDBOX_URL: 'http://localhost:3002',
+  });
+  assert.equal(config.E2B_API_KEY, 'local-e2b-key');
+  assert.equal(config.E2B_API_URL, 'http://localhost:3000');
+  assert.equal(config.E2B_SANDBOX_URL, 'http://localhost:3002');
+});
 
 test('non-E2B backend configuration is rejected', () => {
   assert.throws(() => loadWorkerConfig({

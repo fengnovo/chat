@@ -80,22 +80,11 @@ type SessionSummary = {
   id: string;
   title: string;
   externalKey: string | null;
-  projectId: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
 type WebSessionSummary = SessionSummary & { externalKey: string };
-
-type ProjectSummary = {
-  id: string;
-  name: string;
-  sourceType: 'empty' | 'git' | 'upload';
-  sourceRef: string | null;
-  sourceRevision: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
 
 type SessionPage = {
   data: WebSessionSummary[];
@@ -113,16 +102,29 @@ type HistoryMessage = {
 type SessionHistory = {
   session: SessionSummary;
   messages: HistoryMessage[];
-  latestRun: {
-    id: string;
-    status: RunStatus;
-  } | null;
+  latestRun: RunSummary | null;
+};
+
+type RunSummary = {
+  id: string;
+  status: RunStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
+type TaskFailure = {
+  code: string;
+  message: string;
+};
+
+type ChatBootstrap = {
+  initialRun: PersistedRun | null;
+  initialFailure: TaskFailure | null;
 };
 
 type ConversationSeed = {
   chatId: string;
   messages: ResilientMessage[];
-  projectId: string | null;
   resumeRun: PersistedRun | null;
 };
 
@@ -130,20 +132,18 @@ type SessionDialog =
   | { kind: 'rename'; session: WebSessionSummary }
   | { kind: 'delete'; session: WebSessionSummary };
 
-const projectUploadMaxBytes = 20_000_000;
-
 const starterPrompts = [
   {
     icon: 'panel' as const,
-    label: '检查项目',
-    description: '理解结构并找出风险',
-    prompt: '请检查这个项目的结构，说明主要模块并找出最值得优先处理的问题。',
+    label: '创建网页',
+    description: '从空白目录开始搭建',
+    prompt: '请在空白工作区中创建一个可运行的现代 Web 应用，并完成基础页面结构。',
   },
   {
     icon: 'braces' as const,
-    label: '实现功能',
-    description: '规划、编码并验证',
-    prompt: '请先阅读 README 和项目代码，然后选择一个明确的未完成功能，制定计划并实现它。',
+    label: '搭建 React',
+    description: '使用 React 与 Vite',
+    prompt: '请用 React 和 Vite 创建一个 Web 应用，完成依赖配置、页面代码并运行构建验证。',
   },
   {
     icon: 'triangle' as const,
@@ -194,7 +194,6 @@ type IconName =
   | 'copy'
   | 'edit'
   | 'folder'
-  | 'git'
   | 'layers'
   | 'menu'
   | 'more'
@@ -206,7 +205,6 @@ type IconName =
   | 'square'
   | 'trash'
   | 'triangle'
-  | 'upload'
   | 'user'
   | 'x';
 
@@ -219,7 +217,6 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     copy: <><rect width="12" height="12" x="9" y="9" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>,
     edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>,
     folder: <path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />,
-    git: <><circle cx="6" cy="4" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="6" cy="20" r="2" /><path d="M6 6v12M8 7c5 0 4-1 8-1" /></>,
     layers: <><path d="m12.83 2.18 8 4a1 1 0 0 1 0 1.79l-8 4a2 2 0 0 1-1.66 0l-8-4a1 1 0 0 1 0-1.79l8-4a2 2 0 0 1 1.66 0Z" /><path d="m22 12.5-9.17 4.59a2 2 0 0 1-1.66 0L2 12.5m20 5-9.17 4.59a2 2 0 0 1-1.66 0L2 17.5" /></>,
     menu: <path d="M4 6h16M4 12h16M4 18h16" />,
     more: <><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" /></>,
@@ -231,7 +228,6 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     square: <rect width="12" height="12" x="6" y="6" rx="1" fill="currentColor" stroke="none" />,
     trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 4v7m4-7v7" /></>,
     triangle: <><path d="M21.7 16 14 2.7a2.3 2.3 0 0 0-4 0L2.3 16A2.3 2.3 0 0 0 4.3 19h15.4a2.3 2.3 0 0 0 2-3Z" /><path d="M12 9v4m0 3h.01" /></>,
-    upload: <><path d="M12 16V4m-4 4 4-4 4 4" /><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></>,
     user: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>,
     x: <path d="m6 6 12 12M18 6 6 18" />,
   };
@@ -276,6 +272,14 @@ function isPendingStatus(status: RunStatus) {
   return !['completed', 'failed', 'cancelled'].includes(status);
 }
 
+function failureFromRun(run: RunSummary | null): TaskFailure | null {
+  if (run?.status !== 'failed') return null;
+  return {
+    code: run.errorCode ?? 'run_failed',
+    message: run.errorMessage ?? 'Agent 没有完成本次任务',
+  };
+}
+
 function formatSessionTime(value: string) {
   const elapsedSeconds = Math.max(
     0,
@@ -308,34 +312,15 @@ async function fetchSessionPage(cursor?: string, signal?: AbortSignal) {
   } satisfies SessionPage;
 }
 
-async function fetchProjects(signal?: AbortSignal) {
-  const response = await fetch('/api/agent/projects', { signal });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const payload = (await response.json()) as { data: ProjectSummary[] };
-  return payload.data;
-}
-
 async function responseError(response: Response, fallback: string) {
   const payload = (await response.json().catch(() => null)) as
     | { error?: string }
     | null;
   const knownErrors: Record<string, string> = {
-    project_upload_too_large: '上传内容不能超过 20 MB',
-    project_not_found: '所选项目不存在或已不可用',
     session_has_active_run: '这条会话仍在运行，请先停止任务再删除',
     session_not_found: '这条会话不存在或已被删除',
   };
   return payload?.error ? knownErrors[payload.error] ?? fallback : fallback;
-}
-
-async function fileToBase64(file: File) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
 }
 
 function localEvent(
@@ -526,12 +511,58 @@ export function ResilientChat() {
     () => true,
     () => false,
   );
+  const [bootstrap, setBootstrap] = useState<ChatBootstrap | null>(null);
 
-  if (!isClient) {
+  useEffect(() => {
+    if (!isClient) return;
+    const controller = new AbortController();
+    const initialRun = readPersistedRun();
+
+    const bootstrapRequest: Promise<ChatBootstrap> = initialRun
+      ? fetch(`/api/agent/runs/${encodeURIComponent(initialRun.runId)}`, {
+          signal: controller.signal,
+        }).then(async (response) => {
+          if (response.status === 404) {
+            clearPersistedRun();
+            return {
+              initialRun: { ...initialRun, pending: false },
+              initialFailure: null,
+            } satisfies ChatBootstrap;
+          }
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const run = (await response.json()) as RunSummary;
+          const reconciled = {
+            ...initialRun,
+            pending: isPendingStatus(run.status),
+          };
+          writePersistedRun(reconciled);
+          return {
+            initialRun: reconciled,
+            initialFailure: failureFromRun(run),
+          } satisfies ChatBootstrap;
+        })
+      : Promise.resolve({ initialRun: null, initialFailure: null });
+
+    void bootstrapRequest
+      .then(setBootstrap)
+      .catch((caught: unknown) => {
+        if (caught instanceof DOMException && caught.name === 'AbortError') return;
+        setBootstrap({ initialRun, initialFailure: null });
+      });
+
+    return () => controller.abort();
+  }, [isClient]);
+
+  if (!isClient || !bootstrap) {
     return <AppSkeleton />;
   }
 
-  return <ChatRuntime initialRun={readPersistedRun()} />;
+  return (
+    <ChatRuntime
+      initialFailure={bootstrap.initialFailure}
+      initialRun={bootstrap.initialRun}
+    />
+  );
 }
 
 function AppSkeleton() {
@@ -550,11 +581,16 @@ function AppSkeleton() {
   );
 }
 
-function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
+function ChatRuntime({
+  initialFailure,
+  initialRun,
+}: {
+  initialFailure: TaskFailure | null;
+  initialRun: PersistedRun | null;
+}) {
   const [conversation, setConversation] = useState<ConversationSeed>(() => ({
     chatId: initialRun?.chatId ?? crypto.randomUUID(),
     messages: (initialRun?.messages ?? []) as ResilientMessage[],
-    projectId: null,
     resumeRun: initialRun?.pending ? initialRun : null,
   }));
   const [input, setInput] = useState('');
@@ -571,17 +607,14 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
+  const [runFailure, setRunFailure] = useState<TaskFailure | null>(initialFailure);
   const [sessions, setSessions] = useState<WebSessionSummary[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [sessionsNextCursor, setSessionsNextCursor] = useState<string | null>(null);
   const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
   const [switchingSessionId, setSwitchingSessionId] = useState<string | null>(null);
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
-  const [projectDialogBusy, setProjectDialogBusy] = useState(false);
-  const [projectDialogError, setProjectDialogError] = useState<string | null>(null);
+  const [creatingSession, setCreatingSession] = useState(false);
   const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(null);
   const [sessionDialogBusy, setSessionDialogBusy] = useState(false);
   const [sessionDialogError, setSessionDialogError] = useState<string | null>(null);
@@ -616,17 +649,18 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
           body: {
             messages,
             chat_id: id,
-            project_id: conversation.projectId ?? undefined,
             trigger,
           },
           headers: { 'Content-Type': 'application/json' },
         }),
         prepareReconnectToStreamRequest: ({ api }) => {
+          const persistedRun = readPersistedRun();
           const pendingRun =
-            conversation.resumeRun?.pending &&
-            api.endsWith(`/${encodeURIComponent(conversation.chatId)}/stream`)
-              ? conversation.resumeRun
-              : null;
+            persistedRun?.pending && persistedRun.chatId === conversation.chatId
+              ? persistedRun
+              : conversation.resumeRun?.pending
+                ? conversation.resumeRun
+                : null;
           if (!pendingRun) return { api };
           return {
             api: `/api/chat/${encodeURIComponent(pendingRun.runId)}/stream`,
@@ -653,7 +687,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       });
   }, [
     conversation.chatId,
-    conversation.projectId,
     conversation.resumeRun,
     refreshSessions,
   ]);
@@ -663,6 +696,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     error,
     messages,
     regenerate: reload,
+    resumeStream,
     sendMessage,
     status,
     stop,
@@ -698,6 +732,12 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
         ) {
           setPendingInterrupt(null);
         }
+        if (event.type === 'run.failed') {
+          setRunFailure({ code: event.code, message: event.message });
+        }
+        if (event.type === 'run.completed' || event.type === 'run.cancelled') {
+          setRunFailure(null);
+        }
       }
       if (part.type === 'data-pipeline') {
         setTrace((current) => [...current.slice(-9), part.data]);
@@ -707,6 +747,10 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       }
     },
     onError: (caught) => {
+      if (caught.message.includes('404')) {
+        clearPersistedRun();
+        setConversation((current) => ({ ...current, resumeRun: null }));
+      }
       const rolledBack = sessionRef.current.rollbackAssistant();
       setTrace((current) => [
         ...current.slice(-9),
@@ -721,9 +765,16 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       ]);
       console.warn('[Recoverable Chat Error]', caught.message);
     },
-    onFinish: ({ message, messages: finishedMessages, isAbort, isError }) => {
+    onFinish: ({
+      finishReason,
+      message,
+      messages: finishedMessages,
+      isAbort,
+      isError,
+    }) => {
       const text = messageText(message);
-      if (!isError && text) {
+      const taskFailed = finishReason === 'error';
+      if (!isError && !taskFailed && text) {
         sessionRef.current.commitAssistant(text);
       }
       if (isError) return;
@@ -761,10 +812,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
   const lastAssistant = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant');
-  const currentProject = conversation.projectId
-    ? projects.find((project) => project.id === conversation.projectId) ?? null
-    : null;
-
   useEffect(() => {
     if (status !== 'streaming' || !lastAssistant) return;
     sessionRef.current.stageAssistant(messageText(lastAssistant));
@@ -792,22 +839,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       .finally(() => {
         if (active) setSessionsLoaded(true);
       });
-    fetchProjects(controller.signal)
-      .then((loadedProjects) => {
-        if (active) setProjects(loadedProjects);
-      })
-      .catch((caught: unknown) => {
-        if (
-          !active ||
-          (caught instanceof DOMException && caught.name === 'AbortError')
-        ) {
-          return;
-        }
-        setProjectDialogError('项目列表加载失败，可稍后重试');
-      })
-      .finally(() => {
-        if (active) setProjectsLoaded(true);
-      });
     return () => {
       active = false;
       controller.abort();
@@ -828,22 +859,21 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
   }, [sidebarOpen]);
 
   useEffect(() => {
-    if (projectDialogOpen || sessionDialog || !dialogReturnFocusRef.current) {
+    if (sessionDialog || !dialogReturnFocusRef.current) {
       return;
     }
     const returnTarget = dialogReturnFocusRef.current;
     dialogReturnFocusRef.current = null;
     window.requestAnimationFrame(() => returnTarget.focus());
-  }, [projectDialogOpen, sessionDialog]);
+  }, [sessionDialog]);
 
   useEffect(() => {
-    if (!projectDialogOpen && !sessionDialog && !sessionMenuId && !sidebarOpen) {
+    if (!sessionDialog && !sessionMenuId && !sidebarOpen) {
       return;
     }
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (sessionDialogBusy || projectDialogBusy) return;
-      setProjectDialogOpen(false);
+      if (sessionDialogBusy) return;
       setSessionDialog(null);
       setSessionMenuId(null);
       setSidebarOpen(false);
@@ -851,8 +881,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [
-    projectDialogBusy,
-    projectDialogOpen,
     sessionDialog,
     sessionDialogBusy,
     sessionMenuId,
@@ -867,7 +895,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       behavior: reducedMotion ? 'auto' : 'smooth',
       block: 'end',
     });
-  }, [messages, error, pendingInterrupt]);
+  }, [messages, error, pendingInterrupt, runFailure]);
 
   async function selectSession(session: WebSessionSummary) {
     if (isBusy || session.externalKey === conversation.chatId) return;
@@ -898,7 +926,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       setConversation({
         chatId: session.externalKey,
         messages: restoredMessages,
-        projectId: history.session.projectId,
         resumeRun: persistedRun?.pending ? persistedRun : null,
       });
       setInput('');
@@ -908,6 +935,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       setPendingInterrupt(null);
       setAgentTodos([]);
       setInteractionError(null);
+      setRunFailure(failureFromRun(latestRun));
       sessionRef.current = new ResilientSession();
     } catch {
       setSessionsError('无法打开这条历史记录');
@@ -921,6 +949,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     if (!trimmed || isBusy || error) return;
     setInput('');
     setSuggestions([]);
+    setRunFailure(null);
     sessionRef.current.addUserMessage(trimmed);
     setTrace([
       localEvent('request', 'running', '正在提交新消息', 'useChat 已锁定输入并创建请求'),
@@ -933,11 +962,26 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     void submitText(input);
   }
 
-  async function handleRetry() {
+  async function handleConnectionRecovery() {
+    const persistedRun = readPersistedRun();
+    const canResume =
+      persistedRun?.pending && persistedRun.chatId === conversation.chatId;
     setTrace((current) => [
       ...current.slice(-9),
-      localEvent('retry', 'running', '重新生成已启动', '从干净的会话检查点再次执行'),
+      localEvent(
+        'retry',
+        'running',
+        canResume ? '正在重新连接' : '正在重新提交',
+        canResume
+          ? '将从已持久化的事件 cursor 继续接收，不会创建重复任务'
+          : '原运行记录已失效，将重新提交上一条消息',
+      ),
     ]);
+    clearError();
+    if (canResume) {
+      await resumeStream();
+      return;
+    }
     await reload();
   }
 
@@ -952,13 +996,12 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     await stop();
   }
 
-  function resetConversation(chatId: string, projectId: string | null) {
+  function resetConversation(chatId: string) {
     clearError();
     clearPersistedRun();
     setConversation({
       chatId,
       messages: [],
-      projectId,
       resumeRun: null,
     });
     setInput('');
@@ -968,19 +1011,15 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     setPendingInterrupt(null);
     setAgentTodos([]);
     setInteractionError(null);
+    setRunFailure(null);
     sessionRef.current = new ResilientSession();
   }
 
-  function handleNewChat() {
-    dialogReturnFocusRef.current = document.activeElement as HTMLElement | null;
+  async function handleNewChat() {
+    if (creatingSession) return;
     setSessionMenuId(null);
-    setProjectDialogError(null);
-    setProjectDialogOpen(true);
-  }
-
-  async function createSession(projectId: string | null) {
-    setProjectDialogBusy(true);
-    setProjectDialogError(null);
+    setCreatingSession(true);
+    setSessionsError(null);
     const externalKey = crypto.randomUUID();
     try {
       const response = await fetch('/api/agent/sessions', {
@@ -988,7 +1027,6 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           externalKey,
-          projectId: projectId ?? undefined,
           title: '新会话',
         }),
       });
@@ -996,94 +1034,15 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
         throw new Error(await responseError(response, '新建会话失败'));
       }
       await stopCurrentConversation();
-      resetConversation(externalKey, projectId);
-      setProjectDialogOpen(false);
-      setNotice('已创建全新的隔离会话');
+      resetConversation(externalKey);
+      setNotice('已创建空白工作区');
       await refreshSessions();
     } catch (caught) {
-      setProjectDialogError(
+      setSessionsError(
         caught instanceof Error ? caught.message : '新建会话失败',
       );
     } finally {
-      setProjectDialogBusy(false);
-    }
-  }
-
-  async function createGitProject(input: {
-    name: string;
-    repositoryUrl: string;
-    ref?: string;
-  }) {
-    setProjectDialogBusy(true);
-    setProjectDialogError(null);
-    try {
-      const response = await fetch('/api/agent/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: input.name,
-          source: {
-            type: 'git',
-            url: input.repositoryUrl,
-            ref: input.ref || undefined,
-          },
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(await responseError(response, '创建仓库项目失败'));
-      }
-      const project = (await response.json()) as ProjectSummary;
-      setProjects((current) => [project, ...current]);
-      setProjectDialogBusy(false);
-      await createSession(project.id);
-    } catch (caught) {
-      setProjectDialogError(
-        caught instanceof Error ? caught.message : '创建仓库项目失败',
-      );
-      setProjectDialogBusy(false);
-    }
-  }
-
-  async function createUploadProject(name: string, files: File[]) {
-    const totalBytes = files.reduce((total, file) => total + file.size, 0);
-    if (totalBytes > projectUploadMaxBytes) {
-      setProjectDialogError('上传内容不能超过 20 MB');
-      return;
-    }
-    setProjectDialogBusy(true);
-    setProjectDialogError(null);
-    try {
-      const relativePaths = files.map((file) => file.webkitRelativePath || file.name);
-      const rootDirectory = relativePaths[0]?.split('/')[0];
-      const stripRoot = Boolean(
-        rootDirectory &&
-          relativePaths.every((path) => path.startsWith(`${rootDirectory}/`)),
-      );
-      const encodedFiles = await Promise.all(
-        files.map(async (file, index) => ({
-          path: stripRoot
-            ? relativePaths[index]!.slice(rootDirectory!.length + 1)
-            : relativePaths[index]!,
-          contentBase64: await fileToBase64(file),
-        })),
-      );
-      const response = await fetch('/api/agent/projects/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, files: encodedFiles }),
-      });
-      if (!response.ok) {
-        throw new Error(await responseError(response, '上传项目失败'));
-      }
-      const project = (await response.json()) as ProjectSummary;
-      setProjects((current) => [project, ...current]);
-      setProjectDialogBusy(false);
-      await createSession(project.id);
-    } catch (caught) {
-      setProjectDialogError(
-        caught instanceof Error ? caught.message : '上传项目失败',
-      );
-      setProjectDialogBusy(false);
+      setCreatingSession(false);
     }
   }
 
@@ -1162,7 +1121,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       );
       if (deleted.externalKey === conversation.chatId) {
         await stopCurrentConversation();
-        resetConversation(crypto.randomUUID(), null);
+        resetConversation(crypto.randomUUID());
       }
       setSessionDialog(null);
       setNotice('会话已删除');
@@ -1262,19 +1221,26 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
     window.setTimeout(() => setCopiedMessage(null), 1400);
   }
 
+  const persistedForRecovery = error ? readPersistedRun() : null;
+  const canResumeConnection = Boolean(
+    persistedForRecovery?.pending &&
+      persistedForRecovery.chatId === conversation.chatId,
+  );
+
   return (
     <main
       className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''}`}
     >
       <Sidebar
         activeChatId={conversation.chatId}
-        busy={isBusy}
+        busy={isBusy || creatingSession}
+        creating={creatingSession}
         error={sessionsError}
         loaded={sessionsLoaded}
         hasMore={Boolean(sessionsNextCursor)}
         loadingMore={loadingMoreSessions}
         menuSessionId={sessionMenuId}
-        inactive={projectDialogOpen || Boolean(sessionDialog)}
+        inactive={Boolean(sessionDialog)}
         onDelete={(session) => {
           dialogReturnFocusRef.current = document.activeElement
             ?.closest('.session-item')
@@ -1288,7 +1254,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
         onClose={() => setSidebarOpen(false)}
         onNewChat={() => {
           setSidebarOpen(false);
-          handleNewChat();
+          void handleNewChat();
         }}
         onRename={(session) => {
           dialogReturnFocusRef.current = document.activeElement
@@ -1320,7 +1286,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       <section
         className="chat-column"
         inert={
-          sidebarOpen || projectDialogOpen || Boolean(sessionDialog)
+          sidebarOpen || Boolean(sessionDialog)
             ? true
             : undefined
         }
@@ -1352,7 +1318,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
                 : status === 'submitted'
                   ? '正在建立连接'
                   : error
-                    ? '等待恢复'
+                    ? '连接中断'
                     : '全部系统正常'}
             </span>
             <button
@@ -1366,9 +1332,10 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
             </button>
             <button
               className="icon-button"
+              disabled={creatingSession}
               type="button"
-              aria-label="新建对话"
-              onClick={handleNewChat}
+              aria-label={creatingSession ? '正在新建对话' : '新建对话'}
+              onClick={() => void handleNewChat()}
             >
               <Icon name="refresh" />
             </button>
@@ -1377,7 +1344,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
 
         <div className="conversation" aria-live="polite">
           {!hasConversation ? (
-            <Welcome project={currentProject} onPrompt={submitText} />
+            <Welcome onPrompt={submitText} />
           ) : (
             <div className="message-list">
               {messages.map((message) => (
@@ -1421,18 +1388,27 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
                   }
                 />
               )}
+              {runFailure && (
+                <TaskFailureNotice
+                  failure={runFailure}
+                  onDismiss={() => setRunFailure(null)}
+                />
+              )}
               {error && (
                 <div className="error-banner" role="alert">
                   <div className="error-icon">
                     <Icon name="triangle" size={19} />
                   </div>
                   <div>
-                    <strong>响应中断，历史已回退</strong>
+                    <strong>与 Agent 的连接暂时中断</strong>
                     <p>{friendlyError(error)}</p>
                   </div>
-                  <button type="button" onClick={() => void handleRetry()}>
+                  <button
+                    type="button"
+                    onClick={() => void handleConnectionRecovery()}
+                  >
                     <Icon name="refresh" size={16} />
-                    重新生成
+                    {canResumeConnection ? '重新连接' : '重新提交'}
                   </button>
                 </div>
               )}
@@ -1459,7 +1435,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
           disabledPlaceholder={
             pendingInterrupt
               ? '请先处理上方待办'
-              : '请先重新生成失败的响应'
+              : '请先恢复与 Agent 的连接'
           }
           input={input}
           isBusy={isBusy}
@@ -1473,27 +1449,11 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
       </section>
 
       <TracePanel
-        inactive={sidebarOpen || projectDialogOpen || Boolean(sessionDialog)}
+        inactive={sidebarOpen || Boolean(sessionDialog)}
         open={traceOpen}
         onClose={() => setTraceOpen(false)}
         trace={trace}
       />
-
-      {projectDialogOpen && (
-        <ProjectDialog
-          busy={projectDialogBusy}
-          error={projectDialogError}
-          loaded={projectsLoaded}
-          projects={projects}
-          onBlank={() => void createSession(null)}
-          onClose={() => {
-            if (!projectDialogBusy) setProjectDialogOpen(false);
-          }}
-          onGit={(input) => void createGitProject(input)}
-          onSelect={(project) => void createSession(project.id)}
-          onUpload={(name, files) => void createUploadProject(name, files)}
-        />
-      )}
 
       {sessionDialog && (
         <SessionActionDialog
@@ -1521,6 +1481,7 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
 function Sidebar({
   activeChatId,
   busy,
+  creating,
   error,
   hasMore,
   inactive,
@@ -1541,6 +1502,7 @@ function Sidebar({
 }: {
   activeChatId: string;
   busy: boolean;
+  creating: boolean;
   error: string | null;
   hasMore: boolean;
   inactive: boolean;
@@ -1588,11 +1550,12 @@ function Sidebar({
       <button
         aria-label="新建对话"
         className="new-chat-button"
+        disabled={creating}
         type="button"
         onClick={onNewChat}
       >
         <Icon name="plus" size={17} />
-        <span>新建对话</span>
+        <span>{creating ? '正在创建…' : '新建对话'}</span>
       </button>
 
       <nav aria-label="历史对话" className="session-nav">
@@ -1696,13 +1659,7 @@ function Sidebar({
   );
 }
 
-function Welcome({
-  onPrompt,
-  project,
-}: {
-  onPrompt: (prompt: string) => Promise<void>;
-  project: ProjectSummary | null;
-}) {
+function Welcome({ onPrompt }: { onPrompt: (prompt: string) => Promise<void> }) {
   return (
     <section className="welcome">
       <div className="welcome-symbol">
@@ -1713,13 +1670,13 @@ function Welcome({
         </span>
       </div>
       <span className="project-context">
-        <Icon name={project?.sourceType === 'git' ? 'git' : 'folder'} size={14} />
-        {project?.name ?? '空白工作区'}
+        <Icon name="folder" size={14} />
+        空白工作区
       </span>
-      <h2>让 Agent 在你的项目里工作</h2>
+      <h2>让 Agent 创建你的 Web 应用</h2>
       <p>
-        Web 通过 Node API 创建持久化运行，Worker 在隔离工作区中调用 coding
-        agent。执行命令或改文件前，会在这里等待你的审批。
+        每条会话从独立的空白工作区开始，Worker 在隔离沙箱中调用 coding agent。
+        执行命令或改文件前，会在这里等待你的审批。
       </p>
 
       <div className="prompt-grid">
@@ -1741,243 +1698,6 @@ function Welcome({
         ))}
       </div>
     </section>
-  );
-}
-
-function ProjectDialog({
-  busy,
-  error,
-  loaded,
-  onBlank,
-  onClose,
-  onGit,
-  onSelect,
-  onUpload,
-  projects,
-}: {
-  busy: boolean;
-  error: string | null;
-  loaded: boolean;
-  onBlank: () => void;
-  onClose: () => void;
-  onGit: (input: {
-    name: string;
-    repositoryUrl: string;
-    ref?: string;
-  }) => void;
-  onSelect: (project: ProjectSummary) => void;
-  onUpload: (name: string, files: File[]) => void;
-  projects: ProjectSummary[];
-}) {
-  const [mode, setMode] = useState<'existing' | 'git' | 'upload'>('existing');
-  const [projectName, setProjectName] = useState('');
-  const [repositoryUrl, setRepositoryUrl] = useState('');
-  const [repositoryRef, setRepositoryRef] = useState('');
-  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-
-  return (
-    <div className="modal-layer">
-      <button
-        aria-label="关闭新建对话窗口"
-        className="modal-scrim"
-        disabled={busy}
-        type="button"
-        onClick={onClose}
-      />
-      <section
-        aria-labelledby="project-dialog-title"
-        aria-modal="true"
-        className="modal-card project-dialog"
-        role="dialog"
-      >
-        <header className="modal-head">
-          <div>
-            <span>NEW SESSION</span>
-            <h2 id="project-dialog-title">选择这次对话使用的项目</h2>
-            <p>每条会话都会获得独立的 workspace，项目内容会由 Worker 安全载入。</p>
-          </div>
-          <button
-            aria-label="关闭"
-            autoFocus={mode === 'existing'}
-            className="modal-close"
-            disabled={busy}
-            type="button"
-            onClick={onClose}
-          >
-            <Icon name="x" size={18} />
-          </button>
-        </header>
-
-        <div className="dialog-tabs" role="tablist" aria-label="项目来源">
-          {([
-            ['existing', '已有项目'],
-            ['git', 'Git 仓库'],
-            ['upload', '本地上传'],
-          ] as const).map(([value, label]) => (
-            <button
-              aria-selected={mode === value}
-              className={mode === value ? 'is-active' : ''}
-              disabled={busy}
-              key={value}
-              role="tab"
-              type="button"
-              onClick={() => setMode(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {mode === 'existing' && (
-          <div className="project-list" role="tabpanel">
-            <button
-              className="project-option"
-              disabled={busy}
-              type="button"
-              onClick={onBlank}
-            >
-              <span className="project-option-icon"><Icon name="folder" /></span>
-              <span><strong>空白工作区</strong><small>从一个干净目录开始</small></span>
-              <Icon name="chevron" size={16} />
-            </button>
-            {!loaded && <p className="dialog-status">正在加载项目…</p>}
-            {loaded && projects.length === 0 && (
-              <p className="dialog-status">还没有保存的项目，可从 Git 或本地创建。</p>
-            )}
-            {projects.map((project) => (
-              <button
-                className="project-option"
-                disabled={busy}
-                key={project.id}
-                type="button"
-                onClick={() => onSelect(project)}
-              >
-                <span className="project-option-icon">
-                  <Icon name={project.sourceType === 'git' ? 'git' : 'upload'} />
-                </span>
-                <span>
-                  <strong>{project.name}</strong>
-                  <small>
-                    {project.sourceType === 'git'
-                      ? project.sourceRef
-                      : project.sourceType === 'upload'
-                        ? '已上传的项目快照'
-                        : '空白项目'}
-                  </small>
-                </span>
-                <Icon name="chevron" size={16} />
-              </button>
-            ))}
-          </div>
-        )}
-
-        {mode === 'git' && (
-          <form
-            className="dialog-form"
-            role="tabpanel"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onGit({
-                name: projectName.trim(),
-                repositoryUrl: repositoryUrl.trim(),
-                ref: repositoryRef.trim() || undefined,
-              });
-            }}
-          >
-            <label>
-              项目名称
-              <input
-                autoFocus
-                disabled={busy}
-                maxLength={120}
-                placeholder="例如：官网前端"
-                required
-                value={projectName}
-                onChange={(event) => setProjectName(event.target.value)}
-              />
-            </label>
-            <label>
-              HTTPS 仓库地址
-              <input
-                disabled={busy}
-                inputMode="url"
-                placeholder="https://github.com/org/repository.git"
-                required
-                type="url"
-                value={repositoryUrl}
-                onChange={(event) => setRepositoryUrl(event.target.value)}
-              />
-            </label>
-            <label>
-              分支或 Tag <span>可选</span>
-              <input
-                disabled={busy}
-                placeholder="main"
-                value={repositoryRef}
-                onChange={(event) => setRepositoryRef(event.target.value)}
-              />
-            </label>
-            <p className="form-help">首次运行时由 Worker 浅克隆公开仓库，不接受地址中的账号或密码。</p>
-            <button className="primary-action dialog-submit" disabled={busy} type="submit">
-              {busy ? '正在创建…' : '创建项目并开始对话'}
-            </button>
-          </form>
-        )}
-
-        {mode === 'upload' && (
-          <form
-            className="dialog-form"
-            role="tabpanel"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onUpload(projectName.trim(), uploadFiles);
-            }}
-          >
-            <label>
-              项目名称
-              <input
-                autoFocus
-                disabled={busy}
-                maxLength={120}
-                placeholder="例如：本地演示项目"
-                required
-                value={projectName}
-                onChange={(event) => setProjectName(event.target.value)}
-              />
-            </label>
-            <label className="upload-field">
-              选择项目文件夹
-              <input
-                disabled={busy}
-                multiple
-                required
-                type="file"
-                {...({ webkitdirectory: '' } as Record<string, string>)}
-                onChange={(event) =>
-                  setUploadFiles(Array.from(event.target.files ?? []))
-                }
-              />
-              <span>
-                <Icon name="upload" size={19} />
-                {uploadFiles.length > 0
-                  ? `已选择 ${uploadFiles.length} 个文件`
-                  : '选择一个不超过 20 MB 的目录'}
-              </span>
-            </label>
-            <p className="form-help">文件将保存为项目快照，并在会话的隔离 workspace 中恢复。</p>
-            <button
-              className="primary-action dialog-submit"
-              disabled={busy || uploadFiles.length === 0}
-              type="submit"
-            >
-              {busy ? '正在上传…' : '上传并开始对话'}
-            </button>
-          </form>
-        )}
-
-        {error && <p className="dialog-error" role="alert">{error}</p>}
-      </section>
-    </div>
   );
 }
 
@@ -2252,6 +1972,66 @@ function AgentTodoList({ todos }: { todos: AgentTodo[] }) {
           </li>
         ))}
       </ol>
+    </section>
+  );
+}
+
+function taskFailureCopy(failure: TaskFailure) {
+  const detail = `${failure.code} ${failure.message}`.toLowerCase();
+  if (
+    detail.includes('402') ||
+    detail.includes('quota') ||
+    detail.includes('billing') ||
+    detail.includes('trial') ||
+    detail.includes('额度')
+  ) {
+    return {
+      title: '模型服务暂时不可用',
+      detail: '当前模型额度不足。你可以稍后再试，或联系管理员切换可用模型。',
+    };
+  }
+  if (detail.includes('recursion') || detail.includes('step limit')) {
+    return {
+      title: '任务没有顺利收敛',
+      detail: 'Agent 的执行步骤已达到上限。请缩小任务范围或补充更明确的要求后继续。',
+    };
+  }
+  if (
+    detail.includes('sandbox') ||
+    detail.includes('workspace') ||
+    detail.includes('e2b')
+  ) {
+    return {
+      title: '执行环境未能完成任务',
+      detail: 'Sandbox 或工作区初始化没有成功。请稍后重新提交这条任务。',
+    };
+  }
+  return {
+    title: '本次任务未完成',
+    detail: '连接仍然正常，你可以调整要求后继续发送消息。',
+  };
+}
+
+function TaskFailureNotice({
+  failure,
+  onDismiss,
+}: {
+  failure: TaskFailure;
+  onDismiss: () => void;
+}) {
+  const copy = taskFailureCopy(failure);
+  return (
+    <section className="task-failure-banner" role="status">
+      <span className="task-failure-icon">
+        <Icon name="triangle" size={18} />
+      </span>
+      <div>
+        <strong>{copy.title}</strong>
+        <p>{copy.detail}</p>
+      </div>
+      <button type="button" onClick={onDismiss}>
+        继续对话
+      </button>
     </section>
   );
 }
@@ -2589,10 +2369,10 @@ function TracePanel({
 
 function friendlyError(error: Error) {
   if (error.message.includes('503')) {
-    return '上游服务暂时不可用。半截输出未写入历史，请点击“重新生成”继续。';
+    return 'Agent API 暂时不可用，请重新连接。';
   }
   if (error.message.includes('404')) {
-    return '上次的本地运行记录已过期，请新建对话后重试。';
+    return '上次的运行记录已过期，可以重新提交上一条消息。';
   }
-  return '连接未能安全完成。当前输入已锁定，可重新生成恢复。';
+  return '任务可能仍在后台运行。重新连接会从已保存的进度继续，不会重复创建任务。';
 }
