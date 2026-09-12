@@ -47,6 +47,29 @@ type PendingInterrupt = Extract<
   { type: 'approval.required' | 'question.required' }
 >;
 type AgentTodo = Extract<AgentEvent, { type: 'todo.updated' }>['todos'][number];
+
+type AgentActivityEntry = {
+  id: string;
+  invocationId: string;
+  tool: string;
+  phase: 'start' | 'end';
+  at: number;
+};
+
+type AgentActivityState = {
+  entries: AgentActivityEntry[];
+  startedAt: number | null;
+  lastEventAt: number | null;
+};
+
+type AgentStatus = {
+  entries: AgentActivityEntry[];
+  runningTool: string | null;
+  elapsedSeconds: number;
+  idleSeconds: number;
+  tokens: number;
+};
+
 type QuestionAnswer = {
   selections: Array<{ index: number; label: string }>;
   customText?: string;
@@ -93,11 +116,6 @@ type TaskFailure = {
   message: string;
 };
 
-type ChatBootstrap = {
-  initialRun: PersistedRun | null;
-  initialFailure: TaskFailure | null;
-};
-
 type ConversationSeed = {
   chatId: string;
   messages: ResilientMessage[];
@@ -109,8 +127,10 @@ type SessionDialog =
   | { kind: 'delete'; session: WebSessionSummary };
 
 export type {
+  AgentActivityEntry,
+  AgentActivityState,
+  AgentStatus,
   AgentTodo,
-  ChatBootstrap,
   ConversationSeed,
   HistoryMessage,
   InsightCard,

@@ -168,19 +168,6 @@ function Sidebar({
           </button>
         )}
       </nav>
-
-      <div className="system-card">
-        <div className="system-card-head">
-          <span className="status-dot" />
-          <strong>Services connected</strong>
-        </div>
-        <p>API · Queue · Worker · Storage</p>
-        <div className="protection-meter">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <span key={index} />
-          ))}
-        </div>
-      </div>
     </aside>
   );
 }

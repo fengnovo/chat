@@ -1,6 +1,8 @@
 import type { RunStatus } from '@repo/contracts';
 
 import type {
+  AgentActivityState,
+  AgentStatus,
   HistoryMessage,
   ResilientMessage,
   RunSummary,
@@ -12,6 +14,50 @@ function messageText(message: ResilientMessage) {
     .filter((part) => part.type === 'text')
     .map((part) => part.text)
     .join('');
+}
+
+function estimateTokens(text: string) {
+  const length = text.trim().length;
+  return length === 0 ? 0 : Math.ceil(length / 4);
+}
+
+function formatDuration(seconds: number) {
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分${seconds % 60}秒`;
+  return `${Math.floor(minutes / 60)}时${minutes % 60}分`;
+}
+
+function deriveAgentActivity(
+  state: AgentActivityState,
+  active: boolean,
+  now: number,
+): Omit<AgentStatus, 'tokens'> {
+  const outstanding = new Set<string>();
+  for (const entry of state.entries) {
+    if (entry.phase === 'start') outstanding.add(entry.invocationId);
+    else outstanding.delete(entry.invocationId);
+  }
+  const running =
+    !active || outstanding.size === 0
+      ? null
+      : ([...state.entries]
+          .reverse()
+          .find(
+            (entry) =>
+              entry.phase === 'start' && outstanding.has(entry.invocationId),
+          ) ?? null);
+
+  return {
+    entries: state.entries,
+    runningTool: running?.tool ?? null,
+    elapsedSeconds: state.startedAt
+      ? Math.max(0, Math.floor((now - state.startedAt) / 1_000))
+      : 0,
+    idleSeconds: state.lastEventAt
+      ? Math.max(0, Math.floor((now - state.lastEventAt) / 1_000))
+      : 0,
+  };
 }
 
 function messagesFromHistory(messages: HistoryMessage[]): ResilientMessage[] {
@@ -53,7 +99,10 @@ function formatSessionTime(value: string) {
 }
 
 export {
+  deriveAgentActivity,
+  estimateTokens,
   failureFromRun,
+  formatDuration,
   formatSessionTime,
   isPendingStatus,
   messageText,

@@ -274,31 +274,6 @@
   background: var(--red-soft);
 }
 
-.system-card {
-  background: #eeecf7;
-  border: 1px solid #ddd8eb;
-  border-radius: 10px;
-  flex: 0 0 auto;
-  padding: 13px;
-}
-
-.system-card-head {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-}
-
-.system-card-head strong {
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.system-card p {
-  color: var(--ink-muted);
-  font-size: 11px;
-  margin: 6px 0 11px;
-}
-
 .status-dot {
   background: #39cb91;
   border-radius: 999px;
@@ -306,16 +281,4 @@
   display: inline-block;
   height: 7px;
   width: 7px;
-}
-
-.protection-meter {
-  display: grid;
-  gap: 4px;
-  grid-template-columns: repeat(6, 1fr);
-}
-
-.protection-meter span {
-  background: #5d45d6;
-  border-radius: 999px;
-  height: 3px;
 }

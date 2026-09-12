@@ -11,12 +11,15 @@ import {
 
 import {
   clearPersistedRun,
-  type PersistedRun,
   readPersistedRun,
+  readSessionCache,
+  type SessionCache,
   writePersistedRun,
+  writeSessionCache,
 } from '@/app/lib/persistence';
 import { ResilientSession } from '@/app/lib/session';
 
+import { AgentStatusPanel } from './agent-status';
 import { fetchSessionPage, responseError } from './api';
 import { Composer } from './composer';
 import { initialTrace } from './constants';
@@ -29,24 +32,49 @@ import { SessionActionDialog } from './session-dialog';
 import { Sidebar } from './sidebar';
 import { TracePanel } from './trace-panel';
 import type {
+  AgentActivityState,
+  AgentStatus,
   AgentTodo,
   ConversationSeed,
   PendingInterrupt,
   PipelineEvent,
   QuestionAnswer,
   ResilientMessage,
+  RunSummary,
   SessionDialog,
   SessionHistory,
   TaskFailure,
   WebSessionSummary,
 } from './types';
 import {
+  deriveAgentActivity,
+  estimateTokens,
   failureFromRun,
   isPendingStatus,
   messageText,
   messagesFromHistory,
 } from './utils';
 import { Welcome } from './welcome';
+
+let cachedSessions: SessionCache<WebSessionSummary> | null | undefined;
+
+function initialSessions() {
+  if (cachedSessions === undefined) {
+    cachedSessions = readSessionCache<WebSessionSummary>();
+  }
+  return cachedSessions;
+}
+
+function persistSessions(page: SessionCache<WebSessionSummary>) {
+  cachedSessions = page;
+  writeSessionCache(page);
+}
+
+const emptyActivity: AgentActivityState = {
+  entries: [],
+  startedAt: null,
+  lastEventAt: null,
+};
 
 function AppSkeleton() {
   return (
@@ -64,18 +92,16 @@ function AppSkeleton() {
   );
 }
 
-function ChatRuntime({
-  initialFailure,
-  initialRun,
-}: {
-  initialFailure: TaskFailure | null;
-  initialRun: PersistedRun | null;
-}) {
-  const [conversation, setConversation] = useState<ConversationSeed>(() => ({
-    chatId: initialRun?.chatId ?? crypto.randomUUID(),
-    messages: (initialRun?.messages ?? []) as ResilientMessage[],
-    resumeRun: initialRun?.pending ? initialRun : null,
-  }));
+function ChatRuntime() {
+  const [conversation, setConversation] = useState<ConversationSeed>(() => {
+    const persisted = readPersistedRun();
+    return {
+      chatId: persisted?.chatId ?? crypto.randomUUID(),
+      messages: (persisted?.messages ?? []) as ResilientMessage[],
+      // 先不触发 resume：等后端确认这次运行仍在进行中，再挂上事件流
+      resumeRun: null,
+    };
+  });
   const [input, setInput] = useState('');
   const [trace, setTrace] = useState<PipelineEvent[]>(initialTrace);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -88,13 +114,22 @@ function ChatRuntime({
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
+  const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
+  const [activityClock, setActivityClock] = useState(() => Date.now());
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
-  const [runFailure, setRunFailure] = useState<TaskFailure | null>(initialFailure);
-  const [sessions, setSessions] = useState<WebSessionSummary[]>([]);
-  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [runFailure, setRunFailure] = useState<TaskFailure | null>(null);
+  const [restoredSessions] = useState(() => initialSessions());
+  const [sessions, setSessions] = useState<WebSessionSummary[]>(
+    () => restoredSessions?.data ?? [],
+  );
+  const [sessionsLoaded, setSessionsLoaded] = useState(
+    () => restoredSessions !== null,
+  );
   const [sessionsError, setSessionsError] = useState<string | null>(null);
-  const [sessionsNextCursor, setSessionsNextCursor] = useState<string | null>(null);
+  const [sessionsNextCursor, setSessionsNextCursor] = useState<string | null>(
+    () => restoredSessions?.nextCursor ?? null,
+  );
   const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
   const [switchingSessionId, setSwitchingSessionId] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
@@ -115,6 +150,7 @@ function ChatRuntime({
       setSessions(page.data);
       setSessionsNextCursor(page.nextCursor);
       setSessionsError(null);
+      persistSessions({ data: page.data, nextCursor: page.nextCursor });
     } catch {
       setSessionsError('历史记录加载失败');
     } finally {
@@ -200,6 +236,31 @@ function ChatRuntime({
               : [...current.slice(-11), mapped],
           );
         }
+        if (event.type === 'run.started') {
+          setActivity({
+            entries: [],
+            startedAt: Date.parse(event.timestamp) || Date.now(),
+            lastEventAt: Date.now(),
+          });
+        }
+        if (event.type === 'tool.started' || event.type === 'tool.completed') {
+          const phase = event.type === 'tool.started' ? 'start' : 'end';
+          const at = Date.parse(event.timestamp) || Date.now();
+          setActivity((current) => ({
+            entries: [
+              ...current.entries.slice(-19),
+              {
+                id: `${event.type}-${event.invocationId}-${event.timestamp}`,
+                invocationId: event.invocationId,
+                tool: event.tool,
+                phase,
+                at,
+              },
+            ],
+            startedAt: current.startedAt ?? at,
+            lastEventAt: Date.now(),
+          }));
+        }
         if (event.type === 'todo.updated') setAgentTodos(event.todos);
         if (
           event.type === 'approval.required' ||
@@ -262,6 +323,23 @@ function ChatRuntime({
       }
       if (isError) return;
 
+      // 运行正常收尾却没有任何文本：提示用户而不是留下一个永远转圈的空气泡
+      if (!isAbort && !taskFailed && !text) {
+        setRunFailure({
+          code: 'empty_completion',
+          message: 'Agent 本次没有返回任何内容',
+        });
+        setTrace((current) => [
+          ...current.slice(-9),
+          localEvent(
+            'verify',
+            'warning',
+            '本轮没有产生任何回复',
+            '运行已结束但未收到文本内容，可以重新发送这条消息',
+          ),
+        ]);
+      }
+
       const persisted = readPersistedRun();
       const runId = message.metadata?.runId ?? persisted?.runId ?? '';
       if (runId) {
@@ -290,8 +368,9 @@ function ChatRuntime({
 
   const isBusy = status === 'submitted' || status === 'streaming';
   const hasConversation = messages.length > 0;
+  const lastMessage = messages.at(-1);
   const hasAssistantPlaceholder =
-    messages.at(-1)?.role === 'assistant' && !messageText(messages.at(-1) as ResilientMessage);
+    lastMessage?.role === 'assistant' && !messageText(lastMessage);
   const lastAssistant = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant');
@@ -301,6 +380,28 @@ function ChatRuntime({
   }, [lastAssistant, status]);
 
   useEffect(() => {
+    if (!isBusy) return;
+    const timer = window.setInterval(() => setActivityClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [isBusy]);
+
+  const agentActivity: AgentStatus = useMemo(() => {
+    // token 只在当前这轮运行期间统计，运行结束后保留最终值
+    const streamingAssistant =
+      lastMessage?.role === 'assistant' ? lastMessage : null;
+    const runActive = isBusy || activity.startedAt !== null;
+    return {
+      ...deriveAgentActivity(activity, isBusy, activityClock),
+      tokens:
+        runActive && streamingAssistant
+          ? estimateTokens(messageText(streamingAssistant))
+          : 0,
+    };
+  }, [activity, activityClock, isBusy, lastMessage]);
+
+  useEffect(() => {
+    // 已经有缓存就先直接渲染，切回页面时不再重复拉取会话列表
+    if (restoredSessions) return;
     const controller = new AbortController();
     let active = true;
     fetchSessionPage(undefined, controller.signal)
@@ -309,6 +410,7 @@ function ChatRuntime({
         setSessions(page.data);
         setSessionsNextCursor(page.nextCursor);
         setSessionsError(null);
+        persistSessions({ data: page.data, nextCursor: page.nextCursor });
       })
       .catch((caught: unknown) => {
         if (
@@ -326,6 +428,36 @@ function ChatRuntime({
       active = false;
       controller.abort();
     };
+  }, [restoredSessions]);
+
+  useEffect(() => {
+    const persisted = readPersistedRun();
+    if (!persisted) return;
+    const controller = new AbortController();
+    fetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (response.status === 404) {
+          clearPersistedRun();
+          return;
+        }
+        if (!response.ok) return;
+        const run = (await response.json()) as RunSummary;
+        setRunFailure(failureFromRun(run));
+        const pending = isPendingStatus(run.status);
+        writePersistedRun({ ...persisted, pending });
+        if (pending) {
+          setConversation((current) =>
+            current.chatId === persisted.chatId
+              ? { ...current, resumeRun: persisted }
+              : current,
+          );
+        }
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+    // 仅在挂载时校准一次上一次运行的持久化状态
   }, []);
 
   useEffect(() => {
@@ -417,6 +549,7 @@ function ChatRuntime({
       setDismissedCards(new Set());
       setPendingInterrupt(null);
       setAgentTodos([]);
+      setActivity(emptyActivity);
       setInteractionError(null);
       setRunFailure(failureFromRun(latestRun));
       sessionRef.current = new ResilientSession();
@@ -493,6 +626,7 @@ function ChatRuntime({
     setDismissedCards(new Set());
     setPendingInterrupt(null);
     setAgentTodos([]);
+    setActivity(emptyActivity);
     setInteractionError(null);
     setRunFailure(null);
     sessionRef.current = new ResilientSession();
@@ -786,12 +920,6 @@ function ChatRuntime({
             >
               <Icon name="menu" />
             </button>
-            <div>
-              <div className="title-line">
-                <h1>AI Coding Agent</h1>
-                <span className="local-badge">NODE AGENT</span>
-              </div>
-            </div>
           </div>
           <div className="topbar-actions">
             <span className={`connection-pill ${isBusy ? 'is-busy' : ''}`}>
@@ -853,9 +981,15 @@ function ChatRuntime({
                       new Set(current).add(messageId),
                     );
                   }}
+                  streaming={
+                    isBusy &&
+                    message.id === lastMessage?.id &&
+                    message.role === 'assistant'
+                  }
                 />
               ))}
               {status === 'submitted' && !hasAssistantPlaceholder && <ThinkingRow />}
+              <AgentStatusPanel busy={isBusy} status={agentActivity} />
               {agentTodos.length > 0 && <AgentTodoList todos={agentTodos} />}
               {pendingInterrupt && (
                 <PendingInteraction
@@ -927,6 +1061,7 @@ function ChatRuntime({
           onSubmit={handleSubmit}
           onSuggestion={submitText}
           suggestions={suggestions}
+          tokens={agentActivity.tokens}
         />
 
       </section>

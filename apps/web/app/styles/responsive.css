@@ -42,8 +42,7 @@
   .session-copy,
   .session-more,
   .session-menu,
-  .load-more-button,
-  .system-card {
+  .load-more-button {
     display: none;
   }
 
@@ -153,10 +152,6 @@
     display: block;
   }
 
-  .app-shell.is-sidebar-open .system-card {
-    display: block;
-  }
-
   .sidebar-close {
     align-items: center;
     background: transparent;
@@ -259,14 +254,6 @@
 
   .topbar .icon-button {
     display: none;
-  }
-
-  .topbar h1 {
-    font-size: 13px;
-  }
-
-  .local-badge {
-    font-size: 7px;
   }
 
   .welcome {
@@ -377,6 +364,11 @@
   .agent-interrupt {
     margin-left: 0;
     padding: 16px;
+  }
+
+  .agent-status {
+    margin-left: 0;
+    padding: 13px;
   }
 
   .agent-interrupt ul li {

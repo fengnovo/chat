@@ -59,7 +59,7 @@ export async function createResilientModelRouter(options: RouterOptions) {
         apiKey: spec.apiKey,
         ...(spec.baseUrl ? { configuration: { baseURL: spec.baseUrl } } : {}),
         temperature: 1,
-        maxTokens: 4_000,
+        maxTokens: spec.maxTokens ?? 16_000,
         timeout: 300_000,
         maxRetries: 0,
         configurableFields: ['temperature', 'maxTokens'],

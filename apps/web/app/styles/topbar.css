@@ -17,8 +17,7 @@
 }
 
 .topbar-title,
-.topbar-actions,
-.title-line {
+.topbar-actions {
   align-items: center;
   display: flex;
 }
@@ -26,31 +25,6 @@
 .topbar-title {
   gap: 11px;
   min-width: 0;
-}
-
-.topbar-title > div {
-  min-width: 0;
-}
-
-.title-line {
-  gap: 9px;
-}
-
-.topbar h1 {
-  font-size: 18px;
-  letter-spacing: -0.01em;
-  margin: 0;
-}
-
-.local-badge {
-  background: var(--violet-soft);
-  border-radius: 4px;
-  color: var(--violet-dark);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: 0.07em;
-  padding: 4px 6px;
 }
 
 .topbar-actions {

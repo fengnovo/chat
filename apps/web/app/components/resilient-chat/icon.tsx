@@ -20,6 +20,7 @@ type IconName =
   | 'trash'
   | 'triangle'
   | 'user'
+  | 'wrench'
   | 'x';
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
@@ -43,6 +44,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 4v7m4-7v7" /></>,
     triangle: <><path d="M21.7 16 14 2.7a2.3 2.3 0 0 0-4 0L2.3 16A2.3 2.3 0 0 0 4.3 19h15.4a2.3 2.3 0 0 0 2-3Z" /><path d="M12 9v4m0 3h.01" /></>,
     user: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>,
+    wrench: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />,
     x: <path d="m6 6 12 12M18 6 6 18" />,
   };
 

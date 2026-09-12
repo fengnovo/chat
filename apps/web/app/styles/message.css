@@ -74,6 +74,12 @@
   overflow-wrap: anywhere;
 }
 
+.message-empty {
+  color: var(--ink-muted);
+  font-size: 14px;
+  font-style: italic;
+}
+
 .is-user .message-copy {
   background: #f1eff4;
   border: 1px solid #e8e4eb;

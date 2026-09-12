@@ -13,6 +13,7 @@ function Message({
   onBoundaryError,
   onCopy,
   onDismissCard,
+  streaming,
 }: {
   copied: boolean;
   dismissedCards: Set<string>;
@@ -20,6 +21,7 @@ function Message({
   onBoundaryError: () => void;
   onCopy: (id: string, text: string) => Promise<void>;
   onDismissCard: (id: string) => void;
+  streaming: boolean;
 }) {
   const text = messageText(message);
   const cards = message.parts.filter((part) => part.type === 'data-card');
@@ -44,8 +46,10 @@ function Message({
             ) : (
               <MarkdownContent content={text} />
             )
-          ) : (
+          ) : streaming ? (
             <StreamingDots />
+          ) : (
+            <p className="message-empty">本轮没有返回任何内容，可以重新发送这条消息。</p>
           )}
         </div>
 

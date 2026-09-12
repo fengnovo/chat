@@ -6,6 +6,8 @@ export interface ModelSpec {
   provider: string;
   apiKey: string;
   baseUrl?: string;
+  /** 单次回复的输出上限。推理模型会把思考过程也计入该额度，太小会导致只输出 reasoning、正文为空。 */
+  maxTokens?: number;
 }
 
 export interface ModelRouterEvent {

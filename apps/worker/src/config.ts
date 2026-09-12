@@ -48,6 +48,7 @@ const schema = z.object({
   OPENAI_BASE_URL: z.string().url().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   FALLBACK_MODELS: z.string().optional(),
+  MODEL_MAX_TOKENS: z.coerce.number().int().min(1_000).max(200_000).default(16_000),
   MCP_CONFIG_PATH: z.string().optional(),
 });
 
@@ -64,6 +65,7 @@ function modelSpec(raw: string, config: z.infer<typeof schema>): ModelSpec {
     model,
     provider,
     apiKey,
+    maxTokens: config.MODEL_MAX_TOKENS,
     ...(provider === 'openai' && config.OPENAI_BASE_URL
       ? { baseUrl: config.OPENAI_BASE_URL }
       : {}),

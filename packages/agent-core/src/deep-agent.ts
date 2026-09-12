@@ -205,7 +205,7 @@ export async function createDeepAgentRuntime(
   };
   const config = {
     configurable: { thread_id: options.sessionId },
-    recursionLimit: 80,
+    recursionLimit: 200,
     runName: 'web-coding-agent',
     tags: ['coding-agent', backendMode],
     metadata: {
