@@ -684,7 +684,7 @@ textarea:disabled {
 
 .message-list {
   margin: 0 auto;
-  max-width: 900px;
+  max-width: 1120px;
   padding: 42px 34px 32px;
   width: 100%;
 }
@@ -724,7 +724,7 @@ textarea:disabled {
 }
 
 .message-body {
-  max-width: min(740px, calc(100% - 47px));
+  max-width: min(940px, calc(100% - 47px));
   min-width: 0;
 }
 
@@ -1090,7 +1090,7 @@ textarea:disabled {
 .agent-panel-head > strong {
   color: var(--ink-muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -1146,6 +1146,7 @@ textarea:disabled {
 .agent-interrupt {
   background: var(--amber-soft);
   border-color: #efd29d;
+  padding: 22px;
 }
 
 .agent-interrupt .eyebrow {
@@ -1153,9 +1154,13 @@ textarea:disabled {
 }
 
 .agent-interrupt h3 {
-  font-size: 14px;
+  font-size: 18px;
   line-height: 1.5;
   margin: 10px 0 0;
+}
+
+.agent-interrupt .agent-panel-head h3 {
+  margin: 0;
 }
 
 .agent-interrupt ul li {
@@ -1164,17 +1169,17 @@ textarea:disabled {
   border: 1px solid rgb(220 178 105 / 42%);
   border-radius: 8px;
   display: grid;
-  font-size: 10px;
-  gap: 10px;
-  grid-template-columns: minmax(70px, auto) 1fr;
-  line-height: 1.5;
-  padding: 9px 10px;
+  font-size: 15px;
+  gap: 14px;
+  grid-template-columns: minmax(90px, auto) 1fr;
+  line-height: 1.55;
+  padding: 13px 14px;
 }
 
 .agent-interrupt li code {
   color: #89540e;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -1229,14 +1234,15 @@ textarea:disabled {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 13px;
+  flex-wrap: wrap;
 }
 
 .interaction-actions button {
-  border-radius: 7px;
-  font-size: 10px;
+  border-radius: 9px;
+  font-size: 14px;
   font-weight: 700;
-  min-height: 34px;
-  padding: 0 13px;
+  min-height: 44px;
+  padding: 0 17px;
 }
 
 .primary-action {
@@ -1249,6 +1255,16 @@ textarea:disabled {
   background: white;
   border: 1px solid #dbbf90;
   color: #7a4d10;
+}
+
+.session-action {
+  background: #f2edff;
+  border: 1px solid #9b86ff;
+  color: #5334d9;
+}
+
+.session-action:hover:not(:disabled) {
+  background: #e8e0ff;
 }
 
 .interaction-actions button:disabled {
@@ -1266,6 +1282,35 @@ textarea:disabled {
   padding: 0 30px 16px;
 }
 
+.composer-activity {
+  align-items: center;
+  color: var(--ink-muted);
+  display: flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+  margin: 0 auto 9px;
+  max-width: 1050px;
+  min-height: 20px;
+}
+
+.activity-spinner {
+  animation: activity-spin 850ms linear infinite;
+  border: 2px solid #ded8fa;
+  border-radius: 999px;
+  border-top-color: var(--violet);
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 15px;
+  width: 15px;
+}
+
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .composer {
   align-items: flex-end;
   background: white;
@@ -1275,7 +1320,7 @@ textarea:disabled {
   display: flex;
   gap: 10px;
   margin: 0 auto;
-  max-width: 730px;
+  max-width: 1050px;
   padding: 7px 7px 7px 14px;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
@@ -2340,6 +2385,19 @@ textarea:disabled {
     padding-right: 12px;
   }
 
+  .agent-interrupt {
+    margin-left: 0;
+    padding: 16px;
+  }
+
+  .agent-interrupt ul li {
+    grid-template-columns: 1fr;
+  }
+
+  .interaction-actions button {
+    flex: 1 1 140px;
+  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2352,6 +2410,7 @@ textarea:disabled {
 
   .streaming-dots i,
   .pulse-dot,
+  .activity-spinner,
   .connection-pill.is-busy .status-dot,
   .skeleton-panel,
   .skeleton-line,

@@ -35,6 +35,7 @@ export interface HeadlessAgentOptions {
   skills?: string[];
   memory?: string[];
   inheritEnv?: boolean;
+  autoApproveTools?: boolean;
   signal?: AbortSignal;
 }
 

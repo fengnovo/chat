@@ -58,6 +58,44 @@ test(
           }),
         ),
       );
+      assert.equal(sessions[1]!.approvalMode, 'manual');
+
+      const approvalRun = await database.repository.createRun(context, {
+        sessionId: sessions[1]!.id,
+        message: 'Run a command',
+      });
+      const interruptId = randomUUID();
+      await database.repository.createInterrupt(tenantId, approvalRun.run.id, {
+        id: interruptId,
+        kind: 'approval',
+        request: [{ name: 'execute' }],
+      });
+      const resolved = await database.repository.resolveInterrupt(
+        context,
+        approvalRun.run.id,
+        interruptId,
+        'approval',
+        { decision: 'approve', scope: 'session' },
+      );
+      assert.ok(resolved);
+      assert.equal(
+        (await database.repository.getSession(context, sessions[1]!.id))
+          ?.approvalMode,
+        'session',
+      );
+      const resumeDispatch = await database.pool.query<{ payload: unknown }>(
+        `SELECT payload
+         FROM run_dispatch_outbox
+         WHERE tenant_id = $1 AND run_id = $2 AND job_kind = 'resume-approval'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [tenantId, approvalRun.run.id],
+      );
+      assert.equal(
+        (resumeDispatch.rows[0]?.payload as { approvalMode?: string })
+          ?.approvalMode,
+        'session',
+      );
 
       const firstPage = await database.repository.listSessions(context, {
         limit: 2,

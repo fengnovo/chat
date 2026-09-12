@@ -1177,7 +1177,13 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
 
   async function respondToInterrupt(
     interrupt: PendingInterrupt,
-    body: { decision: 'approve' | 'reject'; message?: string } | QuestionAnswer,
+    body:
+      | {
+          decision: 'approve' | 'reject';
+          scope?: 'once' | 'session';
+          message?: string;
+        }
+      | QuestionAnswer,
   ) {
     setInteractionBusy(true);
     setInteractionError(null);
@@ -1199,13 +1205,22 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
         throw new Error(payload?.error ?? `HTTP ${response.status}`);
       }
       setPendingInterrupt(null);
+      const sessionApprovalGranted =
+        'decision' in body &&
+        body.decision === 'approve' &&
+        body.scope === 'session';
+      if (sessionApprovalGranted) {
+        setNotice('本会话后续操作将自动执行');
+      }
       setTrace((current) => [
         ...current.slice(-11),
         localEvent(
           'request',
           'running',
-          '已提交人工响应',
-          '任务已重新进入 Worker 队列',
+          sessionApprovalGranted ? '已开启本会话自动批准' : '已提交人工响应',
+          sessionApprovalGranted
+            ? '当前会话后续工具操作将自动执行'
+            : '任务已重新进入 Worker 队列',
         ),
       ]);
     } catch (caught) {
@@ -1398,8 +1413,8 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
                   busy={interactionBusy}
                   error={interactionError}
                   interrupt={pendingInterrupt}
-                  onApproval={(decision) =>
-                    respondToInterrupt(pendingInterrupt, { decision })
+                  onApproval={(decision, scope) =>
+                    respondToInterrupt(pendingInterrupt, { decision, scope })
                   }
                   onQuestion={(answer) =>
                     respondToInterrupt(pendingInterrupt, answer)
@@ -1427,7 +1442,25 @@ function ChatRuntime({ initialRun }: { initialRun: PersistedRun | null }) {
         </div>
 
         <Composer
-          disabled={Boolean(error)}
+          activity={
+            interactionBusy
+              ? '正在提交审批结果…'
+              : pendingInterrupt?.type === 'approval.required'
+                ? '等待你的审批后继续'
+                : pendingInterrupt?.type === 'question.required'
+                  ? '等待你的回答后继续'
+                  : status === 'submitted'
+                    ? '正在连接 Agent…'
+                    : status === 'streaming'
+                      ? 'Agent 正在处理请求…'
+                      : null
+          }
+          disabled={Boolean(error) || Boolean(pendingInterrupt)}
+          disabledPlaceholder={
+            pendingInterrupt
+              ? '请先处理上方待办'
+              : '请先重新生成失败的响应'
+          }
           input={input}
           isBusy={isBusy}
           onChange={setInput}
@@ -2167,10 +2200,11 @@ function MarkdownContent({ content }: { content: string }) {
 
 function StreamingDots() {
   return (
-    <span className="streaming-dots" aria-label="正在生成">
-      <i />
-      <i />
-      <i />
+    <span className="streaming-dots" role="status">
+      <span className="sr-only">正在生成</span>
+      <i aria-hidden="true" />
+      <i aria-hidden="true" />
+      <i aria-hidden="true" />
     </span>
   );
 }
@@ -2232,20 +2266,35 @@ function PendingInteraction({
   busy: boolean;
   error: string | null;
   interrupt: PendingInterrupt;
-  onApproval: (decision: 'approve' | 'reject') => Promise<void>;
+  onApproval: (
+    decision: 'approve' | 'reject',
+    scope: 'once' | 'session',
+  ) => Promise<void>;
   onQuestion: (answer: QuestionAnswer) => Promise<void>;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [customText, setCustomText] = useState('');
+  const [approvalIntent, setApprovalIntent] = useState<
+    'reject' | 'once' | 'session' | null
+  >(null);
+
+  async function submitApproval(
+    decision: 'approve' | 'reject',
+    scope: 'once' | 'session',
+    intent: 'reject' | 'once' | 'session',
+  ) {
+    setApprovalIntent(intent);
+    await onApproval(decision, scope);
+    setApprovalIntent(null);
+  }
 
   if (interrupt.type === 'approval.required') {
     return (
       <section className="agent-interrupt" aria-label="等待操作审批">
         <div className="agent-panel-head">
-          <span className="eyebrow">APPROVAL REQUIRED</span>
+          <h3>Agent 准备执行以下操作</h3>
           <strong>{interrupt.actions.length} 项</strong>
         </div>
-        <h3>Agent 准备执行以下操作</h3>
         <ul>
           {interrupt.actions.map((action, index) => (
             <li key={`${index}-${action.name}`}>
@@ -2260,17 +2309,28 @@ function PendingInteraction({
             className="secondary-action"
             disabled={busy}
             type="button"
-            onClick={() => void onApproval('reject')}
+            onClick={() => void submitApproval('reject', 'once', 'reject')}
           >
-            拒绝
+            {busy && approvalIntent === 'reject' ? '正在拒绝…' : '拒绝'}
           </button>
           <button
             className="primary-action"
             disabled={busy}
             type="button"
-            onClick={() => void onApproval('approve')}
+            onClick={() => void submitApproval('approve', 'once', 'once')}
           >
-            {busy ? '正在提交…' : '批准并继续'}
+            {busy && approvalIntent === 'once' ? '正在提交…' : '仅批准这一次'}
+          </button>
+          <button
+            className="session-action"
+            disabled={busy}
+            title="本会话后续的写文件、删除、命令和 MCP 操作将自动执行"
+            type="button"
+            onClick={() => void submitApproval('approve', 'session', 'session')}
+          >
+            {busy && approvalIntent === 'session'
+              ? '正在开启…'
+              : '本会话都允许'}
           </button>
         </div>
       </section>
@@ -2346,7 +2406,9 @@ function PendingInteraction({
 }
 
 function Composer({
+  activity,
   disabled,
+  disabledPlaceholder,
   input,
   isBusy,
   onChange,
@@ -2355,7 +2417,9 @@ function Composer({
   onSuggestion,
   suggestions,
 }: {
+  activity: string | null;
   disabled: boolean;
+  disabledPlaceholder: string;
   input: string;
   isBusy: boolean;
   onChange: (value: string) => void;
@@ -2366,6 +2430,12 @@ function Composer({
 }) {
   return (
     <div className="composer-wrap">
+      {activity && (
+        <div className="composer-activity" role="status" aria-live="polite">
+          <span className="activity-spinner" aria-hidden="true" />
+          <span>{activity}</span>
+        </div>
+      )}
       {suggestions.length > 0 && !isBusy && !disabled && (
         <div className="suggestions" aria-label="推荐问题">
           {suggestions.map((suggestion) => (
@@ -2388,7 +2458,7 @@ function Composer({
           rows={1}
           value={input}
           disabled={disabled || isBusy}
-          placeholder={disabled ? '请先重新生成失败的响应' : '描述要在项目中完成的任务…'}
+          placeholder={disabled ? disabledPlaceholder : '描述要在项目中完成的任务…'}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {

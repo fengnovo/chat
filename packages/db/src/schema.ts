@@ -69,6 +69,7 @@ export const agentSessions = pgTable(
     workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id),
     externalKey: text('external_key'),
     title: text('title').notNull(),
+    approvalMode: text('approval_mode').notNull().default('manual'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),

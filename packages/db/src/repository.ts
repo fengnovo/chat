@@ -19,6 +19,7 @@ export interface SessionRecord {
   projectId: string | null;
   workspaceId: string;
   workspacePath: string;
+  approvalMode: 'manual' | 'session';
   createdAt: string;
   updatedAt: string;
 }
@@ -103,6 +104,7 @@ function sessionOf(row: QueryResultRow): SessionRecord {
     projectId: row.project_id ? String(row.project_id) : null,
     workspaceId: String(row.workspace_id),
     workspacePath: String(row.workspace_path),
+    approvalMode: row.approval_mode as 'manual' | 'session',
     createdAt: iso(row.created_at as Date),
     updatedAt: iso(row.updated_at as Date),
   };
@@ -511,7 +513,7 @@ export class AgentRepository {
       }
 
       const session = await client.query(
-        `SELECT s.id, w.path AS workspace_path,
+        `SELECT s.id, s.approval_mode, w.path AS workspace_path,
                 p.source_type, p.source_ref, p.source_revision
          FROM agent_sessions s
          JOIN workspaces w ON w.id = s.workspace_id
@@ -551,6 +553,7 @@ export class AgentRepository {
         runId: run.id,
         message: input.message,
         workspacePath: String(session.rows[0].workspace_path),
+        approvalMode: session.rows[0].approval_mode as 'manual' | 'session',
         ...(workspaceSource ? { workspaceSource } : {}),
       });
       return { run, created: true, outboxId };
@@ -756,6 +759,19 @@ export class AgentRepository {
     response: unknown,
   ): Promise<InterruptRecord | null> {
     return inTransaction(this.pool, async (client) => {
+      const run = await client.query(
+        `SELECT r.user_id, r.session_id, w.path AS workspace_path,
+                s.approval_mode
+         FROM agent_runs r
+         JOIN agent_sessions s ON s.id = r.session_id
+         JOIN workspaces w ON w.id = s.workspace_id
+         WHERE r.tenant_id = $1 AND r.user_id = $2 AND r.id = $3
+           AND s.deleted_at IS NULL
+         FOR UPDATE OF s`,
+        [context.tenantId, context.userId, runId],
+      );
+      if (!run.rows[0]) throw new RepositoryNotFoundError('run');
+
       const result = await client.query(
         `UPDATE interrupts
          SET status = 'resolved', response = $5::jsonb, resolved_at = now()
@@ -766,21 +782,31 @@ export class AgentRepository {
       );
       const row = result.rows[0];
       if (!row) return null;
-      const run = await client.query(
-        `SELECT r.user_id, r.session_id, w.path AS workspace_path
-         FROM agent_runs r
-         JOIN agent_sessions s ON s.id = r.session_id
-         JOIN workspaces w ON w.id = s.workspace_id
-         WHERE r.tenant_id = $1 AND r.id = $2`,
-        [context.tenantId, runId],
-      );
-      if (!run.rows[0]) throw new RepositoryNotFoundError('run');
+      const approvalDecision =
+        kind === 'approval'
+          ? (response as Extract<RunJob, { kind: 'resume-approval' }>['decision'])
+          : null;
+      const grantsSessionApproval =
+        approvalDecision?.decision === 'approve' &&
+        approvalDecision.scope === 'session';
+      if (grantsSessionApproval) {
+        await client.query(
+          `UPDATE agent_sessions
+           SET approval_mode = 'session', updated_at = now()
+           WHERE tenant_id = $1 AND user_id = $2 AND id = $3`,
+          [context.tenantId, context.userId, String(run.rows[0].session_id)],
+        );
+      }
+      const approvalMode = grantsSessionApproval
+        ? 'session'
+        : (run.rows[0].approval_mode as 'manual' | 'session');
       const common = {
         tenantId: context.tenantId,
         userId: String(run.rows[0].user_id),
         sessionId: String(run.rows[0].session_id),
         runId,
         workspacePath: String(run.rows[0].workspace_path),
+        approvalMode,
       };
       const job: RunJob =
         kind === 'approval'

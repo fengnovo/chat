@@ -90,6 +90,7 @@ async function createRuntime(
       services.redis,
       job.tenantId,
     ),
+    autoApproveTools: job.approvalMode === 'session',
     signal,
   };
   if (services.config.AGENT_DRIVER === 'demo') {

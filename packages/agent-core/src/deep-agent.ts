@@ -170,8 +170,16 @@ export async function createDeepAgentRuntime(
     mcp.tools
       .map((mcpTool) => String((mcpTool as { name?: unknown }).name ?? ''))
       .filter((name) => name && name !== 'ask_user')
-      .map((name) => [name, { allowedDecisions: ['approve', 'reject'] }]),
+      .map((name) => [
+        name,
+        options.autoApproveTools
+          ? false
+          : { allowedDecisions: ['approve', 'reject'] },
+      ]),
   );
+  const approvalRule = options.autoApproveTools
+    ? false
+    : { allowedDecisions: ['approve', 'reject'] };
   const agent = createDeepAgent({
     model: router.primary,
     checkpointer: options.checkpointer as never,
@@ -182,7 +190,9 @@ export async function createDeepAgentRuntime(
     systemPrompt: [
       `你是运行在隔离工作区中的 coding agent，工作目录是：${options.workspacePath}`,
       '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。',
-      '文件写入、删除和命令执行必须经过人工审批。不要读取工作区之外的路径。',
+      options.autoApproveTools
+        ? '用户已允许本会话自动执行工具。不要读取工作区之外的路径。'
+        : '文件写入、删除和命令执行必须经过人工审批。不要读取工作区之外的路径。',
       '遇到会显著改变结果且无法从上下文判断的问题时使用 ask_user。',
     ].join('\n'),
     middleware: [
@@ -195,11 +205,11 @@ export async function createDeepAgentRuntime(
       } as never) as never,
       humanInTheLoopMiddleware({
         interruptOn: {
-          write_file: { allowedDecisions: ['approve', 'reject'] },
-          edit_file: { allowedDecisions: ['approve', 'reject'] },
-          delete: { allowedDecisions: ['approve', 'reject'] },
+          write_file: approvalRule,
+          edit_file: approvalRule,
+          delete: approvalRule,
           ...mcpApprovalRules,
-          execute: { allowedDecisions: ['approve', 'reject'] },
+          execute: approvalRule,
         },
       } as never) as never,
     ] as never,

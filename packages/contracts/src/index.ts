@@ -174,6 +174,7 @@ export const createRunSchema = z.object({
 
 export const approvalDecisionSchema = z.object({
   decision: z.enum(['approve', 'reject']),
+  scope: z.enum(['once', 'session']).default('once'),
   message: z.string().trim().max(2_000).optional(),
 });
 
@@ -204,6 +205,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     message: z.string(),
     workspacePath: z.string(),
     workspaceSource: workspaceSourceSchema.optional(),
+    approvalMode: z.enum(['manual', 'session']).optional(),
   }),
   z.object({
     kind: z.literal('resume-approval'),
@@ -213,6 +215,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     runId: z.uuid(),
     workspacePath: z.string(),
     decision: approvalDecisionSchema,
+    approvalMode: z.enum(['manual', 'session']).optional(),
   }),
   z.object({
     kind: z.literal('resume-question'),
@@ -222,6 +225,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     runId: z.uuid(),
     workspacePath: z.string(),
     answer: questionAnswerSchema,
+    approvalMode: z.enum(['manual', 'session']).optional(),
   }),
 ]);
 
