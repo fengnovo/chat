@@ -13,6 +13,15 @@ export class KnowledgeRepository {
   constructor(private readonly pool: Pick<Pool, 'query'>) {}
   private readonly leases = new Map<string, string>();
 
+  async listQueuedOrStaleIndexJobs(now: Date, limit: number): Promise<any[]> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('Invalid limit');
+    const result = await this.pool.query(
+      `SELECT * FROM knowledge_index_jobs WHERE status = 'queued' OR (status = 'running' AND lease_expires_at < $1) ORDER BY created_at ASC LIMIT $2`,
+      [now, limit],
+    );
+    return result.rows;
+  }
+
   async claimIndexJob(tenantId: string, jobId: string, leaseMs: number): Promise<{ jobId: string; leaseToken: string } | null> {
     const leaseToken = randomUUID();
     const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'running', error_code = $4, attempts = attempts + 1, lease_expires_at = now() + ($3::bigint * interval '1 millisecond'), started_at = COALESCE(started_at, now()), updated_at = now() WHERE tenant_id = $1 AND id = $2 AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now())) RETURNING id`, [tenantId, jobId, leaseMs, leaseToken]);
