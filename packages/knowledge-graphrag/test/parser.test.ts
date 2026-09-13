@@ -12,3 +12,7 @@ test('rejects invalid UTF-8 and binary content', () => {
   assert.throws(() => parseTextDocument(new Uint8Array([0xc3, 0x28]), 'text/plain'), /UTF-8/);
   assert.throws(() => parseTextDocument(new Uint8Array([0, 1, 2]), 'text/plain'), /binary/);
 });
+
+test('rejects MIME types outside the text allow-list at runtime', () => {
+  assert.throws(() => parseTextDocument(new TextEncoder().encode('hello'), 'application/pdf' as never), /MIME/);
+});

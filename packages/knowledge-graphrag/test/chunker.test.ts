@@ -17,3 +17,9 @@ test('stable chunk ids are UUID-shaped and deterministic', () => {
   assert.notEqual(a, stableChunkId('doc', 1, 'hello'));
   assert.match(a, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });
+
+test('does not fabricate heading paths when a chunk starts inside a long heading line', () => {
+  const doc = parseTextDocument(new TextEncoder().encode('# A heading that is longer than one chunk\nbody'), 'text/markdown');
+  const chunks = splitIntoChunks(doc, { size: 8, overlap: 2 });
+  assert.ok(chunks.every((chunk) => chunk.headingPath.length === 0 || chunk.headingPath[0] === 'A heading that is longer than one chunk'));
+});

@@ -26,3 +26,20 @@ test('merges duplicate relation sources and applies traversal bounds', () => {
   assert.equal(result.relations.length, 1);
   assert.deepEqual(result.relations[0]?.sourceChunkIds, ['c1', 'c2']);
 });
+
+test('applies hop, fan-out, and relation caps independently', () => {
+  const graph = new InMemoryGraphStore();
+  graph.addExtraction('d', 'c1', extraction(['A', 'B'], [['A', 'r', 'B']]));
+  graph.addExtraction('d', 'c2', extraction(['B', 'C'], [['B', 'r', 'C']]));
+  graph.addExtraction('d', 'c3', extraction(['A', 'D'], [['A', 'r', 'D']]));
+  assert.equal(graph.traverse(['a'], { maxHops: 0, maxFanout: 10, maxRelations: 10 }).relations.length, 0);
+  assert.equal(graph.traverse(['a'], { maxHops: 1, maxFanout: 1, maxRelations: 10 }).relations.length, 1);
+  assert.equal(graph.traverse(['a'], { maxHops: 10, maxFanout: 10, maxRelations: 1 }).relations.length, 1);
+});
+
+test('rejects invalid graph limits', () => {
+  const graph = new InMemoryGraphStore();
+  assert.throws(() => graph.traverse(['a'], { maxHops: -1, maxFanout: 1, maxRelations: 1 }), /limit/);
+  assert.throws(() => graph.traverse(['a'], { maxHops: 1, maxFanout: -1, maxRelations: 1 }), /limit/);
+  assert.throws(() => graph.traverse(['a'], { maxHops: 1, maxFanout: 1, maxRelations: -1 }), /limit/);
+});

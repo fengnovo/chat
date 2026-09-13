@@ -12,19 +12,24 @@ export function splitIntoChunks(document: ParsedDocument, options: { size: numbe
   if (!Number.isInteger(options.size) || options.size <= 0) throw new Error('size must be positive');
   if (!Number.isInteger(options.overlap) || options.overlap < 0 || options.overlap >= options.size) throw new Error('overlap must be less than size');
   const chunks: TextChunk[] = [];
+  const headingRecords: Array<{ start: number; end: number; level: number; title: string }> = [];
+  if (document.mime === 'text/markdown') {
+    let offset = 0;
+    for (const line of document.text.split(/\r?\n/)) {
+      const end = offset + line.length;
+      const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+      if (match) headingRecords.push({ start: offset, end, level: match[1]!.length, title: match[2]! });
+      offset = end + 1;
+    }
+  }
   let start = 0;
   while (start < document.text.length) {
     const end = Math.min(start + options.size, document.text.length);
     const text = document.text.slice(start, end);
-    const headings = document.mime === 'text/markdown' ? document.text.slice(0, start).split(/\r?\n/).reduce((path, line) => {
-      const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-      if (!match) return path;
-      const level = match[1]!.length; path[level - 1] = match[2]!; return path.slice(0, level);
-    }, [] as string[]) : [];
-    if (document.mime === 'text/markdown' && start === 0) {
-      const first = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(document.text.split(/\r?\n/)[0] ?? '');
-      if (first) headings.push(first[2]!);
-    }
+    const headings = headingRecords.filter((heading) => heading.end <= start || (heading.start >= start && heading.end <= end))
+      .sort((a, b) => a.start - b.start).reduce((path, heading) => {
+        path[heading.level - 1] = heading.title; return path.slice(0, heading.level);
+      }, [] as string[]);
     chunks.push({ ordinal: chunks.length, text, headingPath: headings });
     if (end === document.text.length) break;
     start = end - options.overlap;

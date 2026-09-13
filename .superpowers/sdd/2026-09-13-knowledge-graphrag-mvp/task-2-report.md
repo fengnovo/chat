@@ -20,7 +20,14 @@ Implemented `@repo/knowledge-graphrag` as a side-effect-free pure algorithm pack
 - `pnpm --filter @repo/knowledge-graphrag build`: passed.
 - `git diff --check`: passed.
 
+## Fix round 1 TDD evidence
+
+- Red: the newly added regression suite failed in five targeted cases (heading-boundary metadata, provenance union, invalid graph limits, invalid candidate limit, and runtime MIME validation).
+- Green: after minimal fixes, `pnpm --filter @repo/knowledge-graphrag test` reports 13 passed; package typecheck and build also pass.
+- Added independent hop, fan-out, and relation-cap assertions, plus invalid-limit rejection coverage.
+
 ## Concerns / follow-up
 
 - Chunking is character-based and intentionally minimal; later index-pipeline work can add token-aware policies without changing the pure API.
 - Graph relation IDs are deterministic SHA-256-derived IDs and relation traversal is in-memory only; the persistence adapter should preserve the same normalized keys and provenance semantics.
+- Heading state is derived from complete source-line offsets, so chunks beginning inside a heading never receive fabricated prefix paths.

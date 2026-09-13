@@ -13,3 +13,18 @@ test('deduplicates vector and graph evidence by chunk and retains selected relat
   assert.deepEqual(result[2]?.sourceChunkIds, ['c3']);
   assert.ok(!result.some((x) => x.chunkId === 'c4'));
 });
+
+test('unions vector and selected graph relation provenance deterministically', () => {
+  const result = mergeCandidates(
+    [{ chunkId: 'c1', score: 0.9, sourceChunkIds: ['c1', 'v'] }],
+    { entityKeys: [], relations: [{ id: 'r', source: 'a', target: 'b', type: 'uses', sourceChunkIds: ['c1', 'g', 'v'] }], chunkIds: [] },
+    { maxCandidates: 2 },
+  );
+  assert.equal(result[0]?.via, 'vector+graph');
+  assert.deepEqual(result[0]?.sourceChunkIds, ['c1', 'v', 'g']);
+});
+
+test('rejects invalid candidate limits', () => {
+  assert.throws(() => mergeCandidates([], { entityKeys: [], relations: [], chunkIds: [] }, { maxCandidates: -1 }), /limit/);
+  assert.throws(() => mergeCandidates([], { entityKeys: [], relations: [], chunkIds: [] }, { maxCandidates: Number.POSITIVE_INFINITY }), /limit/);
+});

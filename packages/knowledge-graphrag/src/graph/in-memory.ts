@@ -3,6 +3,9 @@ import type { GraphExtraction, GraphLimits, GraphRelation, GraphStore, GraphTrav
 
 export function normalizeEntityKey(name: string): string { return name.trim().toLocaleLowerCase().replace(/\s+/g, ' '); }
 function relationId(source: string, type: string, target: string): string { return createHash('sha256').update(`${source}\0${type}\0${target}`).digest('hex').slice(0, 32); }
+function validateLimits(limits: GraphLimits): void {
+  if (![limits.maxHops, limits.maxFanout, limits.maxRelations].every((value) => Number.isFinite(value) && Number.isInteger(value) && value >= 0)) throw new Error('Invalid graph limit');
+}
 
 export class InMemoryGraphStore implements GraphStore {
   private readonly entities = new Map<string, Set<string>>();
@@ -30,6 +33,7 @@ export class InMemoryGraphStore implements GraphStore {
   }
 
   traverse(seedKeys: Iterable<string>, limits: GraphLimits): GraphTraversal {
+    validateLimits(limits);
     const seeds = [...new Set([...seedKeys].map(normalizeEntityKey))];
     const seen = new Set(seeds), selected: GraphRelation[] = [], queue = seeds.map((key) => ({ key, hop: 0 }));
     while (queue.length && selected.length < limits.maxRelations) {
