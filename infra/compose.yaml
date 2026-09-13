@@ -46,6 +46,18 @@ services:
       timeout: 3s
       retries: 20
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "56333:6333"
+    volumes:
+      - agent-qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:6333/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -67,4 +79,5 @@ volumes:
   agent-postgres:
   agent-postgres-test:
   agent-redis:
+  agent-qdrant:
   agent-minio:
