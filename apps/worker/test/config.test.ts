@@ -62,3 +62,8 @@ test('GraphRAG MCP configuration has safe disabled defaults', () => {
   assert.equal(config.KNOWLEDGE_MCP_TIMEOUT_MS, 10_000);
   assert.equal(config.KNOWLEDGE_MCP_URL, undefined);
 });
+
+test('GraphRAG MCP enabled parses explicit environment strings', () => {
+  assert.equal(loadWorkerConfig({ ...requiredKeys, KNOWLEDGE_MCP_ENABLED: 'false' }).KNOWLEDGE_MCP_ENABLED, false);
+  assert.equal(loadWorkerConfig({ ...requiredKeys, KNOWLEDGE_MCP_ENABLED: 'true' }).KNOWLEDGE_MCP_ENABLED, true);
+});

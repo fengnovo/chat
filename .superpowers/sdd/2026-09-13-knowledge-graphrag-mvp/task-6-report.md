@@ -12,3 +12,9 @@
 - `pnpm --filter @repo/agent-core typecheck` — passed.
 - `pnpm --filter @repo/agent-worker typecheck` — passed.
 - `git diff --check` — passed.
+
+## Fix round 1
+
+- RED: explicit `KNOWLEDGE_MCP_ENABLED='false'` regression failed under `z.coerce.boolean()` (`true !== false`).
+- GREEN: environment parsing now accepts only explicit `true`/`false`; failed MCP initialization closes its partially-created client before falling back.
+- Verification: agent-core and worker tests/typechecks passed; `git diff --check` passed.

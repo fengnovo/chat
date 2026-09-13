@@ -251,14 +251,16 @@ async function loadMcpTools(configPath?: string, server?: McpServerConfig) {
   if (!server && (!configPath || !existsSync(configPath))) {
     return { tools: [], status: 'not configured', client: null };
   }
+  let client: MultiServerMCPClient | null = null;
   try {
     const config = server
       ? { mcpServers: { graphrag: { type: 'http', url: server.url, headers: { Authorization: `Bearer ${server.token}` }, timeout: server.timeoutMs } } }
       : JSON.parse(await readFile(configPath!, 'utf8')) as Record<string, unknown>;
-    const client = new MultiServerMCPClient(config as never);
+    client = new MultiServerMCPClient(config as never);
     const tools = await client.getTools();
     return { tools, status: `${tools.length} tools connected`, client };
   } catch {
+    await client?.close().catch(() => undefined);
     return { tools: [], status: server ? 'GraphRAG unavailable' : 'MCP unavailable', client: null };
   }
 }

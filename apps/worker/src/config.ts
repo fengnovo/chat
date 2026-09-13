@@ -56,7 +56,7 @@ const schema = z.object({
   KNOWLEDGE_MCP_URL: z.string().url().optional(),
   KNOWLEDGE_MCP_SECRET: z.string().optional(),
   KNOWLEDGE_MCP_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(10_000),
-  KNOWLEDGE_MCP_ENABLED: z.coerce.boolean().default(false),
+  KNOWLEDGE_MCP_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
 });
 
 export type WorkerConfig = ReturnType<typeof loadWorkerConfig>;
