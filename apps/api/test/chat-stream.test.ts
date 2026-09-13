@@ -133,6 +133,7 @@ test('a coalesced runner stops rerunning once the task reports completion', asyn
 test('retrieval completion keeps the transient trace and emits bounded persistent citations', () => {
   const retrieval = {
     runId,
+    seq: 1,
     timestamp: new Date().toISOString(),
     type: 'retrieval.completed' as const,
     retrievalId: '00000000-0000-4000-8000-000000000002',

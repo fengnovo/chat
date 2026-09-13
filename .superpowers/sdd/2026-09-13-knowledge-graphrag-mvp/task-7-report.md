@@ -15,6 +15,7 @@ Implemented persistent GraphRAG citations across API SSE/history and the Web cha
 - `pnpm --filter web test` — 3 passed
 - `pnpm --filter web typecheck` — passed
 - `git diff --check` — passed
+- Post-task API typecheck fixture fix: retrieval event now includes the required `seq` field.
 
 ## Notes
 
