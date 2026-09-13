@@ -11,6 +11,7 @@ import { AuthenticationError, createAuthenticator } from './auth.js';
 import type { ApiConfig } from './config.js';
 import { RunOutboxDispatcher } from './outbox.js';
 import { registerRoutes } from './routes.js';
+import { registerKnowledgeRoutes } from './knowledge-routes.js';
 import { StreamSubscriptionHub } from './stream-subscriptions.js';
 
 interface BuildAppOptions {
@@ -18,6 +19,8 @@ interface BuildAppOptions {
   repository: AgentRepository;
   publisher?: Redis;
   queue?: Queue;
+  knowledgeQueue?: Queue;
+  knowledgeRepository?: import('./types.js').KnowledgeRepositoryApi;
   artifacts?: S3ArtifactStore;
 }
 
@@ -37,6 +40,8 @@ export async function buildApp(options: BuildAppOptions) {
     new Queue(RUN_QUEUE_NAME, {
       connection: queueConnection!,
     });
+  const knowledgeQueueConnection = options.knowledgeQueue ? null : new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
+  const knowledgeQueue = options.knowledgeQueue ?? new Queue('knowledge-index', { connection: knowledgeQueueConnection! });
   const authenticate = createAuthenticator(options.config);
   const artifacts =
     options.artifacts ??
@@ -119,6 +124,13 @@ export async function buildApp(options: BuildAppOptions) {
     artifacts,
     outbox,
     streamSubscriptions,
+    knowledgeQueue,
+  });
+  await registerKnowledgeRoutes(app, {
+    config: options.config,
+    repository: options.knowledgeRepository ?? (options.repository as unknown as import('./types.js').KnowledgeRepositoryApi),
+    knowledgeQueue,
+    artifacts,
   });
 
   app.addHook('onReady', async () => outbox.start());
@@ -127,7 +139,9 @@ export async function buildApp(options: BuildAppOptions) {
     await outbox.stop();
     await streamSubscriptions.closeAll();
     await queue.close();
+    await knowledgeQueue.close();
     await queueConnection?.quit();
+    await knowledgeQueueConnection?.quit();
     await publisher.quit();
     artifacts.destroy();
   });

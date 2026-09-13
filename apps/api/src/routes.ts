@@ -17,6 +17,7 @@ import {
   runEventsChannel,
   updateSessionSchema,
   uploadProjectSchema,
+  knowledgeBaseIdsSchema,
 } from '@repo/contracts';
 import { RepositoryNotFoundError } from '@repo/db';
 import type { FastifyInstance } from 'fastify';
@@ -254,6 +255,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
         sessionId,
         message: input.message,
         ...(key ? { idempotencyKey: key } : {}),
+        knowledgeBaseIds: input.knowledgeBaseIds,
       });
       if (result.created) {
         services.outbox.wake();
@@ -429,6 +431,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   const chatRequestSchema = z.object({
     chat_id: z.string().min(1).max(200).optional(),
     project_id: z.uuid().optional(),
+    knowledge_base_ids: knowledgeBaseIdsSchema.default([]),
     messages: z.array(z.record(z.string(), z.unknown())),
   });
 
@@ -469,6 +472,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       const result = await services.repository.createRun(request.auth, {
         sessionId: session.id,
         message: message.trim(),
+        knowledgeBaseIds: input.knowledge_base_ids,
       });
       if (result.created) services.outbox.wake();
       return streamWorkflowRun(request, reply, services, result.run.id);

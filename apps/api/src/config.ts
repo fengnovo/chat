@@ -23,6 +23,7 @@ const schema = z
     S3_SECRET_KEY: z.string().default('agent-local-secret'),
     ARTIFACT_MAX_BYTES: z.coerce.number().int().positive().default(100_000_000),
     PROJECT_UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(20_000_000),
+    KNOWLEDGE_DOCUMENT_MAX_BYTES: z.coerce.number().int().positive().default(20_000_000),
     RATE_LIMIT_REQUESTS: z.coerce.number().int().positive().default(300),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(500),
