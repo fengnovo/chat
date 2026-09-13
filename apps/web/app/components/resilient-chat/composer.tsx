@@ -15,7 +15,6 @@ function Composer({
   onSubmit,
   onSuggestion,
   suggestions,
-  tokens,
   todos,
 }: {
   activity: string | null;
@@ -28,7 +27,6 @@ function Composer({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSuggestion: (suggestion: string) => Promise<void>;
   suggestions: string[];
-  tokens: number;
   todos: AgentTodo[];
 }) {
   return (
@@ -38,12 +36,6 @@ function Composer({
         <div className="composer-activity" role="status" aria-live="polite">
           <span className="activity-spinner" aria-hidden="true" />
           <span>{activity}</span>
-        </div>
-      )}
-      {tokens > 0 && (
-        <div className="composer-tokens" role="status" aria-live="polite">
-          <span className="tokens-dot" aria-hidden="true" />
-          本次运行已生成约 {tokens.toLocaleString('zh-CN')} tokens
         </div>
       )}
       {suggestions.length > 0 && !isBusy && !disabled && (

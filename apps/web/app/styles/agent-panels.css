@@ -136,15 +136,16 @@
   font-weight: 600;
 }
 
-/* 过程区：默认折叠，展开后固定 200px 高度、内部滚动 */
-/* 宽度与输入框上方的任务列表保持一致：同一列宽（max-width 1050）并居中。 */
+/* 过程区：默认折叠，展开后固定 200px 高度、内部滚动。
+   嵌入在 assistant 消息体内，与正文同列、顶边与头像对齐。 */
 .agent-process {
   background: #fbfaf7;
   border: 1px solid #e7e2d6;
   border-radius: 12px;
-  margin: 2px auto 26px;
-  max-width: 1050px;
+  margin: 0 0 14px;
+  /* 宽度始终撑满消息正文列，不随最新日志文案长短变化 */
   overflow: hidden;
+  width: 100%;
 }
 
 .agent-process-head {
@@ -166,8 +167,20 @@
 }
 
 .agent-process-title {
+  flex: 0 0 auto;
+}
+
+/* 标题栏中间：实时显示最新一条日志，只占一行，超长省略；
+   宽度自由伸缩，把「本轮时间 / 收起」始终顶在最右边不动 */
+.agent-process-live,
+.agent-process-spacer {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.agent-process-live {
+  color: var(--ink-muted);
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -175,9 +188,11 @@
 
 .agent-process-time {
   color: var(--ink-muted);
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .agent-process-toggle {

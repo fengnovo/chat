@@ -1,5 +1,5 @@
 import { AIBoundary } from '@cognicatch/react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -11,21 +11,30 @@ import { CitationList } from './citation-list';
 function Message({
   copied,
   dismissedCards,
+  header,
   liveLabel,
   message,
   onBoundaryError,
   onCopy,
   onDismissCard,
+  runTokens,
+  showWaitingDots,
   streaming,
 }: {
   copied: boolean;
   dismissedCards: Set<string>;
+  /** 本轮执行面板：放在正文上方、与消息正文同列（不高于头像）。 */
+  header?: ReactNode;
   /** 流式生成但还没有正文时，气泡内实时展示的当前动作/思考。 */
   liveLabel: string | null;
   message: ResilientMessage;
   onBoundaryError: () => void;
   onCopy: (id: string, text: string) => Promise<void>;
   onDismissCard: (id: string) => void;
+  /** 本轮运行结束后的 token 用量，展示在最后一条 assistant 消息的复制按钮后。 */
+  runTokens: number;
+  /** 执行面板可见时不再重复显示三点 loading（面板头部自带 spinner）。 */
+  showWaitingDots: boolean;
   streaming: boolean;
 }) {
   const text = messageText(message);
@@ -42,12 +51,12 @@ function Message({
         <Icon name={isUser ? 'user' : 'shield'} size={17} />
       </div>
       <div className="message-body">
-        <div className="message-meta">
-          <strong>{isUser ? '你' : 'Coding Agent'}</strong>
-          {!isUser && message.metadata?.model && (
+        {!isUser && message.metadata?.model && (
+          <div className="message-meta">
             <span>{message.metadata.model}</span>
-          )}
-        </div>
+          </div>
+        )}
+        {header}
         <div className={`message-copy ${isUser ? '' : 'markdown-content'}`}>
           {text ? (
             isUser ? (
@@ -55,7 +64,7 @@ function Message({
             ) : (
               <MarkdownContent content={text} />
             )
-          ) : streaming ? (
+          ) : streaming && showWaitingDots ? (
             <span className="streaming-live">
               <StreamingDots />
               {liveLabel && (
@@ -63,7 +72,9 @@ function Message({
               )}
             </span>
           ) : (
-            <p className="message-empty">本轮没有返回任何内容，可以重新发送这条消息。</p>
+            !isUser && !streaming && (
+              <p className="message-empty">本轮没有返回任何内容，可以重新发送这条消息。</p>
+            )
           )}
         </div>
 
@@ -87,7 +98,7 @@ function Message({
 
         {!isUser && <CitationList citations={citations} />}
 
-        {!isUser && text && (
+        {!isUser && text && !streaming && (
           <div className="message-actions">
             <button
               type="button"
@@ -96,6 +107,12 @@ function Message({
               <Icon name={copied ? 'check' : 'copy'} size={14} />
               {copied ? '已复制' : '复制'}
             </button>
+            {runTokens > 0 && (
+              <span className="message-tokens">
+                <span className="tokens-dot" aria-hidden="true" />
+                本次运行已生成约 {runTokens.toLocaleString('zh-CN')} tokens
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -152,18 +169,21 @@ function StreamingDots() {
   );
 }
 
-function ThinkingRow() {
+function ThinkingRow({ children }: { children?: ReactNode }) {
   return (
     <article className="message-row is-assistant thinking-row">
       <div className="avatar">
         <Icon name="shield" size={17} />
       </div>
       <div className="message-body">
-        <div className="message-meta">
-          <strong>Coding Agent</strong>
-          <span>正在等待 Worker 启动</span>
-        </div>
-        <StreamingDots />
+        {children ?? (
+          <>
+            <div className="message-meta">
+              <span>正在等待 Worker 启动</span>
+            </div>
+            <StreamingDots />
+          </>
+        )}
       </div>
     </article>
   );

@@ -45,7 +45,9 @@
 }
 
 .message-body {
-  max-width: min(940px, calc(100% - 47px));
+  /* 始终占满头像右侧的整列宽度，不随回复内容长短变化；
+     执行面板与正文同宽，各条消息左右边缘恒定对齐 */
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -60,11 +62,6 @@
   display: flex;
   gap: 8px;
   margin: 0 2px 7px;
-}
-
-.message-meta strong {
-  font-size: 13px;
-  font-weight: 700;
 }
 
 .message-meta span {
@@ -244,6 +241,7 @@
 }
 
 .message-actions {
+  align-items: center;
   display: flex;
   margin-top: 8px;
 }
@@ -264,6 +262,16 @@
 .message-actions button:hover {
   background: var(--surface-soft);
   color: var(--ink);
+}
+
+.message-tokens {
+  align-items: center;
+  color: var(--ink-muted);
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  gap: 6px;
+  margin-left: 6px;
 }
 
 .insight-card {

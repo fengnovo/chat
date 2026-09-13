@@ -33,17 +33,6 @@
   }
 }
 
-.composer-tokens {
-  align-items: center;
-  color: var(--ink-muted);
-  display: flex;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  gap: 7px;
-  margin: 0 auto 8px;
-  max-width: 1050px;
-}
-
 .tokens-dot {
   background: var(--violet);
   border-radius: 999px;

@@ -42,6 +42,11 @@ const schema = z
     OIDC_AUDIENCE: z.string().optional(),
     OIDC_JWKS_URL: z.string().url().optional(),
     WORKSPACE_ROOT: z.string().default(path.join(repositoryRoot, 'data/workspaces')),
+    // 与 worker 的沙箱配置保持一致：删除会话时需要级联清理沙箱文件目录。
+    SANDBOX_RUNTIME: z.enum(['docker', 'e2b-cloud']).default('docker'),
+    // 优先专用变量；本地沿用 .env 里 worker 的 DOCKER_SANDBOX_SESSIONS_ROOT。
+    SANDBOX_SESSIONS_ROOT: z.string().optional(),
+    DOCKER_SANDBOX_SESSIONS_ROOT: z.string().optional(),
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === 'production' && value.AUTH_MODE === 'dev') {
@@ -77,6 +82,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
   if (!hasCompleteEmbeddingProfile && embeddingInputs.some((item) => item !== undefined)) {
     throw new Error('EMBEDDING_PROFILE, EMBEDDING_MODEL and EMBEDDING_DIM must be configured together');
   }
+  // worker 的 dev 进程 cwd 是 apps/worker，.env 里的相对路径
+  // ./data/sandboxes 实际落在 apps/worker/data/sandboxes；
+  // API 的 cwd 不同，相对路径统一按 worker 目录解析才能指向同一份文件。
+  const workerRoot = path.join(repositoryRoot, 'apps/worker');
+  const sandboxSessionsRoot =
+    value.SANDBOX_SESSIONS_ROOT ??
+    value.DOCKER_SANDBOX_SESSIONS_ROOT ??
+    path.join(repositoryRoot, 'data/sandboxes');
   return {
     ...value,
     DATABASE_URL: databaseUrl,
@@ -87,5 +100,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
       dimension: value.EMBEDDING_DIM!,
       collectionPrefix: value.QDRANT_COLLECTION_PREFIX,
     } : undefined,
+    SANDBOX_SESSIONS_ROOT: path.isAbsolute(sandboxSessionsRoot)
+      ? path.normalize(sandboxSessionsRoot)
+      : path.resolve(workerRoot, sandboxSessionsRoot),
   };
 }

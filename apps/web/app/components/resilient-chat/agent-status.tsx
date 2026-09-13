@@ -74,6 +74,22 @@ function AgentStatusPanel({
       ? '执行日志'
       : '思考过程';
 
+  // 标题栏中间固定展示最新一条日志内容（单行省略）：
+  // 工具行与展开列表里的文案保持一致，旁白则直接显示原文。
+  const latestEntry = status.entries[status.entries.length - 1];
+  let latestLine: string | null = null;
+  if (latestEntry) {
+    if (latestEntry.kind === 'narration') {
+      latestLine = latestEntry.text;
+    } else {
+      const stateText = latestEntry.phase === 'start' ? '请求调用' : '完成';
+      const summary = toolCallSummary(latestEntry.tool, latestEntry.input);
+      latestLine = summary
+        ? `${latestEntry.tool} ${stateText} · ${summary}`
+        : `${latestEntry.tool} ${stateText}`;
+    }
+  }
+
   return (
     <section className="agent-process" aria-label="Agent 执行过程">
       <button
@@ -88,6 +104,15 @@ function AgentStatusPanel({
           <Icon name={hasToolCalls ? 'wrench' : 'check'} size={15} />
         )}
         <span className="agent-process-title">{title}</span>
+        {/* 运行中：中间实时显示最新一条日志；结束后状态字消失，
+            用等宽占位把时间/收起始终顶在最右，标题栏不发生跳动 */}
+        {busy && latestLine ? (
+          <span className="agent-process-live" title={latestLine}>
+            {latestLine}
+          </span>
+        ) : (
+          <span className="agent-process-spacer" aria-hidden="true" />
+        )}
         {status.elapsedSeconds > 0 && (
           <span className="agent-process-time">· 本轮 {formatDuration(status.elapsedSeconds)}</span>
         )}

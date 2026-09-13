@@ -201,27 +201,48 @@ function ChatRuntime() {
     setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId));
   }, [conversation.chatId]);
 
-  // 首次加载时，如果当前对话对应一条历史会话，拉取它的文件记录。
-  const historyFilesLoadedRef = useRef(false);
+  // 当前会话的历史文件记录。运行结束后会重新拉取（refreshHistoryFiles），
+  // 否则新一轮 run 一开始清空实时工具记录时，上一轮生成的文件会从面板里消失。
+  const sessionsRef = useRef(sessions);
   useEffect(() => {
-    if (historyFilesLoadedRef.current || !sessionsLoaded) return;
+    sessionsRef.current = sessions;
+  }, [sessions]);
+  const chatIdRef = useRef(conversation.chatId);
+  useEffect(() => {
+    chatIdRef.current = conversation.chatId;
+  }, [conversation.chatId]);
+
+  const refreshHistoryFiles = useCallback(async () => {
+    const match = sessionsRef.current.find(
+      (session) => session.externalKey === chatIdRef.current,
+    );
+    if (!match) return;
+    try {
+      const files = await fetchSessionFiles(match.id);
+      setHistoryFiles(
+        files.map((file) => ({
+          path: file.path,
+          content: file.content,
+          operation: file.operation as TouchedFile['operation'],
+        })),
+      );
+    } catch {
+      // 历史文件拉取失败不影响聊天主流程
+    }
+  }, []);
+
+  // 首次加载（或切换会话）时拉取一次历史文件。
+  const historyFilesChatIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionsLoaded) return;
+    if (historyFilesChatIdRef.current === conversation.chatId) return;
     const match = sessions.find(
       (session) => session.externalKey === conversation.chatId,
     );
     if (!match) return;
-    historyFilesLoadedRef.current = true;
-    void fetchSessionFiles(match.id)
-      .then((files) =>
-        setHistoryFiles(
-          files.map((file) => ({
-            path: file.path,
-            content: file.content,
-            operation: file.operation as TouchedFile['operation'],
-          })),
-        ),
-      )
-      .catch(() => undefined);
-  }, [sessionsLoaded, sessions, conversation.chatId]);
+    historyFilesChatIdRef.current = conversation.chatId;
+    void refreshHistoryFiles();
+  }, [sessionsLoaded, sessions, conversation.chatId, refreshHistoryFiles]);
 
   const transport = useMemo(() => {
     return new WorkflowChatTransport<ResilientMessage>({
@@ -369,6 +390,9 @@ function ChatRuntime() {
           event.type === 'run.failed'
         ) {
           setPendingInterrupt(null);
+          // 本轮结束：把这一轮写过的文件并入历史文件记录，
+          // 后续新一轮运行清空实时记录时文件面板仍然完整。
+          void refreshHistoryFiles();
         }
         if (event.type === 'run.failed') {
           setRunFailure({ code: event.code, message: event.message });
@@ -465,6 +489,13 @@ function ChatRuntime() {
   const lastMessage = messages.at(-1);
   const hasAssistantPlaceholder =
     lastMessage?.role === 'assistant' && !messageText(lastMessage);
+  // 执行日志面板要插在最后一条 assistant 消息之前（本轮回复的上方）。
+  const lastAssistantIndex = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === 'assistant') return index;
+    }
+    return -1;
+  }, [messages]);
   const lastAssistant = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant');
@@ -688,18 +719,27 @@ function ChatRuntime() {
 
   // 助手还没输出正文时，气泡里实时显示它正在做什么：优先用模型的过程旁白，
   // 没有旁白时回退到当前正在执行的工具名，避免只剩三个点、用户不知道进展。
-  const liveActivityLabel = useMemo(() => {
+  const latestNarrationText = useMemo(() => {
     const latestNarration = [...agentActivity.entries]
       .reverse()
       .find((entry): entry is Extract<AgentActivityEntry, { kind: 'narration' }> =>
         entry.kind === 'narration',
       );
-    if (latestNarration) return latestNarration.text;
+    return latestNarration?.text ?? null;
+  }, [agentActivity.entries]);
+
+  const liveActivityLabel = useMemo(() => {
+    if (latestNarrationText) return latestNarrationText;
     if (agentActivity.runningTool) {
       return `正在执行 ${agentActivity.runningTool}…`;
     }
     return null;
-  }, [agentActivity.entries, agentActivity.runningTool]);
+  }, [latestNarrationText, agentActivity.runningTool]);
+
+  // 执行面板：嵌入本轮 assistant 消息体顶部，与正文同列、顶边不高于头像。
+  const processPanel = (
+    <AgentStatusPanel busy={isBusy} status={agentActivity} />
+  );
 
   // 从工具调用记录里提取 AI 操作过的文件，按路径去重，保留最后一次操作的内容。
   // 合并历史会话的文件记录（从后端加载）和当前 run 的实时工具调用。
@@ -991,14 +1031,22 @@ function ChatRuntime() {
         );
       }
       const deleted = sessionDialog.session;
-      setSessions((current) =>
-        current.filter((session) => session.id !== deleted.id),
+      const wasActive = deleted.externalKey === conversation.chatId;
+      // 列表按最近更新排序，过滤后的第一个就是左侧第一项。
+      const remaining = sessions.filter(
+        (session) => session.id !== deleted.id,
       );
-      if (deleted.externalKey === conversation.chatId) {
-        await stopCurrentConversation();
-        resetConversation(crypto.randomUUID());
-      }
+      setSessions(remaining);
       setSessionDialog(null);
+      if (wasActive) {
+        // 删掉的正是当前会话：自动切到剩余的第一个；一个都不剩就落到新建对话。
+        if (remaining[0]) {
+          await selectSession(remaining[0]);
+        } else {
+          await stopCurrentConversation();
+          resetConversation(crypto.randomUUID());
+        }
+      }
       setNotice('会话已删除');
     } catch (caught) {
       setSessionDialogError(
@@ -1217,10 +1265,13 @@ function ChatRuntime() {
         >
           {hasConversation && (
             <div className="message-list" ref={messageListRef}>
-              {messages.map((message) => (
+              {messages.map((message, index) => (
                 <Message
                   copied={copiedMessage === message.id}
                   dismissedCards={dismissedCards}
+                  header={
+                    index === lastAssistantIndex ? processPanel : null
+                  }
                   key={message.id}
                   message={message}
                   onBoundaryError={() => {
@@ -1240,6 +1291,16 @@ function ChatRuntime() {
                       new Set(current).add(messageId),
                     );
                   }}
+                  runTokens={
+                    !isBusy &&
+                    message.role === 'assistant' &&
+                    index === lastAssistantIndex
+                      ? agentActivity.tokens
+                      : 0
+                  }
+                  showWaitingDots={
+                    !(index === lastAssistantIndex && processPanelVisible)
+                  }
                   streaming={
                     isBusy &&
                     message.id === lastMessage?.id &&
@@ -1254,8 +1315,11 @@ function ChatRuntime() {
                   }
                 />
               ))}
-              {status === 'submitted' && !hasAssistantPlaceholder && <ThinkingRow />}
-              <AgentStatusPanel busy={isBusy} status={agentActivity} />
+              {status === 'submitted' && !hasAssistantPlaceholder && (
+                <ThinkingRow>
+                  {processPanelVisible ? processPanel : null}
+                </ThinkingRow>
+              )}
               {pendingInterrupt && (
                 <PendingInteraction
                   key={pendingInterrupt.interruptId}
@@ -1328,7 +1392,6 @@ function ChatRuntime() {
           onSubmit={handleSubmit}
           onSuggestion={submitText}
           suggestions={suggestions}
-          tokens={agentActivity.tokens}
           todos={agentTodos}
         />
 
