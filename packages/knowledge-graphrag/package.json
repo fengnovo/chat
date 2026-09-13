@@ -1,0 +1,13 @@
+{
+  "name": "@repo/knowledge-graphrag",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "development": "./src/index.ts", "default": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --conditions=development --import tsx --test test/**/*.test.ts"
+  },
+  "devDependencies": { "@types/node": "^26.3.0", "tsx": "^4.23.12", "typescript": "^5.9.2" }
+}
