@@ -1,19 +1,20 @@
-import { createHash } from 'node:crypto';
 import type { EmbeddingProfile, VectorHit } from '../types.js';
+import { collectionForProfile } from '../embedder/profile.js';
+
+export { collectionForProfile } from '../embedder/profile.js';
 
 export interface QdrantPoint { id: string; vector: number[]; payload: Record<string, unknown> }
 export interface QdrantClientLike { getCollections(): Promise<any>; createCollection(name: string, config: any): Promise<any>; createPayloadIndex(name: string, field: string, config: any): Promise<any>; upsert(name: string, body: any): Promise<any>; search(name: string, body: any): Promise<any[]>; delete(name: string, body: any): Promise<any> }
-
-export function collectionForProfile(profile: EmbeddingProfile, prefix = 'knowledge'): string {
-  const digest = createHash('sha256').update(`${profile.key}\0${profile.model}`).digest('hex').slice(0, 16);
-  return `${prefix}_${digest}_${profile.dimension}`;
-}
 
 export class QdrantChunkStore {
   private collectionName = '';
   constructor(private readonly client: QdrantClientLike, private readonly options: { prefix?: string } = {}) {}
   async ensureCollection(profile: EmbeddingProfile): Promise<string> {
-    this.collectionName = collectionForProfile(profile, this.options.prefix ?? 'knowledge');
+    const derivedName = collectionForProfile(profile, this.options.prefix ?? 'knowledge');
+    if (profile.collectionName && profile.collectionName !== derivedName) {
+      throw new Error(`Embedding profile collection mismatch: expected ${derivedName}, received ${profile.collectionName}`);
+    }
+    this.collectionName = profile.collectionName || derivedName;
     const existing = await this.client.getCollections();
     if (!existing.collections?.some((x: any) => x.name === this.collectionName)) {
       await this.client.createCollection(this.collectionName, { vectors: { size: profile.dimension, distance: 'Cosine' } });
@@ -32,4 +33,3 @@ export class QdrantChunkStore {
     await this.client.delete(this.collectionName, { wait: true, filter: { must: [{ key: 'tenant_id', match: { value: tenantId } }, { key: 'kb_id', match: { value: kbId } }, { key: 'document_id', match: { value: documentId } }] } });
   }
 }
-

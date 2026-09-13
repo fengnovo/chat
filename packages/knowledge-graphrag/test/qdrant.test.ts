@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { QdrantChunkStore } from '../src/store/qdrant.js';
+import { buildEmbeddingProfile, QdrantChunkStore } from '../src/index.js';
 
 function fakeClient() {
   const points = new Map<string, Map<string, any>>();
@@ -46,4 +46,10 @@ test('deleteByDocument only removes matching tenant, kb, and document', async ()
   const collection = [...client.points.values()][0]!;
   assert.equal(collection.has('1'), false); assert.equal(collection.has('2'), true);
   assert.deepEqual(client.requests.find((r: any) => r.type === 'delete').body.filter.must, [{ key: 'tenant_id', match: { value: 't' } }, { key: 'kb_id', match: { value: 'k' } }, { key: 'document_id', match: { value: 'd' } }]);
+});
+
+test('rejects a profile whose collection was built with a different Qdrant prefix', async () => {
+  const store = new QdrantChunkStore(fakeClient() as any, { prefix: 'runtime' });
+  const profile = buildEmbeddingProfile({ key: 'profile', model: 'model', dimension: 3, collectionPrefix: 'configured' });
+  await assert.rejects(() => store.ensureCollection(profile), /collection mismatch/i);
 });

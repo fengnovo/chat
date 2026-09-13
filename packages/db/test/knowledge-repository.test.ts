@@ -67,3 +67,45 @@ test('regular tenant members cannot upload or confirm in another owner tenant-vi
   assert.ok(queries.every((q) => !/visibility = 'tenant'/i.test(q) || /owner_user_id|ARRAY\['owner','admin'\]/i.test(q)));
   assert.ok(queries.some((q) => /knowledge_bases/i.test(q) && /owner_user_id/i.test(q) && !/visibility = 'tenant'/i.test(q)));
 });
+
+test('createKnowledgeBase persists the injected embedding profile without model or collection SQL constants', async () => {
+  const queries: Array<{ text: string; values: unknown[] }> = [];
+  const pool: any = {
+    query: async (text: string, values: unknown[]) => {
+      queries.push({ text, values });
+      return { rows: [{ id: values[0] }], rowCount: 1 };
+    },
+  };
+  const profile = {
+    key: 'bailian-v4',
+    model: 'text-embedding-v4',
+    dimension: 1024,
+    collectionName: 'knowledge_0123456789abcdef_1024',
+  };
+  const repo = new KnowledgeRepository(pool, { embeddingProfile: profile });
+  await repo.createKnowledgeBase(
+    { tenantId: 'tenant', userId: 'user', roles: [] },
+    { id: 'kb', name: 'KB' },
+  );
+
+  assert.doesNotMatch(queries[0]!.text, /text-embedding-3-small|1536|\$1,800/);
+  assert.deepEqual(queries[0]!.values.slice(6, 10), [
+    profile.key,
+    profile.model,
+    profile.dimension,
+    profile.collectionName,
+  ]);
+});
+
+test('createKnowledgeBase refuses to invent an embedding profile when none is injected', async () => {
+  let queried = false;
+  const repo = new KnowledgeRepository({ query: async () => { queried = true; return { rows: [] }; } } as any);
+  await assert.rejects(
+    () => repo.createKnowledgeBase(
+      { tenantId: 'tenant', userId: 'user', roles: [] },
+      { id: 'kb', name: 'KB' },
+    ),
+    /embedding profile/i,
+  );
+  assert.equal(queried, false);
+});

@@ -231,6 +231,9 @@ importers:
       '@repo/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@repo/knowledge-graphrag':
+        specifier: workspace:*
+        version: link:../../packages/knowledge-graphrag
       bullmq:
         specifier: ^5.58.5
         version: 5.81.4(supports-color@10.2.2)

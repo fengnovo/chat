@@ -15,3 +15,22 @@ test('development config has local infrastructure defaults', () => {
     'postgresql://agent:agent@127.0.0.1:55433/agent_test',
   );
 });
+
+test('API exposes only the non-sensitive embedding profile inputs', () => {
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    EMBEDDING_PROFILE: 'bailian-v4',
+    EMBEDDING_MODEL: 'text-embedding-v4',
+    EMBEDDING_DIM: '1024',
+    QDRANT_COLLECTION_PREFIX: 'knowledge',
+    EMBEDDING_API_KEY: 'knowledge-service-only',
+  });
+
+  assert.deepEqual(config.KNOWLEDGE_EMBEDDING_PROFILE, {
+    key: 'bailian-v4',
+    model: 'text-embedding-v4',
+    dimension: 1024,
+    collectionPrefix: 'knowledge',
+  });
+  assert.equal('EMBEDDING_API_KEY' in config, false);
+});

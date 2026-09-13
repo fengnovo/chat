@@ -24,6 +24,10 @@ const schema = z
     ARTIFACT_MAX_BYTES: z.coerce.number().int().positive().default(100_000_000),
     PROJECT_UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(20_000_000),
     KNOWLEDGE_DOCUMENT_MAX_BYTES: z.coerce.number().int().positive().default(20_000_000),
+    EMBEDDING_PROFILE: z.string().trim().min(1).optional(),
+    EMBEDDING_MODEL: z.string().trim().min(1).optional(),
+    EMBEDDING_DIM: z.coerce.number().int().positive().optional(),
+    QDRANT_COLLECTION_PREFIX: z.string().trim().min(1).default('knowledge'),
     RATE_LIMIT_REQUESTS: z.coerce.number().int().positive().default(300),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(500),
@@ -68,9 +72,20 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     (value.NODE_ENV === 'test'
       ? 'postgresql://agent:agent@127.0.0.1:55433/agent_test'
       : value.DATABASE_URL);
+  const embeddingInputs = [value.EMBEDDING_PROFILE, value.EMBEDDING_MODEL, value.EMBEDDING_DIM];
+  const hasCompleteEmbeddingProfile = embeddingInputs.every((item) => item !== undefined);
+  if (!hasCompleteEmbeddingProfile && embeddingInputs.some((item) => item !== undefined)) {
+    throw new Error('EMBEDDING_PROFILE, EMBEDDING_MODEL and EMBEDDING_DIM must be configured together');
+  }
   return {
     ...value,
     DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: path.resolve(value.WORKSPACE_ROOT),
+    KNOWLEDGE_EMBEDDING_PROFILE: hasCompleteEmbeddingProfile ? {
+      key: value.EMBEDDING_PROFILE!,
+      model: value.EMBEDDING_MODEL!,
+      dimension: value.EMBEDDING_DIM!,
+      collectionPrefix: value.QDRANT_COLLECTION_PREFIX,
+    } : undefined,
   };
 }

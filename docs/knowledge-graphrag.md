@@ -450,7 +450,9 @@ AND (
   - `POST /api/knowledge-bases/:id/documents/:docId/confirm`
   - `GET /api/knowledge-bases/:id/index-jobs`
 - 预签名上传复用现有 `S3ArtifactStore` 模式，但使用独立的 knowledge object key 前缀。
-- API 只配置上传限制、对象存储和知识索引队列；不持有 Qdrant 或 embedding 配置。
+- API 除上传限制、对象存储和知识索引队列外，只读取非敏感的 embedding profile 元数据
+  （profile key、model、dimension、collection prefix），用于创建知识库时固化索引契约。API 不持有
+  Qdrant URL/key、embedding endpoint 或 embedding API key。
 
 ### 8.4 `apps/worker` 与 `packages/agent-core`
 
@@ -522,12 +524,35 @@ apps/knowledge-service/
 
 | 进程 | 配置 |
 |---|---|
-| API | `KNOWLEDGE_DOCUMENT_MAX_BYTES`、knowledge queue 名称、现有 S3 配置 |
+| API | `KNOWLEDGE_DOCUMENT_MAX_BYTES`、knowledge queue 名称、现有 S3 配置，以及非敏感的 `EMBEDDING_PROFILE` / `EMBEDDING_MODEL` / `EMBEDDING_DIM` / `QDRANT_COLLECTION_PREFIX` |
 | Worker | `GRAPHRAG_ENABLED`、`GRAPHRAG_MCP_URL`、`GRAPHRAG_TOKEN_SECRET`、`GRAPHRAG_TIMEOUT_MS` |
-| knowledge-service | Qdrant URL/key/prefix、embedding model/dim/profile、extractor model、并发/预算、token secret |
+| knowledge-service | Qdrant URL/key/prefix、完整 embedding provider/model/dim/profile/endpoint/API key、extractor model、并发/预算、token secret |
 
 `GRAPHRAG_TOKEN_SECRET` 只由 Worker 和 knowledge-service 持有。API 不需要 Qdrant、embedding 或 GraphRAG
-token 配置。
+token 密钥。embedding 的 `EMBEDDING_API_KEY` 和 `EMBEDDING_BASE_URL` 也只注入 knowledge-service；API
+只需要上一表中的四个非敏感 profile 字段。
+
+主 Agent 模型与 embedding 使用完全独立的配置。比如主模型继续使用 OpenAI，而向量模型使用百炼：
+
+```dotenv
+MODEL=openai:gpt-4o-mini
+OPENAI_API_KEY=<主模型密钥>
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+EMBEDDING_PROVIDER=bailian
+EMBEDDING_PROFILE=bailian-text-embedding-v4-1024
+EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_DIM=1024
+EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBEDDING_API_KEY=<百炼密钥>
+QDRANT_COLLECTION_PREFIX=knowledge
+```
+
+`EMBEDDING_PROVIDER` 支持 `openai`、`bailian` 和 `openai-compatible`。OpenAI 与百炼可省略
+`EMBEDDING_BASE_URL`，分别使用官方 OpenAI endpoint 与百炼兼容模式 endpoint；通用
+`openai-compatible` 必须显式设置 base URL。三种 provider 都必须显式设置 `EMBEDDING_MODEL`、
+`EMBEDDING_DIM` 和独立的 `EMBEDDING_API_KEY`，不会回退复用 `OPENAI_API_KEY` 或
+`OPENAI_BASE_URL`。
 
 ### 10.2 基础设施
 

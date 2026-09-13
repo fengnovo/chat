@@ -10,8 +10,22 @@ const boundedCitations = (value: unknown) => Array.isArray(value) ? value.slice(
   return copy;
 }) : [];
 
+export interface KnowledgeEmbeddingProfile {
+  key: string;
+  model: string;
+  dimension: number;
+  collectionName: string;
+}
+
+export interface KnowledgeRepositoryOptions {
+  embeddingProfile?: KnowledgeEmbeddingProfile;
+}
+
 export class KnowledgeRepository {
-  constructor(private readonly pool: Pick<Pool, 'query'>) {}
+  constructor(
+    private readonly pool: Pick<Pool, 'query'>,
+    private readonly options: KnowledgeRepositoryOptions = {},
+  ) {}
   private readonly leases = new Map<string, string>();
 
   async listKnowledgeBases(auth: AuthContext): Promise<any[]> {
@@ -30,7 +44,9 @@ export class KnowledgeRepository {
   }
 
   async createKnowledgeBase(auth: AuthContext, input: any): Promise<any> {
-    const result = await this.pool.query(`INSERT INTO knowledge_bases (id, tenant_id, owner_user_id, name, description, visibility, embedding_profile_key, embedding_model, embedding_dim, collection_name, chunk_size, chunk_overlap, top_k, max_hops, graph_enabled, status) VALUES ($1,$2,$3,$4,$5,$6,'default','text-embedding-3-small',1536,$1,800,100,10,2,true,'ready') RETURNING *`, [input.id ?? randomUUID(), auth.tenantId, auth.userId, input.name, input.description ?? null, input.visibility ?? 'private']);
+    const profile = input.embeddingProfile ?? this.options.embeddingProfile;
+    if (!profile) throw new Error('Knowledge embedding profile is required');
+    const result = await this.pool.query(`INSERT INTO knowledge_bases (id, tenant_id, owner_user_id, name, description, visibility, embedding_profile_key, embedding_model, embedding_dim, collection_name, chunk_size, chunk_overlap, top_k, max_hops, graph_enabled, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,800,100,10,2,true,'ready') RETURNING *`, [input.id ?? randomUUID(), auth.tenantId, auth.userId, input.name, input.description ?? null, input.visibility ?? 'private', profile.key, profile.model, profile.dimension, profile.collectionName]);
     return result.rows[0];
   }
 

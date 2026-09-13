@@ -7,3 +7,5 @@ export * from './indexer/hash.js';
 export * from './indexer/pipeline.js';
 export * from './store/qdrant.js';
 export * from './store/postgres.js';
+export * from './embedder/profile.js';
+export * from './embedder/openai-compatible.js';
