@@ -19,6 +19,7 @@
     "@repo/db": "workspace:*",
     "bullmq": "^5.58.5",
     "ioredis": "^5.7.0",
+    "jose": "^6.1.0",
     "zod": "^4.6.1"
   },
   "devDependencies": {

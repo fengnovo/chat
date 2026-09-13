@@ -39,6 +39,7 @@ export interface HeadlessAgentOptions {
   models: ModelSpec[];
   circuitBreaker?: CircuitBreakerStore;
   mcpConfigPath?: string;
+  knowledgeMcp?: { url: string; token: string; timeoutMs: number; enabled: boolean };
   skills?: string[];
   memory?: string[];
   autoApproveTools?: boolean;

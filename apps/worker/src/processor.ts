@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import {
@@ -18,6 +19,7 @@ import {
 import type { AgentRepository } from '@repo/db';
 import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
+import { SignJWT } from 'jose';
 
 import type { WorkerConfig } from './config.js';
 import { withSessionLock } from './lock.js';
@@ -143,6 +145,12 @@ async function createRuntime(
 ): Promise<HeadlessAgentRuntime> {
   if (!backend) throw new Error('Deep agent requires a sandbox backend');
   const root = fileURLToPath(new URL('../../..', import.meta.url));
+  const knowledgeMcpEnabled = services.config.KNOWLEDGE_MCP_ENABLED &&
+    Boolean(services.config.KNOWLEDGE_MCP_URL && services.config.KNOWLEDGE_MCP_SECRET) &&
+    job.knowledgeBaseIds.length > 0;
+  const knowledgeToken = knowledgeMcpEnabled
+    ? await createKnowledgeRunToken(job, services.config.KNOWLEDGE_MCP_SECRET!)
+    : '';
   return createDeepAgentRuntime({
     runId: job.runId,
     sessionId: job.sessionId,
@@ -161,7 +169,29 @@ async function createRuntime(
     signal,
     mcpConfigPath:
       services.config.MCP_CONFIG_PATH ?? `${root}/packages/ai-cli/mcp/mcp.json`,
+    knowledgeMcp: {
+      url: services.config.KNOWLEDGE_MCP_URL ?? '',
+      token: knowledgeToken,
+      timeoutMs: services.config.KNOWLEDGE_MCP_TIMEOUT_MS,
+      enabled: knowledgeMcpEnabled,
+    },
   });
+}
+
+export async function createKnowledgeRunToken(job: RunJob, secret: string): Promise<string> {
+  return new SignJWT({
+    tenantId: job.tenantId,
+    userId: job.userId,
+    sessionId: job.sessionId,
+    runId: job.runId,
+    kbIds: job.knowledgeBaseIds,
+  })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuedAt()
+    .setJti(randomUUID())
+    .setAudience('knowledge-service')
+    .setExpirationTime('5m')
+    .sign(new TextEncoder().encode(secret));
 }
 
 /**

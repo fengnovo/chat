@@ -55,3 +55,10 @@ test('demo agent configuration is rejected', () => {
     AGENT_DRIVER: 'demo',
   }));
 });
+
+test('GraphRAG MCP configuration has safe disabled defaults', () => {
+  const config = loadWorkerConfig({ ...requiredKeys });
+  assert.equal(config.KNOWLEDGE_MCP_ENABLED, false);
+  assert.equal(config.KNOWLEDGE_MCP_TIMEOUT_MS, 10_000);
+  assert.equal(config.KNOWLEDGE_MCP_URL, undefined);
+});

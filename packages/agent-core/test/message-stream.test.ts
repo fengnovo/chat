@@ -9,7 +9,34 @@ import {
   normalizeToolInput,
   normalizeToolOutput,
   usageOf,
+  extractRetrievalEvent,
 } from '../src/index.js';
+
+test('structured GraphRAG output becomes a bounded retrieval event', () => {
+  const event = extractRetrievalEvent(
+    '11111111-1111-4111-8111-111111111111',
+    'call-1',
+    'graphrag_search',
+    { artifact: { structuredContent: {
+      retrievalId: '22222222-2222-4222-8222-222222222222',
+      knowledgeBaseIds: [], query: 'where', citations: [], relations: [],
+      stats: { vectorHits: 0, graphHops: 0, searchedKbs: 0, durationMs: 1, truncated: false },
+    } } },
+  );
+  assert.equal(event?.type, 'retrieval.completed');
+  assert.equal(event?.toolCallId, 'call-1');
+  assert.equal(extractRetrievalEvent('11111111-1111-4111-8111-111111111111', 'x', 'execute', { content: 'ok' }), null);
+});
+
+test('retrieval structured content is bounded', () => {
+  const event = extractRetrievalEvent(
+    '11111111-1111-4111-8111-111111111111', 'call-1', 'graphrag_search',
+    { structuredContent: { retrievalId: '22222222-2222-4222-8222-222222222222', knowledgeBaseIds: [], query: 'q', citations: Array.from({ length: 30 }, () => ({ chunkId: '33333333-3333-4333-8333-333333333333', documentId: '44444444-4444-4444-8444-444444444444', documentName: 'd', ordinal: 0, score: 0, via: 'vector' })), relations: [], stats: { vectorHits: 30, graphHops: 0, searchedKbs: 0, durationMs: 1, truncated: false } } },
+  );
+  assert.ok(event);
+  assert.equal(event?.type, 'retrieval.completed');
+  if (event?.type === 'retrieval.completed') assert.ok(event.citations.length <= 20);
+});
 
 test('only assistant messages are exposed as assistant text', () => {
   assert.equal(assistantTextOf(new AIMessageChunk('正在处理')), '正在处理');

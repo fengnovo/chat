@@ -53,6 +53,10 @@ const schema = z.object({
   AGENT_RECURSION_LIMIT: z.coerce.number().int().min(50).max(10_000).default(600),
   AGENT_MODEL_CALL_LIMIT: z.coerce.number().int().min(10).max(10_000).default(120),
   MCP_CONFIG_PATH: z.string().optional(),
+  KNOWLEDGE_MCP_URL: z.string().url().optional(),
+  KNOWLEDGE_MCP_SECRET: z.string().optional(),
+  KNOWLEDGE_MCP_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(10_000),
+  KNOWLEDGE_MCP_ENABLED: z.coerce.boolean().default(false),
 });
 
 export type WorkerConfig = ReturnType<typeof loadWorkerConfig>;
