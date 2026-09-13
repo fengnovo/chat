@@ -32,3 +32,14 @@ test('failed job atomically marks its document failed', async () => {
   await repo.failIndexJob('tenant-a', 'job', lease.leaseToken, new Error('bad bytes'));
   assert.ok(sql.some((q) => /knowledge_documents/i.test(q) && /failed/i.test(q)));
 });
+
+test('terminal transition is one atomic SQL statement', async () => {
+  const queries: string[] = [];
+  const pool: any = { query: async (text: string) => { queries.push(text); return { rows: [{ id: 'job' }], rowCount: 1 }; } };
+  const repo = new KnowledgeRepository(pool);
+  const lease = await repo.claimIndexJob('tenant-a', 'job', 1000);
+  assert.ok(lease);
+  await repo.completeIndexJob('tenant-a', 'job', lease.leaseToken, 2);
+  assert.equal(queries.filter((q) => /knowledge_index_jobs/i.test(q) && /knowledge_documents/i.test(q)).length, 1);
+  assert.match(queries.at(-1)!, /WITH|RETURNING/i);
+});

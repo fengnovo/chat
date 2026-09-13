@@ -19,14 +19,16 @@ function fakeClient() {
 test('derives distinct collections, merges tenant/kb filters, and upserts idempotently', async () => {
   const client = fakeClient();
   const a = new QdrantChunkStore(client as any, { prefix: 'test' });
+  const b = new QdrantChunkStore(client as any, { prefix: 'test' });
   const p1 = { key: 'a', model: 'm1', dimension: 3, collectionName: '' };
   const p2 = { key: 'b', model: 'm2', dimension: 3, collectionName: '' };
-  const c1 = await a.ensureCollection(p1); const c2 = await a.ensureCollection(p2);
+  const c1 = await a.ensureCollection(p1); const c2 = await b.ensureCollection(p2);
   assert.notEqual(c1, c2);
   await a.upsert([{ id: 'x', vector: [1, 2, 3], payload: { tenant_id: 't1', kb_id: 'k1', document_id: 'd1' } }]);
-  await a.upsert([{ id: 'x', vector: [1, 2, 3], payload: { tenant_id: 't1', kb_id: 'k1', document_id: 'd1' } }]);
+  await b.upsert([{ id: 'y', vector: [1, 2, 3], payload: { tenant_id: 't1', kb_id: 'k1', document_id: 'd2' } }]);
   const hits = await a.search([1, 2, 3], 't1', ['k1'], 5);
   assert.equal(hits.length, 1);
+  assert.equal((await b.search([1, 2, 3], 't1', ['k1'], 5))[0]!.chunkId, 'y');
   assert.deepEqual(client.requests[0].body.filter.must, [{ key: 'tenant_id', match: { value: 't1' } }, { key: 'kb_id', match: { any: ['k1'] } }]);
 });
 

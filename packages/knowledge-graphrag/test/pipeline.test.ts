@@ -31,3 +31,17 @@ test('pipeline failure invokes failed lifecycle transition and never embeds inva
   await assert.rejects(() => new IndexPipeline(deps).run({ id: 'j', tenantId: 't', contentHash: '0'.repeat(64), sizeBytes: 3, mime: 'text/plain', objectKey: 'o' }));
   assert.deepEqual(calls, ['Document hash mismatch']);
 });
+
+test('pipeline aborts all durable writes when its lease is reclaimed', async () => {
+  const calls = { upsert: 0, chunks: 0, graph: 0, fail: 0 };
+  const bytes = new TextEncoder().encode('valid');
+  const repo: any = {
+    markIndexStage: async () => false,
+    failIndexJob: async () => { calls.fail++; },
+    replaceDocumentChunks: async () => { calls.chunks++; },
+    replaceDocumentGraph: async () => { calls.graph++; },
+  };
+  const deps: any = { repository: repo, download: async () => bytes, embedder: { embedTexts: async () => [[1]] }, vectorStore: { upsert: async () => { calls.upsert++; } } };
+  await assert.rejects(() => new IndexPipeline(deps).run({ id: 'j', tenantId: 't', contentHash: sha256Hex(bytes), sizeBytes: bytes.length, mime: 'text/plain', objectKey: 'o', chunkSize: 10, chunkOverlap: 0 }));
+  assert.deepEqual(calls, { upsert: 0, chunks: 0, graph: 0, fail: 1 });
+});

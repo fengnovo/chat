@@ -7,13 +7,15 @@ export class IndexPipeline {
   async run(job: any): Promise<void> {
     const d = this.deps;
     try {
-      await d.repository.markIndexStage(job.tenantId, job.id, job.leaseToken ?? '', 'parsing');
+      const guard = async (stage: string) => { const ok = await d.repository.markIndexStage(job.tenantId, job.id, job.leaseToken ?? '', stage); if (ok === false) throw new Error('Index job lease lost'); };
+      await guard('parsing');
       const bytes = await d.download(job.objectKey);
       assertDocumentBytes(bytes, job.contentHash, job.sizeBytes, job.mime);
       const parsed = parseTextDocument(bytes, job.mime);
-      await d.repository.markIndexStage(job.tenantId, job.id, job.leaseToken ?? '', 'chunking');
+      await guard('chunking');
       const chunks = splitIntoChunks(parsed, { size: job.chunkSize, overlap: job.chunkOverlap });
       const vectors = await d.embedder.embedTexts(chunks.map((c: any) => c.text));
+      await guard('persisting');
       await d.vectorStore.ensureCollection(d.embedder.profile);
       await d.vectorStore.deleteByDocument(job.tenantId, job.kbId, job.documentId);
       const points = chunks.map((c: any, i: number) => ({ id: stableChunkId(job.documentId, c.ordinal, c.text), vector: vectors[i], payload: { tenant_id: job.tenantId, kb_id: job.kbId, document_id: job.documentId, chunk_id: stableChunkId(job.documentId, c.ordinal, c.text) } }));
@@ -27,7 +29,8 @@ export class IndexPipeline {
         graph.relationships.push(...(extracted.relationships ?? []).map((relationship: any) => ({ ...relationship, chunkIds: [...(relationship.chunkIds ?? []), chunkId] })));
       }
       await d.repository.replaceDocumentGraph(job.tenantId, job.kbId, job.documentId, graph);
-      await d.repository.completeIndexJob(job.tenantId, job.id, job.leaseToken ?? '', chunks.length);
+      const completed = await d.repository.completeIndexJob(job.tenantId, job.id, job.leaseToken ?? '', chunks.length);
+      if (completed === false) throw new Error('Index job lease lost');
     } catch (error) { await d.repository.failIndexJob(job.tenantId, job.id, job.leaseToken ?? '', error); throw error; }
   }
 }

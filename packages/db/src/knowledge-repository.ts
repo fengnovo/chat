@@ -29,18 +29,14 @@ export class KnowledgeRepository {
   }
   async completeIndexJob(tenantId: string, jobId: string, token: string, chunkCount = 0): Promise<boolean> {
     if (!this.ownsLease(tenantId, jobId, token)) return false;
-    const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'completed', progress = 100, finished_at = now(), lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND error_code = $3 AND lease_expires_at > now()`, [jobId, tenantId, token]);
-    if (!(result.rowCount ?? 0)) return false;
-    await this.pool.query(`UPDATE knowledge_documents d SET status = 'ready', chunk_count = $3, indexed_at = now(), updated_at = now() FROM knowledge_index_jobs j WHERE j.id = $1 AND j.tenant_id = $2 AND d.id = j.document_id AND d.tenant_id = j.tenant_id`, [jobId, tenantId, chunkCount]);
-    return true;
+    const result = await this.pool.query(`WITH updated AS (UPDATE knowledge_index_jobs SET status = 'completed', progress = 100, finished_at = now(), lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND error_code = $3 AND lease_expires_at > now() RETURNING document_id) UPDATE knowledge_documents d SET status = 'ready', chunk_count = $4, indexed_at = now(), updated_at = now() FROM updated WHERE d.id = updated.document_id AND d.tenant_id = $2 RETURNING d.id`, [jobId, tenantId, token, chunkCount]);
+    return (result.rowCount ?? 0) > 0;
   }
   async failIndexJob(tenantId: string, jobId: string, token: string, error: unknown): Promise<boolean> {
     if (!this.ownsLease(tenantId, jobId, token)) return false;
     const message = error instanceof Error ? error.message : String(error);
-    const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'failed', error_code = 'index_failed', error_message = $4, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND error_code = $3 AND lease_expires_at > now()`, [jobId, tenantId, token, message]);
-    if (!(result.rowCount ?? 0)) return false;
-    await this.pool.query(`UPDATE knowledge_documents d SET status = 'failed', error_code = 'index_failed', error_message = $3, updated_at = now() FROM knowledge_index_jobs j WHERE j.id = $1 AND j.tenant_id = $2 AND d.id = j.document_id AND d.tenant_id = j.tenant_id`, [jobId, tenantId, message]);
-    return true;
+    const result = await this.pool.query(`WITH updated AS (UPDATE knowledge_index_jobs SET status = 'failed', error_code = 'index_failed', error_message = $4, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND error_code = $3 AND lease_expires_at > now() RETURNING document_id) UPDATE knowledge_documents d SET status = 'failed', error_code = 'index_failed', error_message = $4, updated_at = now() FROM updated WHERE d.id = updated.document_id AND d.tenant_id = $2 RETURNING d.id`, [jobId, tenantId, token, message]);
+    return (result.rowCount ?? 0) > 0;
   }
   async getDocumentForIndex(tenantId: string, kbId: string, documentId: string): Promise<any> {
     const result = await this.pool.query(`SELECT * FROM knowledge_documents WHERE tenant_id = $1 AND kb_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, kbId, documentId]);
