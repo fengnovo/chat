@@ -90,3 +90,105 @@ test('embedding HTTP errors surface status and provider message', async () => {
   });
   await assert.rejects(() => embedder.embedTexts(['text']), /429.*quota exceeded/i);
 });
+
+test('defaults to provider-safe batches of at most ten inputs', async () => {
+  assert.equal(typeof createEmbedder, 'function');
+  assert.equal(typeof buildProfile, 'function');
+  if (!createEmbedder || !buildProfile) return;
+
+  const batches: string[][] = [];
+  const fetch: typeof globalThis.fetch = async (_input, init) => {
+    const input = JSON.parse(String(init?.body)).input as string[];
+    batches.push(input);
+    return new Response(JSON.stringify({
+      data: input.map((text, index) => ({ index, embedding: [Number(text)] })),
+    }), { status: 200 });
+  };
+  const embedder = createEmbedder({
+    profile: buildProfile({ key: 'default-batches', model: 'text-embedding-v4', dimension: 1 }),
+    apiKey: 'key',
+    baseUrl: 'https://embeddings.example/v1',
+    fetch,
+  });
+  const texts = Array.from({ length: 11 }, (_, index) => String(index));
+
+  assert.deepEqual(await embedder.embedTexts(texts), texts.map((text) => [Number(text)]));
+  assert.deepEqual(batches.map((batch) => batch.length), [10, 1]);
+});
+
+test('merges configured batches in original order when each response is unordered', async () => {
+  assert.equal(typeof createEmbedder, 'function');
+  assert.equal(typeof buildProfile, 'function');
+  if (!createEmbedder || !buildProfile) return;
+
+  const batches: string[][] = [];
+  const fetch: typeof globalThis.fetch = async (_input, init) => {
+    const input = JSON.parse(String(init?.body)).input as string[];
+    batches.push(input);
+    return new Response(JSON.stringify({
+      data: input.map((text, index) => ({ index, embedding: [Number(text), Number(text) + 0.5] })).reverse(),
+    }), { status: 200 });
+  };
+  const embedder = createEmbedder({
+    profile: buildProfile({ key: 'configured-batches', model: 'model', dimension: 2 }),
+    apiKey: 'key',
+    baseUrl: 'https://embeddings.example/v1',
+    batchSize: 3,
+    fetch,
+  });
+
+  assert.deepEqual(await embedder.embedTexts(['0', '1', '2', '3', '4']), [
+    [0, 0.5],
+    [1, 1.5],
+    [2, 2.5],
+    [3, 3.5],
+    [4, 4.5],
+  ]);
+  assert.deepEqual(batches, [['0', '1', '2'], ['3', '4']]);
+});
+
+test('rejects the entire embedding operation when a later batch returns an HTTP error', async () => {
+  assert.equal(typeof createEmbedder, 'function');
+  assert.equal(typeof buildProfile, 'function');
+  if (!createEmbedder || !buildProfile) return;
+
+  let requestCount = 0;
+  const fetch: typeof globalThis.fetch = async (_input, init) => {
+    requestCount++;
+    if (requestCount === 2) {
+      return new Response(JSON.stringify({ error: { message: 'second batch failed' } }), { status: 503 });
+    }
+    const input = JSON.parse(String(init?.body)).input as string[];
+    return new Response(JSON.stringify({
+      data: input.map((_text, index) => ({ index, embedding: [index] })),
+    }), { status: 200 });
+  };
+  const embedder = createEmbedder({
+    profile: buildProfile({ key: 'failed-batch', model: 'model', dimension: 1 }),
+    apiKey: 'key',
+    baseUrl: 'https://embeddings.example/v1',
+    batchSize: 2,
+    fetch,
+  });
+
+  await assert.rejects(
+    () => embedder.embedTexts(['a', 'b', 'c']),
+    /batch 2.*503.*second batch failed/i,
+  );
+  assert.equal(requestCount, 2);
+});
+
+test('rejects invalid embedding batch sizes before issuing requests', () => {
+  assert.equal(typeof createEmbedder, 'function');
+  assert.equal(typeof buildProfile, 'function');
+  if (!createEmbedder || !buildProfile) return;
+
+  for (const batchSize of [0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => createEmbedder({
+      profile: buildProfile({ key: 'invalid-batch', model: 'model', dimension: 1 }),
+      apiKey: 'key',
+      baseUrl: 'https://embeddings.example/v1',
+      batchSize,
+    }), /batch size.*positive integer/i);
+  }
+});

@@ -45,7 +45,10 @@ test('knowledge smoke indexes Markdown, searches citations, and rebuilds vectors
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const kb = await request(`${apiBase}/api/knowledge-bases`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: `e2e-${Date.now()}`, description: 'smoke', visibility: 'private' }) });
   const kbId = kb.id ?? kb.data?.id;
+  const collection = kb.collection_name ?? kb.data?.collection_name;
   assert.match(kbId, /^[0-9a-f-]{36}$/i);
+  assert.equal(typeof collection, 'string', 'create knowledge base response must include collection_name');
+  assert.ok(collection.length > 0, 'create knowledge base response returned an empty collection_name');
   t.after(async () => { await fetch(`${apiBase}/api/knowledge-bases/${kbId}`, { method: 'DELETE' }).catch(() => undefined); });
 
   const upload = await request(`${apiBase}/api/knowledge-bases/${kbId}/documents/uploads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'smoke.md', mime: 'text/markdown', sizeBytes: bytes.byteLength, sha256 }) });
@@ -69,7 +72,6 @@ test('knowledge smoke indexes Markdown, searches citations, and rebuilds vectors
   assert.ok(result.structuredContent?.citations?.length, 'search returned no citations');
   const relationsBefore = result.structuredContent?.relations ?? [];
 
-  const collection = process.env.QDRANT_COLLECTION_PREFIX ? `${process.env.QDRANT_COLLECTION_PREFIX}${kbId}` : kbId;
   await request(`${qdrantUrl}/collections/${encodeURIComponent(collection)}/points/delete?wait=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filter: { must: [{ key: 'tenant_id', match: { value: tenantId } }, { key: 'kb_id', match: { value: kbId } }] } }) });
   const rebuild = await request(`${apiBase}/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sizeBytes: bytes.byteLength, sha256 }) });
   assert.equal(rebuild.id, documentId, 'confirm should enqueue a real re-embedding job after vector deletion');

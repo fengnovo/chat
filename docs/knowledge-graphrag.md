@@ -505,8 +505,10 @@ apps/knowledge-service/
 ├── src/
 │   ├── config.ts
 │   ├── consumer.ts
+│   ├── runtime.ts
 │   ├── reconciler.ts
-│   ├── indexer.ts
+│   ├── index.ts
+│   ├── main.ts
 │   └── mcp/server.ts
 └── test/
 ```
@@ -553,6 +555,20 @@ QDRANT_COLLECTION_PREFIX=knowledge
 `openai-compatible` 必须显式设置 base URL。三种 provider 都必须显式设置 `EMBEDDING_MODEL`、
 `EMBEDDING_DIM` 和独立的 `EMBEDDING_API_KEY`，不会回退复用 `OPENAI_API_KEY` 或
 `OPENAI_BASE_URL`。
+
+OpenAI-compatible embedder 默认把输入切成最多 10 条一批，以符合百炼
+`text-embedding-v4` 的单次请求限制。程序化构造时可用 `batchSize` 调小或按其他兼容供应商限制调整；
+每批响应都会独立校验数量、局部 index 和向量维度，然后按原始输入顺序合并。任一批请求或响应校验
+失败都会使整个 embedding 操作失败，索引任务不得写入部分结果。
+
+knowledge-service 的运行时装配入口是公开的 `createKnowledgeRuntime(config, deps)`。它从上述配置构造
+共享的 `EmbeddingProfile` 和 `OpenAICompatibleEmbedder`，并把同一个 embedder 注入
+`IndexPipeline`；profile 和 `QDRANT_COLLECTION_PREFIX` 使用同一 collection 派生规则。默认可执行入口
+`main.ts` 会调用 `startKnowledgeService(loadConfig())`，`startKnowledgeService` 再走该工厂。当前 MVP 尚未
+在入口内安全补齐 Postgres repository、Redis connection、对象下载、Qdrant store、extractor 与
+retriever 的真实客户端 bootstrap；部署层必须通过 `deps` 提供这些 adapter。缺少索引 adapter 时启动会
+列出 `connection`、`repository`、`download`、`vectorStore`、`extract` 中实际缺失的项；已有测试和宿主
+仍可显式注入 `pipeline` / `worker` / `retriever`，不会被默认工厂覆盖。
 
 ### 10.2 基础设施
 
