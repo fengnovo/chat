@@ -57,7 +57,7 @@ function SessionActionDialog({
 
         {deleting ? (
           <p className="delete-copy">
-            “{dialog.session.title}” 将从历史记录中移除。正在运行的会话需要先停止，避免丢失进行中的结果。
+            “{dialog.session.title}”的历史记录和对应工作区文件将被彻底删除，且无法恢复。正在运行的会话需要先停止。
           </p>
         ) : (
           <form

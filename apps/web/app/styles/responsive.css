@@ -304,10 +304,6 @@
     width: 30px;
   }
 
-  .message-body {
-    max-width: calc(100% - 39px);
-  }
-
   .message-copy {
     font-size: 15px;
   }

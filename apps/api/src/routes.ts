@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -68,6 +69,37 @@ function projectUploadBytes(files: Array<{ contentBase64: string }>) {
     (total, file) => total + Buffer.byteLength(file.contentBase64, 'base64'),
     0,
   );
+}
+
+const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * 删除会话时级联清理它独占的沙箱文件目录。
+ * docker 模式下文件在宿主 SANDBOX_SESSIONS_ROOT/<workspaceId>；
+ * e2b-cloud 模式文件在云端沙箱内（随沙箱超时回收），API 侧无需处理。
+ * 注意：workspaces.sandbox_provider 列在 docker 模式下不可靠（从不更新，
+ * 保持 schema 默认值 'e2b'），因此这里只按本服务的运行时配置判断。
+ * 清理失败只记录日志，不阻断会话删除（数据库记录已删，不应留下孤儿会话）。
+ */
+async function removeSessionWorkspace(
+  services: ApiServices,
+  workspace: { workspaceId: string } | null,
+  log: { warn: (message: string) => void },
+): Promise<void> {
+  if (!workspace || services.config.SANDBOX_RUNTIME !== 'docker') return;
+  if (!WORKSPACE_ID_PATTERN.test(workspace.workspaceId)) return;
+
+  const root = path.resolve(services.config.SANDBOX_SESSIONS_ROOT);
+  const target = path.resolve(root, workspace.workspaceId);
+  const relative = path.relative(root, target);
+  // 双保险：目标必须正好是根下的一层 UUID 目录，任何越界形态都不删。
+  if (relative !== workspace.workspaceId || relative.startsWith('..')) return;
+
+  await rm(target, { recursive: true, force: true }).catch((error: unknown) => {
+    log.warn(
+      `删除会话工作区目录失败 ${target}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
 }
 
 export async function registerRoutes(app: FastifyInstance, services: ApiServices) {
@@ -145,6 +177,10 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
 
   app.delete('/api/agent/sessions/:sessionId', async (request, reply) => {
     const { sessionId } = request.params as { sessionId: string };
+    // 删除前先取出工作区标识，用于级联清理该会话独占的文件目录。
+    const workspace = await services.repository
+      .getWorkspaceSandboxForWorker(request.auth.tenantId, sessionId)
+      .catch(() => null);
     const result = await services.repository.deleteSession(request.auth, sessionId);
     if (result === 'not_found') {
       return reply.code(404).send({ error: 'session_not_found' });
@@ -152,6 +188,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     if (result === 'active') {
       return reply.code(409).send({ error: 'session_has_active_run' });
     }
+    await removeSessionWorkspace(services, workspace, request.log);
     return reply.code(204).send();
   });
 
