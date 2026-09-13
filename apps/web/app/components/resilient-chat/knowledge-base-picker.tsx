@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 type KnowledgeBase = { id: string; name: string; status?: string };
@@ -18,7 +19,7 @@ function KnowledgeBasePicker({ chatId, bases, value, onChange }: { chatId: strin
   const [selected, setSelected] = useState(() => value ?? knowledgeBaseIdsForChat(chatId));
   useEffect(() => { const next = value ?? knowledgeBaseIdsForChat(chatId); setSelected(next); }, [chatId, value]);
   const toggle = (id: string) => { const next = toggleKnowledgeBase(selected, id); setSelected(next); storageSet(window.localStorage, `knowledge-bases:${chatId}`, JSON.stringify(next)); onChange?.(next); };
-  return <div className="knowledge-picker" aria-label="选择知识库">{bases.map((base) => <label key={base.id}><input type="checkbox" checked={selected.includes(base.id)} onChange={() => toggle(base.id)} />{base.name}</label>)}</div>;
+  return <div className="knowledge-picker" aria-label="知识库">{bases.map((base) => <label key={base.id}><input type="checkbox" checked={selected.includes(base.id)} onChange={() => toggle(base.id)} />{base.name}</label>)}<Link className="knowledge-manage-link" href="/knowledge">管理知识库</Link></div>;
 }
 
 export { KnowledgeBasePicker, knowledgeBaseIdsForChat, toggleKnowledgeBase };

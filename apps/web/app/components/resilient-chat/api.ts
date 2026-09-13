@@ -44,9 +44,92 @@ async function responseError(response: Response, fallback: string) {
 
 export { fetchSessionFiles, fetchSessionPage, responseError, type SessionFile };
 
-type KnowledgeBase = { id: string; name: string; description?: string; status?: string };
+type KnowledgeDocument = {
+  id: string;
+  name: string;
+  mime?: string;
+  status?: string;
+  sizeBytes?: number;
+  size_bytes?: number | string;
+  chunkCount?: number;
+  chunk_count?: number;
+  errorMessage?: string | null;
+  error_message?: string | null;
+  indexedAt?: string | null;
+  indexed_at?: string | null;
+};
+type KnowledgeBase = {
+  id: string;
+  name: string;
+  description?: string;
+  status?: string;
+  documents?: KnowledgeDocument[];
+};
 async function fetchKnowledgeBases(signal?: AbortSignal) { const response = await fetch('/api/knowledge-bases', { signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return (await response.json() as { data: KnowledgeBase[] }).data; }
+async function fetchKnowledgeDocuments(kbId: string, signal?: AbortSignal) {
+  const response = await fetch(`/api/knowledge-bases/${kbId}/documents`, { signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json() as { data: KnowledgeDocument[] }).data;
+}
 async function createKnowledgeBase(input: { name: string; description?: string; visibility?: 'private' | 'tenant' }) { const response = await fetch('/api/knowledge-bases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json() as KnowledgeBase; }
-async function uploadKnowledgeDocument(kbId: string, file: File) { const content = new Uint8Array(await file.arrayBuffer()); const digest = await crypto.subtle.digest('SHA-256', content); const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''); const mime = file.type === 'text/plain' ? 'text/plain' : 'text/markdown'; const response = await fetch(`/api/knowledge-bases/${kbId}/documents/uploads`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, mime, sizeBytes: file.size, sha256 }) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const payload = await response.json() as { document: { id: string }; upload?: { url?: string } }; if (payload.upload?.url) await fetch(payload.upload.url, { method: 'PUT', body: file, headers: { 'Content-Type': mime } }); if (payload.upload?.url) await fetch(`/api/knowledge-bases/${kbId}/documents/${payload.document.id}/confirm`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sizeBytes: file.size, sha256 }) }); return payload.document; }
+async function uploadKnowledgeDocument(kbId: string, file: File) {
+  const content = new Uint8Array(await file.arrayBuffer());
+  const digest = await crypto.subtle.digest('SHA-256', content);
+  const sha256 = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  const mime = file.type === 'text/plain' || /\.txt$/i.test(file.name)
+    ? 'text/plain'
+    : 'text/markdown';
+  const response = await fetch(`/api/knowledge-bases/${kbId}/documents/uploads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: file.name, mime, sizeBytes: file.size, sha256 }),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  const payload = await response.json() as {
+    document: KnowledgeDocument;
+    upload?: {
+      uploadUrl?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    };
+    uploadUrl?: string;
+    url?: string;
+    headers?: Record<string, string>;
+  };
+  const upload = payload.upload ?? payload;
+  const uploadUrl = upload.uploadUrl ?? upload.url;
+  if (!uploadUrl) throw new Error('Upload URL is missing');
+
+  const uploadHeaders = new Headers({
+    'Content-Type': mime,
+    'x-amz-meta-sha256': sha256,
+  });
+  for (const [name, value] of Object.entries(upload.headers ?? {})) {
+    uploadHeaders.set(name, value);
+  }
+  const uploadResponse = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: uploadHeaders,
+  });
+  if (!uploadResponse.ok) throw new Error(`HTTP ${uploadResponse.status}`);
+
+  const confirmResponse = await fetch(
+    `/api/knowledge-bases/${kbId}/documents/${payload.document.id}/confirm`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sizeBytes: file.size, sha256 }),
+    },
+  );
+  if (!confirmResponse.ok) throw new Error(`HTTP ${confirmResponse.status}`);
+  const confirmed = await confirmResponse.json() as
+    | KnowledgeDocument
+    | { document: KnowledgeDocument };
+  return 'document' in confirmed ? confirmed.document : confirmed;
+}
 async function deleteKnowledgeBase(kbId: string) { const response = await fetch(`/api/knowledge-bases/${kbId}`, { method: 'DELETE' }); if (!response.ok) throw new Error(`HTTP ${response.status}`); }
-export { fetchKnowledgeBases, createKnowledgeBase, uploadKnowledgeDocument, deleteKnowledgeBase, type KnowledgeBase };
+export { fetchKnowledgeBases, fetchKnowledgeDocuments, createKnowledgeBase, uploadKnowledgeDocument, deleteKnowledgeBase, type KnowledgeBase, type KnowledgeDocument };

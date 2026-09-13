@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
-import { toggleKnowledgeBase, knowledgeBaseIdsForChat } from '../app/components/resilient-chat/knowledge-base-picker';
+import { KnowledgeBasePicker, toggleKnowledgeBase, knowledgeBaseIdsForChat } from '../app/components/resilient-chat/knowledge-base-picker';
 import { messagesFromHistory } from '../app/components/resilient-chat/utils';
 
 test('knowledge picker toggles one id without dropping other selections', () => {
@@ -15,6 +17,17 @@ test('knowledge picker persists selections by chat id', () => {
   storage.set('knowledge-bases:chat-1', JSON.stringify(['kb-1']));
   assert.deepEqual(knowledgeBaseIdsForChat('chat-1', storage), ['kb-1']);
   assert.deepEqual(knowledgeBaseIdsForChat('chat-2', storage), []);
+});
+
+test('knowledge picker links to the knowledge management page', () => {
+  const html = renderToStaticMarkup(createElement(KnowledgeBasePicker, {
+    chatId: 'chat-1',
+    bases: [],
+    value: [],
+  }));
+
+  assert.match(html, /href="\/knowledge"/);
+  assert.match(html, /管理知识库/);
 });
 
 test('history citation part is available to message rendering', () => {
