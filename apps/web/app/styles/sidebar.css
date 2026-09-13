@@ -273,12 +273,3 @@
 .session-list-retry:hover {
   background: var(--red-soft);
 }
-
-.status-dot {
-  background: #39cb91;
-  border-radius: 999px;
-  box-shadow: 0 0 0 3px rgb(57 203 145 / 12%);
-  display: inline-block;
-  height: 7px;
-  width: 7px;
-}

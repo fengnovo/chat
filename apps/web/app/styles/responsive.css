@@ -189,10 +189,6 @@
     display: flex;
   }
 
-  .topbar-actions .connection-pill {
-    display: none;
-  }
-
   .trace-scrim {
     background: rgb(18 16 24 / 44%);
     border: 0;
@@ -223,11 +219,6 @@
   .trace-head .mobile-icon-button {
     display: flex;
   }
-
-  .welcome {
-    padding-left: 20px;
-    padding-right: 20px;
-  }
 }
 
 @media (max-width: 520px) {
@@ -254,51 +245,6 @@
 
   .topbar .icon-button {
     display: none;
-  }
-
-  .welcome {
-    justify-content: flex-start;
-    padding-bottom: 24px;
-    padding-top: 38px;
-  }
-
-  .welcome-symbol {
-    height: 83px;
-    width: 83px;
-  }
-
-  .ring-one {
-    height: 83px;
-    width: 83px;
-  }
-
-  .ring-two {
-    height: 66px;
-    width: 66px;
-  }
-
-  .symbol-core {
-    border-radius: 17px;
-    height: 53px;
-    width: 53px;
-  }
-
-  .welcome h2 {
-    font-size: 28px;
-  }
-
-  .welcome > p {
-    font-size: 12px;
-  }
-
-  .prompt-grid {
-    gap: 7px;
-    grid-template-columns: 1fr;
-    margin-top: 24px;
-  }
-
-  .prompt-grid button {
-    min-height: 58px;
   }
 
   .message-list {
@@ -388,7 +334,6 @@
   .streaming-dots i,
   .pulse-dot,
   .activity-spinner,
-  .connection-pill.is-busy .status-dot,
   .skeleton-panel,
   .skeleton-line,
   .skeleton-orb,

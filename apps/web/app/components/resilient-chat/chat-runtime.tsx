@@ -33,6 +33,7 @@ import { SessionActionDialog } from './session-dialog';
 import { Sidebar } from './sidebar';
 import { TracePanel } from './trace-panel';
 import type {
+  AgentActivityEntry,
   AgentActivityState,
   AgentStatus,
   AgentTodo,
@@ -54,7 +55,6 @@ import {
   messageText,
   messagesFromHistory,
 } from './utils';
-import { Welcome } from './welcome';
 
 let cachedSessions: SessionCache<WebSessionSummary> | null | undefined;
 
@@ -140,7 +140,10 @@ function ChatRuntime() {
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const sessionRef = useRef(new ResilientSession());
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  // 用户是否停在会话底部附近：在底部时新内容自动跟随；主动上滑查看时不打断。
+  const stickToBottomRef = useRef(true);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarWasOpenRef = useRef(false);
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -582,18 +585,66 @@ function ChatRuntime() {
     sidebarOpen,
   ]);
 
+  // 只滚动会话容器自己：scrollIntoView 会连带滚动所有祖先（包括窗口），
+  // 处理中高频触发时会把整个页面滚走，露出底部大片空白。
+  // 依赖里纳入过程记录与任务列表，「正在执行」容器每次更新都会跟随到底。
   useEffect(() => {
-    const reducedMotion = window.matchMedia(
-      '(prefers-reduced-motion: reduce)',
-    ).matches;
-    messagesEndRef.current?.scrollIntoView({
-      behavior: reducedMotion ? 'auto' : 'smooth',
-      block: 'end',
-    });
-  }, [messages, error, pendingInterrupt, runFailure]);
+    const container = conversationRef.current;
+    if (!container || !stickToBottomRef.current) return;
+    container.scrollTop = container.scrollHeight;
+  }, [
+    messages,
+    agentActivity.entries,
+    agentTodos,
+    generatedTokens,
+    pendingInterrupt,
+    error,
+    runFailure,
+  ]);
+
+  function handleConversationScroll() {
+    const container = conversationRef.current;
+    if (!container) return;
+    const distance =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    stickToBottomRef.current = distance < 96;
+  }
+
+  // 任意容器尺寸变化（展开「正在执行」面板、工具日志追加、任务条变高、
+  // 输入区撑高等）只要用户还停在底部，就立刻跟随到底。
+  useEffect(() => {
+    const container = conversationRef.current;
+    const list = messageListRef.current;
+    if (!container) return;
+    const follow = () => {
+      if (stickToBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+      }
+    };
+    const observer = new ResizeObserver(follow);
+    if (list) observer.observe(list);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  // 助手还没输出正文时，气泡里实时显示它正在做什么：优先用模型的过程旁白，
+  // 没有旁白时回退到当前正在执行的工具名，避免只剩三个点、用户不知道进展。
+  const liveActivityLabel = useMemo(() => {
+    const latestNarration = [...agentActivity.entries]
+      .reverse()
+      .find((entry): entry is Extract<AgentActivityEntry, { kind: 'narration' }> =>
+        entry.kind === 'narration',
+      );
+    if (latestNarration) return latestNarration.text;
+    if (agentActivity.runningTool) {
+      return `正在执行 ${agentActivity.runningTool}…`;
+    }
+    return null;
+  }, [agentActivity.entries, agentActivity.runningTool]);
 
   async function selectSession(session: WebSessionSummary) {
     if (session.externalKey === conversation.chatId) return;
+    stickToBottomRef.current = true;
     setSwitchingSessionId(session.id);
     setSessionsError(null);
     try {
@@ -646,6 +697,7 @@ function ChatRuntime() {
   async function submitText(value: string) {
     const trimmed = value.trim();
     if (!trimmed || isBusy || error) return;
+    stickToBottomRef.current = true;
     setInput('');
     setSuggestions([]);
     setRunFailure(null);
@@ -696,6 +748,7 @@ function ChatRuntime() {
   }
 
   function resetConversation(chatId: string) {
+    stickToBottomRef.current = true;
     clearError();
     clearPersistedRun();
     setConversation({
@@ -736,7 +789,6 @@ function ChatRuntime() {
       }
       await stopCurrentConversation();
       resetConversation(externalKey);
-      setNotice('已创建空白工作区');
       await refreshSessions();
     } catch (caught) {
       setSessionsError(
@@ -1006,16 +1058,6 @@ function ChatRuntime() {
             </button>
           </div>
           <div className="topbar-actions">
-            <span className={`connection-pill ${isBusy ? 'is-busy' : ''}`}>
-              <span className="status-dot" />
-              {status === 'streaming'
-                ? '正在流式生成'
-                : status === 'submitted'
-                  ? '正在建立连接'
-                  : error
-                    ? '连接中断'
-                    : '全部系统正常'}
-            </span>
             <button
               className="icon-button"
               type="button"
@@ -1025,23 +1067,17 @@ function ChatRuntime() {
             >
               <Icon name="panel" />
             </button>
-            <button
-              className="icon-button"
-              disabled={creatingSession}
-              type="button"
-              aria-label={creatingSession ? '正在新建对话' : '新建对话'}
-              onClick={() => void handleNewChat()}
-            >
-              <Icon name="refresh" />
-            </button>
           </div>
         </header>
 
-        <div className="conversation" aria-live="polite">
-          {!hasConversation ? (
-            <Welcome onPrompt={submitText} />
-          ) : (
-            <div className="message-list">
+        <div
+          className="conversation"
+          aria-live="polite"
+          ref={conversationRef}
+          onScroll={handleConversationScroll}
+        >
+          {hasConversation && (
+            <div className="message-list" ref={messageListRef}>
               {messages.map((message) => (
                 <Message
                   copied={copiedMessage === message.id}
@@ -1069,6 +1105,13 @@ function ChatRuntime() {
                     isBusy &&
                     message.id === lastMessage?.id &&
                     message.role === 'assistant'
+                  }
+                  liveLabel={
+                    isBusy &&
+                    message.id === lastMessage?.id &&
+                    message.role === 'assistant'
+                      ? liveActivityLabel
+                      : null
                   }
                 />
               ))}
@@ -1112,7 +1155,6 @@ function ChatRuntime() {
                   </button>
                 </div>
               )}
-              <div ref={messagesEndRef} />
             </div>
           )}
         </div>

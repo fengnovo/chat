@@ -7,6 +7,14 @@
   overflow: hidden;
 }
 
+.conversation {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #d8d4dd transparent;
+}
+
 .topbar {
   align-items: center;
   border-bottom: 1px solid var(--line);
@@ -29,26 +37,6 @@
 
 .topbar-actions {
   gap: 10px;
-}
-
-.connection-pill {
-  align-items: center;
-  background: #f4f7f5;
-  border: 1px solid #e0e8e3;
-  border-radius: 999px;
-  color: #426052;
-  display: flex;
-  font-size: 12px;
-  font-weight: 600;
-  gap: 7px;
-  min-height: 36px;
-  padding: 0 11px;
-}
-
-.connection-pill.is-busy .status-dot {
-  animation: status-pulse 1.2s ease-in-out infinite;
-  background: var(--violet);
-  box-shadow: 0 0 0 3px rgb(109 74 255 / 12%);
 }
 
 .icon-button,

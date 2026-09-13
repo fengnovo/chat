@@ -71,7 +71,14 @@ function Composer({
           placeholder={disabled ? disabledPlaceholder : '描述要在项目中完成的任务…'}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
+            // 中文/日文输入法组词时 Enter 用于确认候选词（部分浏览器只给 keyCode 229），
+            // 这时绝不能触发发送，否则英文单词没拼完就被提交了。
+            if (
+              event.key === 'Enter' &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing &&
+              event.keyCode !== 229
+            ) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }
