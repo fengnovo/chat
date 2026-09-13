@@ -1,7 +1,6 @@
 import type { PersistedAgentEvent } from '@repo/contracts';
 import { runEventsChannel } from '@repo/contracts';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { Redis } from 'ioredis';
 
 import type { ApiServices } from './types.js';
 
@@ -40,10 +39,6 @@ export async function streamAgentEvents(
   let cursor = parseCursor(request);
   let flushing = false;
   let closed = false;
-  const subscriber = new Redis(services.config.REDIS_URL, {
-    maxRetriesPerRequest: null,
-    lazyConnect: true,
-  });
 
   const flush = async () => {
     if (flushing || closed) return;
@@ -69,12 +64,11 @@ export async function streamAgentEvents(
     }
   };
 
-  subscriber.on('message', () => void flush());
-  subscriber.on('error', (error: Error) =>
-    request.log.warn({ error }, 'SSE subscriber error'),
+  const unsubscribe = await services.streamSubscriptions.subscribe(
+    runEventsChannel(runId),
+    () => void flush(),
+    (error: Error) => request.log.warn({ error }, 'SSE subscriber error'),
   );
-  await subscriber.connect();
-  await subscriber.subscribe(runEventsChannel(runId));
   await flush();
 
   const heartbeat = setInterval(() => {
@@ -84,6 +78,6 @@ export async function streamAgentEvents(
   request.raw.on('close', () => {
     closed = true;
     clearInterval(heartbeat);
-    void subscriber.quit();
+    unsubscribe();
   });
 }

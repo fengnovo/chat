@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 
 import {
@@ -144,6 +145,26 @@ function ChatRuntime() {
   const sidebarWasOpenRef = useRef(false);
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null);
 
+  // 浏览器会把切换路由/切到其他应用时被丢弃的请求以 TypeError
+  // 抛出，AI SDK 会把它当成连接错误并停在 error 状态。这里只在页面
+  // 重新可见且当前运行确实还在进行时，才决定是否恢复；否则切个会话
+  // 或切到别的页面再回来，任务状态就被误判为“已终止”。
+  const isPageVisible = useSyncExternalStore(
+    (notify) => {
+      const handler = () => notify();
+      document.addEventListener('visibilitychange', handler);
+      window.addEventListener('focus', handler);
+      window.addEventListener('pageshow', handler);
+      return () => {
+        document.removeEventListener('visibilitychange', handler);
+        window.removeEventListener('focus', handler);
+        window.removeEventListener('pageshow', handler);
+      };
+    },
+    () => document.visibilityState === 'visible',
+    () => true,
+  );
+
   const refreshSessions = useCallback(async () => {
     try {
       const page = await fetchSessionPage();
@@ -163,7 +184,7 @@ function ChatRuntime() {
         api: '/api/chat',
         fetch: createTrackedFetch(),
         maxConsecutiveErrors: 3,
-        initialStartIndex: conversation.resumeRun?.chunkIndex ?? 0,
+        initialStartIndex: 0,
         prepareSendMessagesRequest: ({ id, messages, trigger }) => ({
           body: {
             messages,
@@ -401,6 +422,41 @@ function ChatRuntime() {
   const lastAssistant = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant');
+
+  // 页面重新可见时，如果当前运行确实还在进行（后端仍有 pending run），
+  // 就自动把流接回来。切走再切回时浏览器丢弃了旧连接，这里用服务端的
+  // run 状态而不是前端 error 作为是否恢复的依据，避免任务被误判为结束。
+  useEffect(() => {
+    if (!isPageVisible) return;
+    const persisted = readPersistedRun();
+    const hasActiveRun =
+      (status === 'submitted' || status === 'streaming') ||
+      (persisted?.pending && persisted.chatId === conversation.chatId);
+    if (!hasActiveRun || !persisted) return;
+
+    const controller = new AbortController();
+    fetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (response.status === 404) {
+          clearPersistedRun();
+          return;
+        }
+        if (!response.ok) return;
+        const run = (await response.json()) as RunSummary;
+        const stillPending = isPendingStatus(run.status);
+        writePersistedRun({ ...persisted, pending: stillPending });
+        if (stillPending && status === 'error') {
+          // 任务还在后台运行，只是页面失去焦点的这段时间连接断了。
+          await resumeStream();
+          setRunFailure(failureFromRun(run));
+        }
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [isPageVisible, status, conversation.chatId, resumeStream]);
+
   useEffect(() => {
     if (status !== 'streaming' || !lastAssistant) return;
     sessionRef.current.stageAssistant(messageText(lastAssistant));
@@ -537,10 +593,12 @@ function ChatRuntime() {
   }, [messages, error, pendingInterrupt, runFailure]);
 
   async function selectSession(session: WebSessionSummary) {
-    if (isBusy || session.externalKey === conversation.chatId) return;
+    if (session.externalKey === conversation.chatId) return;
     setSwitchingSessionId(session.id);
     setSessionsError(null);
     try {
+      // 切走前先停止当前任务：如果它在后台运行，就发取消信号并断开流。
+      await stopCurrentConversation();
       const response = await fetch(
         `/api/agent/sessions/${encodeURIComponent(session.id)}/history`,
       );

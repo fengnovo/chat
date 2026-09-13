@@ -6,6 +6,7 @@ import type { Redis } from 'ioredis';
 
 import type { ApiConfig } from './config.js';
 import type { RunOutboxDispatcher } from './outbox.js';
+import type { StreamSubscriptionHub } from './stream-subscriptions.js';
 
 export interface ApiServices {
   config: ApiConfig;
@@ -14,6 +15,7 @@ export interface ApiServices {
   publisher: Redis;
   artifacts: S3ArtifactStore;
   outbox: RunOutboxDispatcher;
+  streamSubscriptions: StreamSubscriptionHub;
 }
 
 declare module 'fastify' {

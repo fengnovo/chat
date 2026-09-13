@@ -1,7 +1,6 @@
 import type { PersistedAgentEvent } from '@repo/contracts';
 import { runEventsChannel } from '@repo/contracts';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { Redis } from 'ioredis';
 
 import type { ApiServices } from './types.js';
 
@@ -98,12 +97,6 @@ export async function streamWorkflowRun(
 ) {
   const run = await services.repository.getRun(request.auth, runId);
   if (!run) return reply.code(404).send({ error: 'run_not_found' });
-  const subscriber = new Redis(services.config.REDIS_URL, {
-    maxRetriesPerRequest: null,
-    lazyConnect: true,
-  });
-  await subscriber.connect();
-  await subscriber.subscribe(runEventsChannel(runId));
 
   const initialEvents = await services.repository.listEvents(request.auth, runId, 0, 100_000);
   const initialChunks = chunksFrom(runId, initialEvents);
@@ -142,9 +135,11 @@ export async function streamWorkflowRun(
     return false;
   });
 
-  subscriber.on('message', () => void flush());
-  subscriber.on('error', (error: Error) =>
-    request.log.warn({ error }, 'workflow SSE subscriber error'),
+  const unsubscribe = await services.streamSubscriptions.subscribe(
+    runEventsChannel(runId),
+    () => void flush(),
+    (error: Error) =>
+      request.log.warn({ error }, 'workflow SSE subscriber error'),
   );
   await flush();
 
@@ -154,7 +149,7 @@ export async function streamWorkflowRun(
   request.raw.on('close', () => {
     closed = true;
     clearInterval(heartbeat);
-    void subscriber.quit();
+    unsubscribe();
   });
 }
 

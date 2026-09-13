@@ -11,6 +11,7 @@ import { AuthenticationError, createAuthenticator } from './auth.js';
 import type { ApiConfig } from './config.js';
 import { RunOutboxDispatcher } from './outbox.js';
 import { registerRoutes } from './routes.js';
+import { StreamSubscriptionHub } from './stream-subscriptions.js';
 
 interface BuildAppOptions {
   config: ApiConfig;
@@ -60,6 +61,13 @@ export async function buildApp(options: BuildAppOptions) {
     reconcileIntervalMs: options.config.OUTBOX_RECONCILE_INTERVAL_MS,
     staleAfterMs: options.config.OUTBOX_STALE_AFTER_MS,
   });
+  const streamSubscriptions = new StreamSubscriptionHub(
+    () =>
+      new Redis(options.config.REDIS_URL, {
+        maxRetriesPerRequest: null,
+        lazyConnect: true,
+      }),
+  );
 
   await app.register(cors, {
     origin: options.config.WEB_ORIGIN,
@@ -110,12 +118,14 @@ export async function buildApp(options: BuildAppOptions) {
     publisher,
     artifacts,
     outbox,
+    streamSubscriptions,
   });
 
   app.addHook('onReady', async () => outbox.start());
 
   app.addHook('onClose', async () => {
     await outbox.stop();
+    await streamSubscriptions.closeAll();
     await queue.close();
     await queueConnection?.quit();
     await publisher.quit();
