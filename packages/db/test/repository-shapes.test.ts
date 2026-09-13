@@ -99,7 +99,7 @@ test('createRun persists the authorized knowledge-base snapshot into its dispatc
   ]);
 });
 
-test('createRun rejects a knowledge base that is not visible to the caller', async () => {
+test('createRun rejects a missing knowledge base id', async () => {
   const pool = {
     async connect() {
       return {
@@ -137,8 +137,56 @@ test('createRun rejects a knowledge base that is not visible to the caller', asy
   await assert.rejects(
     repository.createRun(context, {
       sessionId: '00000000-0000-4000-8000-000000000003',
-      message: 'Search another tenant knowledge base',
+      message: 'Search a missing knowledge base',
       knowledgeBaseIds: ['00000000-0000-4000-8000-000000000004'],
+    }),
+    (error: unknown) =>
+      error instanceof RepositoryNotFoundError && error.resource === 'knowledge_base',
+  );
+});
+
+test('createRun rejects a cross-tenant knowledge base id', async () => {
+  const crossTenantKnowledgeBaseId = '00000000-0000-4000-8000-000000000099';
+  const pool = {
+    async connect() {
+      return {
+        async query(text: string) {
+          if (text.includes('FROM agent_sessions s')) {
+            return {
+              rows: [
+                {
+                  approval_mode: 'manual',
+                  workspace_path: '/workspace',
+                  source_type: 'empty',
+                  source_ref: null,
+                  source_revision: null,
+                },
+              ],
+              rowCount: 1,
+            };
+          }
+          if (text.includes('FROM knowledge_bases')) {
+            // The scoped visibility query must not return another tenant's row.
+            return { rows: [], rowCount: 0 };
+          }
+          return { rows: [], rowCount: 0 };
+        },
+        release() {},
+      };
+    },
+  };
+  const repository = new AgentRepository(pool as never);
+  const context: AuthContext = {
+    tenantId: '00000000-0000-4000-8000-000000000001',
+    userId: '00000000-0000-4000-8000-000000000002',
+    roles: ['member'],
+  };
+
+  await assert.rejects(
+    repository.createRun(context, {
+      sessionId: '00000000-0000-4000-8000-000000000003',
+      message: 'Search another tenant knowledge base',
+      knowledgeBaseIds: [crossTenantKnowledgeBaseId],
     }),
     (error: unknown) =>
       error instanceof RepositoryNotFoundError && error.resource === 'knowledge_base',
