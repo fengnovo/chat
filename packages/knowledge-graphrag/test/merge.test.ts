@@ -25,6 +25,7 @@ test('unions vector and selected graph relation provenance deterministically', (
 });
 
 test('rejects invalid candidate limits', () => {
-  assert.throws(() => mergeCandidates([], { entityKeys: [], relations: [], chunkIds: [] }, { maxCandidates: -1 }), /limit/);
-  assert.throws(() => mergeCandidates([], { entityKeys: [], relations: [], chunkIds: [] }, { maxCandidates: Number.POSITIVE_INFINITY }), /limit/);
+  for (const value of [-1, 1.5, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => mergeCandidates([], { entityKeys: [], relations: [], chunkIds: [] }, { maxCandidates: value }), /limit/, `maxCandidates=${value}`);
+  }
 });

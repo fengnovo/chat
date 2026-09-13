@@ -14,12 +14,15 @@ export function splitIntoChunks(document: ParsedDocument, options: { size: numbe
   const chunks: TextChunk[] = [];
   const headingRecords: Array<{ start: number; end: number; level: number; title: string }> = [];
   if (document.mime === 'text/markdown') {
-    let offset = 0;
-    for (const line of document.text.split(/\r?\n/)) {
+    const lines = /([^\r\n]*)(\r\n|\n|\r|$)/g;
+    let lineMatch: RegExpExecArray | null;
+    while ((lineMatch = lines.exec(document.text)) !== null) {
+      const line = lineMatch[1]!;
+      const offset = lineMatch.index;
       const end = offset + line.length;
-      const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-      if (match) headingRecords.push({ start: offset, end, level: match[1]!.length, title: match[2]! });
-      offset = end + 1;
+      const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+      if (headingMatch) headingRecords.push({ start: offset, end, level: headingMatch[1]!.length, title: headingMatch[2]! });
+      if (lines.lastIndex === document.text.length) break;
     }
   }
   let start = 0;

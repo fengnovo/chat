@@ -31,3 +31,9 @@ Implemented `@repo/knowledge-graphrag` as a side-effect-free pure algorithm pack
 - Chunking is character-based and intentionally minimal; later index-pipeline work can add token-aware policies without changing the pure API.
 - Graph relation IDs are deterministic SHA-256-derived IDs and relation traversal is in-memory only; the persistence adapter should preserve the same normalized keys and provenance semantics.
 - Heading state is derived from complete source-line offsets, so chunks beginning inside a heading never receive fabricated prefix paths.
+
+## Fix round 2 TDD evidence
+
+- Red: the CRLF heading-boundary regression failed because line offsets advanced by one character, attaching a later heading to an incomplete chunk.
+- Green: regex-derived original line offsets fixed CRLF handling; the complete package suite reports 14 passed, with typecheck and build passing.
+- Expanded malformed-limit tests independently cover negative, fractional, and infinite values for `maxHops`, `maxFanout`, `maxRelations`, and `maxCandidates`.

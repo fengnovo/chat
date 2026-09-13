@@ -23,3 +23,11 @@ test('does not fabricate heading paths when a chunk starts inside a long heading
   const chunks = splitIntoChunks(doc, { size: 8, overlap: 2 });
   assert.ok(chunks.every((chunk) => chunk.headingPath.length === 0 || chunk.headingPath[0] === 'A heading that is longer than one chunk'));
 });
+
+test('handles CRLF offsets without attaching a later incomplete heading', () => {
+  const doc = parseTextDocument(new TextEncoder().encode('# A\r\nbody\r\n## Long heading text\r\nend'), 'text/markdown');
+  const chunks = splitIntoChunks(doc, { size: 29, overlap: 0 });
+  assert.ok(chunks[0]);
+  assert.equal(chunks[0]!.text.endsWith('## Long heading te'), true);
+  assert.deepEqual(chunks[0]!.headingPath, ['A']);
+});

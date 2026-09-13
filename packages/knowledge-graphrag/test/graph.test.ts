@@ -39,7 +39,11 @@ test('applies hop, fan-out, and relation caps independently', () => {
 
 test('rejects invalid graph limits', () => {
   const graph = new InMemoryGraphStore();
-  assert.throws(() => graph.traverse(['a'], { maxHops: -1, maxFanout: 1, maxRelations: 1 }), /limit/);
-  assert.throws(() => graph.traverse(['a'], { maxHops: 1, maxFanout: -1, maxRelations: 1 }), /limit/);
-  assert.throws(() => graph.traverse(['a'], { maxHops: 1, maxFanout: 1, maxRelations: -1 }), /limit/);
+  for (const field of ['maxHops', 'maxFanout', 'maxRelations'] as const) {
+    for (const value of [-1, 1.5, Number.POSITIVE_INFINITY]) {
+      const limits = { maxHops: 1, maxFanout: 1, maxRelations: 1 };
+      limits[field] = value;
+      assert.throws(() => graph.traverse(['a'], limits), /limit/, `${field}=${value}`);
+    }
+  }
 });
