@@ -7,6 +7,14 @@
     grid-template-columns: 220px minmax(0, 1fr) 320px;
   }
 
+  .app-shell.is-files-open {
+    grid-template-columns: 220px minmax(0, 1fr) 320px;
+  }
+
+  .app-shell.is-trace-open.is-files-open {
+    grid-template-columns: 220px minmax(0, 1fr) 300px 320px;
+  }
+
   .sidebar {
     padding-left: 13px;
     padding-right: 13px;
@@ -25,6 +33,14 @@
 
   .app-shell.is-trace-open {
     grid-template-columns: 78px minmax(0, 1fr) 300px;
+  }
+
+  .app-shell.is-files-open {
+    grid-template-columns: 78px minmax(0, 1fr) 300px;
+  }
+
+  .app-shell.is-trace-open.is-files-open {
+    grid-template-columns: 78px minmax(0, 1fr) 280px 300px;
   }
 
   .sidebar {
@@ -218,6 +234,23 @@
   }
 
   .trace-panel.is-open {
+    transform: translateX(0);
+  }
+
+  .file-panel {
+    bottom: 0;
+    box-shadow: -15px 0 40px rgb(17 14 25 / 20%);
+    max-width: 420px;
+    position: fixed;
+    right: 0;
+    top: 0;
+    transform: translateX(105%);
+    transition: transform 240ms ease;
+    width: calc(100% - 42px);
+    z-index: 21;
+  }
+
+  .app-shell.is-files-open .file-panel {
     transform: translateX(0);
   }
 

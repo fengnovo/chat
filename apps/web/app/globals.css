@@ -8,6 +8,7 @@
 @import "./styles/agent-panels.css";
 @import "./styles/composer.css";
 @import "./styles/trace-panel.css";
+@import "./styles/file-panel.css";
 @import "./styles/modal.css";
 @import "./styles/toast.css";
 @import "./styles/skeleton.css";

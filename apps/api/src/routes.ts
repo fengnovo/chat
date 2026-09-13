@@ -243,6 +243,50 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     };
   });
 
+  app.get('/api/agent/sessions/:sessionId/files', async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const session = await services.repository.getSession(request.auth, sessionId);
+    if (!session) return reply.code(404).send({ error: 'session_not_found' });
+
+    const runs = await services.repository.listSessionRuns(request.auth, sessionId);
+    const eventGroups = await Promise.all(
+      runs.map((run) => services.repository.listEvents(request.auth, run.id, 0, 100_000)),
+    );
+
+    const fileOps = new Map<string, { path: string; content: string | null; operation: string }>();
+    for (const events of eventGroups) {
+      for (const event of events) {
+        if (event.type !== 'tool.started') continue;
+        const tool = event.tool;
+        if (
+          tool !== 'write_file' &&
+          tool !== 'edit_file' &&
+          tool !== 'read_file' &&
+          tool !== 'delete'
+        ) {
+          continue;
+        }
+        const args =
+          event.input && typeof event.input === 'object'
+            ? (event.input as Record<string, unknown>)
+            : {};
+        const filePath = String(args.file_path ?? args.path ?? '').trim();
+        if (!filePath) continue;
+
+        let content: string | null = fileOps.get(filePath)?.content ?? null;
+        if (tool === 'write_file' || tool === 'edit_file') {
+          const raw = args.content;
+          if (typeof raw === 'string') content = raw;
+        }
+        fileOps.set(filePath, { path: filePath, content, operation: tool });
+      }
+    }
+
+    return {
+      files: [...fileOps.values()].sort((a, b) => a.path.localeCompare(b.path)),
+    };
+  });
+
   app.post('/api/agent/sessions/:sessionId/runs', async (request, reply) => {
     const { sessionId } = request.params as { sessionId: string };
     const input = createRunSchema.parse(request.body);

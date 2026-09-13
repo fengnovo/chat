@@ -21,11 +21,13 @@ import {
 import { ResilientSession } from '@/app/lib/session';
 
 import { AgentStatusPanel } from './agent-status';
-import { fetchSessionPage, responseError } from './api';
+import { fetchSessionFiles, fetchSessionPage, responseError } from './api';
 import { Composer } from './composer';
 import { initialTrace } from './constants';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
 import { TaskFailureNotice, friendlyError } from './failure-notice';
+import { FilePanel } from './file-panel';
+import type { TouchedFile } from './file-panel';
 import { Icon } from './icon';
 import { Message, ThinkingRow } from './message';
 import { PendingInteraction } from './pending-interaction';
@@ -112,10 +114,12 @@ function ChatRuntime() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
   const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
+  const [historyFiles, setHistoryFiles] = useState<TouchedFile[]>([]);
   const [generatedTokens, setGeneratedTokens] = useState(0);
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [interactionBusy, setInteractionBusy] = useState(false);
@@ -182,6 +186,28 @@ function ChatRuntime() {
       setSessionsLoaded(true);
     }
   }, []);
+
+  // 首次加载时，如果当前对话对应一条历史会话，拉取它的文件记录。
+  const historyFilesLoadedRef = useRef(false);
+  useEffect(() => {
+    if (historyFilesLoadedRef.current || !sessionsLoaded) return;
+    const match = sessions.find(
+      (session) => session.externalKey === conversation.chatId,
+    );
+    if (!match) return;
+    historyFilesLoadedRef.current = true;
+    void fetchSessionFiles(match.id)
+      .then((files) =>
+        setHistoryFiles(
+          files.map((file) => ({
+            path: file.path,
+            content: file.content,
+            operation: file.operation as TouchedFile['operation'],
+          })),
+        ),
+      )
+      .catch(() => undefined);
+  }, [sessionsLoaded, sessions, conversation.chatId]);
 
   const transport = useMemo(() => {
     return new WorkflowChatTransport<ResilientMessage>({
@@ -643,6 +669,54 @@ function ChatRuntime() {
     return null;
   }, [agentActivity.entries, agentActivity.runningTool]);
 
+  // 从工具调用记录里提取 AI 操作过的文件，按路径去重，保留最后一次操作的内容。
+  // 合并历史会话的文件记录（从后端加载）和当前 run 的实时工具调用。
+  const touchedFiles = useMemo<TouchedFile[]>(() => {
+    const fileOps = new Map<string, TouchedFile>();
+    for (const file of historyFiles) {
+      fileOps.set(file.path, file);
+    }
+    for (const entry of agentActivity.entries) {
+      if (entry.kind !== 'tool') continue;
+      const tool = entry.tool;
+      if (
+        tool !== 'write_file' &&
+        tool !== 'edit_file' &&
+        tool !== 'read_file' &&
+        tool !== 'delete'
+      ) {
+        continue;
+      }
+      const args =
+        entry.input && typeof entry.input === 'object'
+          ? (entry.input as Record<string, unknown>)
+          : {};
+      const filePath = String(args.file_path ?? args.path ?? '').trim();
+      if (!filePath) continue;
+
+      let content: string | null = fileOps.get(filePath)?.content ?? null;
+      if (tool === 'write_file' || tool === 'edit_file') {
+        const raw = args.content;
+        if (typeof raw === 'string') content = raw;
+      } else if (tool === 'read_file' && entry.output != null) {
+        const out = entry.output;
+        if (typeof out === 'string') content = out;
+        else if (out && typeof out === 'object') {
+          const record = out as Record<string, unknown>;
+          const candidate = record.content ?? record.text ?? record.output;
+          if (typeof candidate === 'string') content = candidate;
+        }
+      }
+
+      fileOps.set(filePath, {
+        path: filePath,
+        content,
+        operation: tool,
+      });
+    }
+    return [...fileOps.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }, [agentActivity.entries, historyFiles]);
+
   async function selectSession(session: WebSessionSummary) {
     if (session.externalKey === conversation.chatId) return;
     stickToBottomRef.current = true;
@@ -667,6 +741,16 @@ function ChatRuntime() {
             pending: isPendingStatus(latestRun.status),
           }
         : null;
+
+      // 并行加载该会话历史里 AI 操作过的文件，供文件面板展示。
+      const files = await fetchSessionFiles(session.id).catch(() => []);
+      setHistoryFiles(
+        files.map((file) => ({
+          path: file.path,
+          content: file.content,
+          operation: file.operation as TouchedFile['operation'],
+        })),
+      );
 
       await stop();
       clearError();
@@ -768,6 +852,7 @@ function ChatRuntime() {
     setPendingInterrupt(null);
     setAgentTodos([]);
     setActivity(emptyActivity);
+    setHistoryFiles([]);
     setGeneratedTokens(0);
     setInteractionError(null);
     setRunFailure(null);
@@ -987,7 +1072,7 @@ function ChatRuntime() {
 
   return (
     <main
-      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}
+      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${filesOpen ? 'is-files-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}
     >
       <Sidebar
         activeChatId={conversation.chatId}
@@ -1047,6 +1132,15 @@ function ChatRuntime() {
             </button>
           </div>
           <div className="topbar-actions">
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={filesOpen ? '隐藏文件面板' : '显示文件面板'}
+              aria-expanded={filesOpen}
+              onClick={() => setFilesOpen((current) => !current)}
+            >
+              <Icon name="folder" />
+            </button>
             <button
               className="icon-button"
               type="button"
@@ -1190,6 +1284,10 @@ function ChatRuntime() {
         onClose={() => setTraceOpen(false)}
         trace={trace}
       />
+
+      {filesOpen && (
+        <FilePanel files={touchedFiles} onClose={() => setFilesOpen(false)} />
+      )}
 
       {sessionDialog && (
         <SessionActionDialog

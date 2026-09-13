@@ -10,10 +10,26 @@
   grid-template-columns: 264px minmax(0, 1fr) 360px;
 }
 
+.app-shell.is-files-open {
+  grid-template-columns: 264px minmax(0, 1fr) 420px;
+}
+
+.app-shell.is-trace-open.is-files-open {
+  grid-template-columns: 264px minmax(0, 1fr) 360px 420px;
+}
+
 .app-shell.is-sidebar-collapsed {
   grid-template-columns: 72px minmax(0, 1fr);
 }
 
 .app-shell.is-sidebar-collapsed.is-trace-open {
   grid-template-columns: 72px minmax(0, 1fr) 360px;
+}
+
+.app-shell.is-sidebar-collapsed.is-files-open {
+  grid-template-columns: 72px minmax(0, 1fr) 420px;
+}
+
+.app-shell.is-sidebar-collapsed.is-trace-open.is-files-open {
+  grid-template-columns: 72px minmax(0, 1fr) 360px 420px;
 }
