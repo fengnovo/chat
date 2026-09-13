@@ -1,188 +1,149 @@
-# GraphRAG 知识库接入方案
+# GraphRAG 知识库最小接入方案（MVP）
 
-本文说明如何把 `demo19-LlamaIndex-GraphRAG` 的 GraphRAG 能力，以插件/扩展方式接入本项目的 Web
-聊天，使其成为可实际使用的 SaaS 能力：用户上传文档构建知识库，在聊天界面选择知识库，Agent 检索
-知识库并基于证据作答、标注引用。
+本文说明如何把 `demo19-LlamaIndex-GraphRAG` 的 GraphRAG 能力，以小范围、可回退的方式接入
+本项目。目标不是把现有聊天系统改造成知识库平台，而是在保留现有 Agent、沙箱、事件流和任务派发
+机制的前提下，增加“上传文档 → 构建索引 → 对话检索 → 展示引用”这条闭环。
 
-本文只描述方案，不代表已实现。落地时按第 9 节的顺序推进。
+本文是设计稿，不代表功能已经实现。实现必须按第 11 节分阶段、测试先行推进。
 
-## 1. 目标与边界
+## 1. 目标与 MVP 边界
 
-**目标**
+### 1.1 目标
 
-- 用户可创建知识库、上传文档，索引过程异步、可观测、可重试。
-- 聊天界面可选知识库（0～N 个），选中后本轮 Agent 能检索该知识库。
-- 回答基于检索证据，并展示结构化引用（文档名/页码/片段/命中方式）。
-- 多租户隔离：知识库、文档、检索记录均按 `tenant_id` 隔离，配合现有 `owner/admin/member` 角色。
-- demo19 作为**独立的算法来源**，不参与运行时；其检索算法复制进本仓库后独立演进。
+- 用户可创建知识库、上传文档，索引过程异步、可观察、可重试。
+- 聊天界面可选择 0～N 个知识库；未选择时，现有聊天行为完全不变。
+- Agent 通过只读工具检索知识库，基于返回的证据回答。
+- 当前回答和历史记录都能展示结构化引用。
+- 知识库、文档、检索和引用全程按 `tenant_id` 隔离。
+- demo19 只作为算法来源，其目录保持不变，不参与本项目运行时。
 
-**边界**
+### 1.2 首期明确支持
 
-- 检索在 Worker 宿主进程侧通过 MCP/HTTP 调用独立服务完成，**不进入 E2B 沙箱**。沙箱继续只负责
-  代码执行与文件操作，两者职责不重叠。
-- GraphRAG 模块不复制 demo19 的示例内容与硬编码参数（`documents/` 样例、`main()`、固定问题、
-  `similarityTopK=2`、多跳固定 3 跳、`slice(0, 8)` 截断），全部改为上传驱动 + 配置驱动。
-- 知识库管理 API 归 `apps/api`（唯一鉴权边界），`apps/knowledge-service` 只做索引引擎与 MCP 检索。
+- 文档格式仅支持 UTF-8 Markdown 和纯文本。
+- 采用一套由服务端环境变量配置的 embedding profile；创建知识库时记录该 profile，但用户不能
+  自行切换模型或维度。
+- 图谱抽取、向量召回、多跳遍历和引用回传形成完整闭环。
+- 一个 `apps/knowledge-service` 同时承载 BullMQ 索引消费和 MCP Streamable HTTP 端点。
+- 复用现有 Postgres、Redis/BullMQ、S3 兼容对象存储；只新增 Qdrant。
+- 默认不做二次 rerank，先使用向量得分和确定性的图谱扩展排序。
+
+### 1.3 首期不做
+
+- PDF、DOCX、OCR、图片解析。
+- 多 embedding profile 并存与跨 collection 聚合。
+- 索引版本、快照回滚、无损蓝绿重建。
+- Cohere、BGE、LLM rerank 等额外 provider。
+- 图谱来源关系表标准化；首期保留 `chunk_ids uuid[]`。
+- 检索缓存、人工反馈和离线评估平台。
+- 成员级知识库 ACL；首期只保留 private / tenant 两级可见性。
+
+这些限制用于控制首期改动量，不封死后续扩展接口。
 
 ## 2. 与 demo19 的关系
 
-demo19 是脚本式演示，直接复用不可行，原因如下：
+demo19 是脚本式演示，不能直接作为生产运行时引用：
 
-| 维度 | demo19 现状 | 生产要求 |
+| 维度 | demo19 现状 | 本项目 MVP |
 |---|---|---|
-| 入口 | `index.ts` 无任何 export，`main()` 硬编码演示问题 | 稳定导出 API，无脚本副作用 |
-| 内容 | `documents/` 三个固定 md | 用户上传，md/txt/PDF/docx |
-| 存储 | 全内存 Map，进程退出即丢 | Qdrant（向量）+ Postgres（元数据/图谱/日志） |
-| 租户 | 无 | 多租户隔离 + 权限 |
-| 配置 | 模块顶层读 env 并改写 LlamaIndex 全局 `Settings` | 运行时注入，禁止全局副作用 |
-| 输出 | 自带 `responseSynthesizer` 产出最终答案 | `retrieve()` 只召回证据，由主 Agent 作答 |
-| 引用 | `trace` 只有 vectorSources/seedEntities/traversal | 结构化 citations（chunkId/documentId/page/score/via） |
-| 增量 | 无 | 按 `content_hash` 增量、可重建 |
+| 入口 | `index.ts` 无 export，`main()` 有脚本副作用 | 稳定导出构建索引和检索 API |
+| 内容 | 三个固定 Markdown 文件 | 用户上传的 Markdown/TXT |
+| 存储 | 全内存 Map | Postgres 图谱/原文 + Qdrant 向量 |
+| 租户 | 无 | 强制 `tenant_id` 和授权知识库集合 |
+| 配置 | 修改 LlamaIndex 全局 `Settings` | 模型、维度和客户端由实例注入 |
+| 输出 | 检索后直接合成最终答案 | 只返回证据，由现有主 Agent 作答 |
+| 引用 | 只有简单 trace | 可持久化的 citations 和检索统计 |
+| 增量 | 无 | 按内容哈希去重，失败可重试 |
 
-**保留的部分**：检索算法本身——向量召回 → 实体种子 → 多跳遍历 → 证据合并。其中
-`graph.ts` 的 `InMemoryPropertyGraph`（`addExtraction` / `entityKeysForChunks` / `traverse` /
-`formatRelationships` / `stats`）是唯一低耦合可复用的实现，复制进
-`packages/knowledge-graphrag/src/graph/` 后继续演进；其三个内存 Map 改为从 Postgres 加载的
-查询视图。demo19 目录保持原样不动。
+保留并迁移的是以下算法行为：
 
-## 3. 总体架构
+1. 向量召回相关 chunk。
+2. 根据命中 chunk 找到实体种子。
+3. 从种子执行有边界的多跳遍历。
+4. 合并向量证据与图谱关系并生成引用。
+
+`graph.ts` 中的 key 规范化、`addExtraction` 合并语义、遍历方向和格式化逻辑可以迁入
+`packages/knowledge-graphrag`，同时保留原测试用例作为回归基线。生产检索不把一个知识库的完整
+图谱加载进内存，而是通过 `PropertyGraphStore` 按层查询 Postgres，并限制种子数、每层 fan-out、
+最大边数和最大跳数。
+
+不迁移 demo 的示例文档、`main()`、固定问题、固定 topK、多跳次数、`slice(0, 8)` 以及全局
+`Settings` 写入。
+
+## 3. 最小接入架构
 
 ```mermaid
 flowchart TB
   subgraph web[apps/web]
-    P[知识库选择器]
-    M[知识库管理页]
-    C[引用卡片]
+    PICKER[知识库选择器]
+    MANAGE[轻量管理页]
+    CITATIONS[引用卡片]
   end
 
-  subgraph api[apps/api 唯一鉴权边界]
-    KBAPI[KB CRUD / 上传预签名 / 索引状态]
-    CHAT[/api/chat 权限校验 + 透传/]
+  subgraph api[apps/api：唯一业务鉴权边界]
+    KBAPI[KB CRUD / 上传确认 / 索引状态]
+    CHAT["/api/chat 校验并快照 kbIds"]
   end
 
-  subgraph svc[apps/knowledge-service]
-    IDX[索引引擎 消费队列]
-    MCP[MCP server only /mcp]
+  subgraph service[apps/knowledge-service]
+    INDEXER[BullMQ 索引消费者 + 补偿扫描]
+    MCP[MCP /mcp + /healthz]
   end
 
   subgraph worker[apps/worker]
-    RT[createRuntime 注入 per-run MCP]
-    AG[DeepAgent / LangGraph]
-    E2B[E2B 沙箱 仅代码与文件]
+    RUNTIME[按 run 注入可选 MCP]
+    AGENT[DeepAgent / LangGraph]
+    SANDBOX[现有沙箱]
   end
 
-  Q[(Qdrant 向量)]
-  PG[(Postgres 元数据/图谱/日志/任务)]
-  S3[(对象存储 原始文件)]
-  RD[(Redis 队列)]
+  PG[(Postgres 权威数据)]
+  S3[(现有对象存储)]
+  REDIS[(现有 Redis)]
+  QDRANT[(新增 Qdrant)]
 
-  P --> CHAT
-  M --> KBAPI
+  MANAGE --> KBAPI
+  PICKER --> CHAT
   KBAPI --> PG
   KBAPI --> S3
-  KBAPI --> RD --> IDX
-  IDX --> S3
-  IDX --> Q
-  IDX --> PG
+  KBAPI --> REDIS
+  REDIS --> INDEXER
+  INDEXER --> S3
+  INDEXER --> PG
+  INDEXER --> QDRANT
   CHAT --> worker
-  RT --> AG
-  AG -->|MCP| MCP
-  MCP --> Q
+  RUNTIME --> AGENT
+  AGENT -->|MCP HTTP| MCP
   MCP --> PG
-  AG -.-> E2B
-  AG -->|retrieval.completed| web
+  MCP --> QDRANT
+  AGENT -.->|不变| SANDBOX
+  AGENT -->|retrieval.completed| CITATIONS
 ```
 
-**关键分层决策**
+### 3.1 对现有代码的影响
 
-| 决策 | 选择 | 理由 |
-|---|---|---|
-| 检索执行位置 | Worker 宿主进程经 MCP 调用独立服务 | 沙箱职责是执行与文件；避免在沙箱内下发模型密钥、避免沙箱 pause/kill 后索引丢失 |
-| 模块形态 | `packages/knowledge-graphrag`（库）+ `apps/knowledge-service`（进程） | 符合仓库 `apps/*` / `packages/*` 约定；库可测、进程可独立部署 |
-| 接入协议 | MCP 动态注入（首选） | `loadMcpTools` 已是现有唯一通用工具注入点，新增工具无需改动 Agent 核心，天然插件化 |
-| 向量存储 | 独立 Qdrant | 向量与业务数据分离，扩容与替换独立 |
-| 事实来源 | Postgres 为 source of truth，Qdrant 可重建 | 双库无事务，必须有一侧权威；Qdrant 损坏不是灾难 |
-| 索引起点 | 异步队列，不在 chat 请求路径 | 抽取需逐块调用 LLM，耗时与成本高，不能阻塞对话 |
-
-## 4. 数据存储设计
-
-### 4.1 Postgres（权威）
-
-所有表以 `tenant_id` 为第一过滤维度。迁移文件 `packages/db/migrations/008_knowledge_base.sql`。
-
-```text
-knowledge_bases
-  id, tenant_id, owner_user_id, name, description,
-  visibility('private'|'tenant'),
-  embedding_model, embedding_dim, collection_name,
-  chunk_size, chunk_overlap, top_k, max_hops, graph_enabled, rerank_provider,
-  doc_count, chunk_count, status, created_at, updated_at, deleted_at
-
-knowledge_documents
-  id, kb_id, tenant_id, name, mime, size_bytes, content_hash,
-  object_key, status, error_code, error_message, page_count, chunk_count,
-  indexed_at, created_at                       -- UNIQUE(kb_id, content_hash) 去重
-
-knowledge_chunks
-  id, kb_id, tenant_id, document_id, ordinal, text, token_count,
-  page, metadata jsonb, vector_point_id        -- 不存向量，向量在 Qdrant
-
-graph_entities
-  id, kb_id, tenant_id, entity_key, name, type, description, chunk_ids uuid[]
-
-graph_relationships
-  id, kb_id, tenant_id, source_key, target_key, relation,
-  description, chunk_ids uuid[]
-
-knowledge_index_jobs
-  id, kb_id, tenant_id, document_id, kind('index'|'reindex'|'delete'),
-  status, progress, attempts, error_code, error_message,
-  started_at, finished_at, created_at
-
-knowledge_retrieval_logs
-  id, tenant_id, user_id, session_id, run_id, kb_ids uuid[],
-  query, top_k, max_hops, result_count, rerank_status,
-  citations jsonb, latency_ms, status, error_code, created_at
-```
-
-同时 `agent_sessions` 增加 `knowledge_base_ids uuid[]`，作为会话默认选择，保证审批/提问中断恢复后
-知识库上下文不丢失。
-
-### 4.2 Qdrant（可重建索引）
-
-collection 按维度命名，因为**维度在创建时固定**，不同模型无法共存：
-
-```text
-collection: {QDRANT_COLLECTION_PREFIX}_chunks_{dim}     # 如 kb_chunks_1536
-distance:   Cosine
-point id:   chunk 的 UUID（原生支持，upsert 幂等，重建无需先清空）
-payload:
-  tenant_id   keyword  ← 建 payload index，多租户隔离第一维
-  kb_id       keyword  ← 建 payload index
-  document_id keyword  ← 建 payload index，删除/重建按此过滤
-  chunk_id    keyword
-  ordinal     integer
-  page        integer（可空）
-  tags        keyword[]（供 metadata filter）
-```
-
-**不按知识库建 collection**：知识库数量随租户增长会导致 collection 数量失控。统一走 payload
-filter + payload index，这是 Qdrant 官方多租户推荐方向。
-
-### 4.3 一致性处理
-
-双库无法同事务，采用"**Postgres 先逻辑删除 → Qdrant 异步物理清理**"，检索侧始终以
-Postgres `status='ready'` 为准。
-
-| 场景 | 处理 |
+| 区域 | 最小改动 |
 |---|---|
-| 重建索引 | 按 `document_id` filter 删 Qdrant points → 重灌，避免残留旧向量 |
-| 删除文档 | Postgres 标记 deleted（立即从检索排除）→ 异步删 Qdrant points → 硬删行，失败可重试 |
-| 索引中途失败 | Postgres 保留 failed 记录，重试幂等（chunk id 稳定，upsert 覆盖） |
-| 孤儿向量 | 清理任务按 `document_id` 比对 Postgres 与 Qdrant，删除无主 points |
-| Qdrant 全量损坏 | 从 Postgres `knowledge_chunks` 全量重嵌入重灌 |
+| `packages/contracts` | 增加知识库 ID 和引用事件契约 |
+| `packages/db` | migration 009、7 张知识表、run 快照字段和仓储方法 |
+| `apps/api` | 知识库管理 API、上传确认、chat 批量授权 |
+| `apps/worker` | 根据 run 快照注入可选 GraphRAG MCP 配置 |
+| `packages/agent-core` | 可选 MCP 隔离加载、精确免审批、structured output 转换为引用事件 |
+| `apps/web` | 选择器、轻量管理页、引用渲染与历史恢复 |
+| 现有沙箱 | 不改 |
+| LangGraph checkpoint / interrupt | 语义不改，只携带 run 已快照的 kbIds |
+| 现有 Agent outbox | 不改其语义；知识索引任务使用独立持久任务表 |
 
-## 5. 索引流程
+### 3.2 为什么保留独立服务
+
+把索引和检索直接塞进 `apps/worker` 虽然少一个进程，却会把 LlamaIndex、Qdrant、文档处理、
+索引并发和模型密钥耦合进现有 Agent 运行时。独立服务多一个部署单元，但现有 Worker 只增加一个
+可选 MCP 工具入口；服务不可用时也更容易隔离和降级。
+
+MVP 只建一个 knowledge-service，不进一步拆 indexer 和 retrieval service。以后若二者扩缩容需求
+不同，可由同一代码包增加运行角色，而无需改变 API 或 MCP 契约。
+
+## 4. 端到端流程
+
+### 4.1 上传与索引
 
 ```mermaid
 sequenceDiagram
@@ -190,256 +151,477 @@ sequenceDiagram
   actor U as 用户
   participant API as apps/api
   participant S3 as 对象存储
-  participant Q as Redis 队列
-  participant IDX as knowledge-service 索引引擎
-  participant V as Qdrant
   participant PG as Postgres
+  participant Q as BullMQ
+  participant IDX as knowledge-service
+  participant V as Qdrant
 
-  U->>API: 上传文档
-  API->>API: 鉴权 + 权限判定（可写该 KB）
-  API->>PG: 建 knowledge_documents(status=pending)
-  API->>S3: 生成预签名上传 URL
-  U->>S3: 直传
+  U->>API: 创建文档上传
+  API->>API: 校验 KB 写权限、大小和声明类型
+  API->>PG: document(pending) + 预签名信息
+  API-->>U: 上传 URL
+  U->>S3: 直传文件
   U->>API: 确认上传
-  API->>S3: 校验 size / sha256
-  API->>PG: status=queued
-  API->>Q: 投递 knowledge-index
+  API->>S3: 校验对象存在和大小
+  API->>PG: 同一事务写 document(queued) + index_job(queued)
+  API->>Q: post-commit add(jobId=indexJob.id)
+  IDX->>PG: 补偿扫描 queued/stale job 并幂等补投
   Q->>IDX: 消费任务
-  IDX->>S3: 下载原始文件
-  IDX->>PG: parsing → chunking，写 knowledge_chunks
-  IDX->>V: 批量 embed + upsert points
-  IDX->>PG: graph_extracting，写 entities / relationships
-  IDX->>PG: status=ready、chunk_count、indexed_at
+  IDX->>S3: 下载并计算真实 sha256
+  IDX->>PG: parsing/chunking
+  IDX->>V: 批量 embedding + upsert
+  IDX->>PG: graph_extracting
+  IDX->>PG: document/job ready
 ```
 
-**状态机**：`pending → queued → parsing → chunking → embedding → graph_extracting → ready`，
-任一环节失败进入 `failed`，错误以结构化 `error_code` + `error_message` 落到
-`knowledge_index_jobs`，可重试。`graph_enabled=false` 时跳过 `graph_extracting`，退化为纯向量检索。
+上传确认阶段的现有 S3 校验只能证明对象存在、大小和客户端元数据匹配，不能证明对象字节的真实
+SHA-256。索引器必须对下载到的字节重新计算哈希；不匹配时进入 `failed`，不得继续索引。解析器还要
+拒绝二进制内容、非法 UTF-8 和超限文件，不能只信文件扩展名或请求中的 MIME。
 
-**解析层**（`src/parser/`）
+API 事务提交与 BullMQ 投递无法形成同一事务。`knowledge_index_jobs` 因此同时作为任务状态表和
+持久投递账本：API 提交后以任务 ID 作为 BullMQ `jobId` 投递；knowledge-service 周期扫描未完成、
+未投递或超时任务并幂等补投，消除“数据库已提交但进程在入队前退出”的任务丢失窗口。
 
-- 统一接口 `parse(buffer, mime) → { text, pages?, metadata }`，按 mime 分发。
-- md/txt：纯文本直通，md 保留标题层级供切块。
-- PDF：解析带页码 → 落到 chunk `page`，支撑"第 N 页"引用。**扫描版 PDF 无文本层，阶段 1 不做
-  OCR**，明确失败并给出可读错误码。
-- docx：抽正文段落，标题层级写入 `metadata.heading`。
-- 解析失败不阻塞其他文档。
+状态机：
 
-**成本控制**：抽取按块调用 LLM，必须设置并发上限、批量大小、重试上限、单 KB 抽取预算；
-embedding 按批调用，避免逐块请求。
+`pending → queued → parsing → chunking → embedding → graph_extracting → ready`
 
-## 6. 检索流程
+任一阶段失败进入 `failed`，保存稳定的 `error_code` 和可读 `error_message`。同一文档同一时刻只
+允许一个活动索引任务。
+
+### 4.2 聊天与检索
+
+1. Web 把用户选择的 `knowledge_base_ids` 随 `POST /api/chat` 发送。
+2. API 把全部 kbIds 交给 repository；repository 在创建 run 的事务中一次性查询和校验。任一 ID
+   不存在或不可读时统一返回 404，不创建部分授权 run。
+3. 同一事务把选择写入 `agent_runs.knowledge_base_ids`，并写入 start outbox job。
+4. Worker 从 job/run 快照取得 kbIds，签发短时 run token，并加载可选 GraphRAG MCP client。
+5. Agent 仅能调用固定的 `graphrag_search` 工具；知识服务只信 token 中的 tenant/run/kb 范围。
+6. MCP 返回给模型的有界证据文本，同时在 `structuredContent` 返回 citations 和统计。
+7. Agent Core 将 structured content 转成 `retrieval.completed` 事件；回答仍由现有 Agent 生成。
+8. SSE 发出非 transient 的 `data-citations`，历史接口也从持久事件重建同样的 message part。
+
+审批或提问中断恢复时，`resume-approval` 和 `resume-question` 必须继续使用
+`agent_runs.knowledge_base_ids`，不能重新使用用户下一次发送时的当前选择。
+
+### 4.3 服务不可用时的降级
+
+- 未选择知识库：不创建 GraphRAG client，不改现有行为。
+- GraphRAG MCP 初始化失败：记录明确诊断，跳过该可选工具，Agent 仍可执行通用任务。
+- 检索调用失败：工具返回受控错误，不让整个 Agent runtime 崩溃；回答必须明确说明知识库暂时不可用。
+- 可选 GraphRAG client 独立于用户已有的 MCP client，连接失败和 `close()` 不互相影响。
+
+## 5. 数据设计
+
+### 5.1 Postgres 是权威数据源
+
+当前仓库已有 `008_sandbox_provider_docker.sql`，因此新增迁移必须命名为：
+
+`packages/db/migrations/009_knowledge_base.sql`
+
+新增 7 张表：
+
+```text
+knowledge_bases
+  id, tenant_id, owner_user_id, name, description,
+  visibility('private'|'tenant'),
+  embedding_profile_key, embedding_model, embedding_dim, collection_name,
+  chunk_size, chunk_overlap, top_k, max_hops, graph_enabled,
+  status, created_at, updated_at, deleted_at
+
+knowledge_documents
+  id, kb_id, tenant_id, name, mime, size_bytes, content_hash,
+  object_key, status, error_code, error_message,
+  chunk_count, indexed_at, created_at, updated_at, deleted_at
+
+knowledge_chunks
+  id, kb_id, tenant_id, document_id, ordinal, text, token_count,
+  heading, metadata jsonb, vector_point_id, created_at
+
+graph_entities
+  id, kb_id, tenant_id, document_id, entity_key, name, type, description,
+  chunk_ids uuid[], created_at, updated_at
+
+graph_relationships
+  id, kb_id, tenant_id, document_id, source_key, target_key, relation,
+  description, chunk_ids uuid[], created_at, updated_at
+
+knowledge_index_jobs
+  id, kb_id, tenant_id, document_id, kind('index'|'reindex'|'delete'),
+  status, progress, attempts, enqueued_at, next_attempt_at,
+  lease_expires_at, error_code, error_message,
+  started_at, finished_at, created_at, updated_at
+
+knowledge_retrieval_logs
+  id, retrieval_id, tenant_id, user_id, session_id, run_id, kb_ids uuid[],
+  query, top_k, max_hops, result_count, rerank_status,
+  citations jsonb, latency_ms, status, error_code, created_at
+```
+
+现有 `agent_runs` 增加 `knowledge_base_ids uuid[] NOT NULL DEFAULT '{}'`，作为本次 run 的不可变
+授权快照。MVP 不改 `agent_sessions`；Web 按 `chatId` 保存的选择只用于下一次请求，避免为跨设备默认值
+扩大现有 session 模型。
+
+关键约束和索引：
+
+- 所有知识表的查询都以 `tenant_id` 为第一过滤条件。
+- `knowledge_documents` 使用活动记录部分唯一索引
+  `UNIQUE (kb_id, content_hash) WHERE deleted_at IS NULL`，允许已删除内容再次上传。
+- `graph_entities` 以 `(kb_id, document_id, entity_key)` 去重；同一实体可跨文档出现，遍历时按
+  `entity_key` 合并查询。
+- 图谱表保留 `document_id`，使删除/重建可整篇清理；`chunk_ids` 建 GIN index，关系按
+  `(kb_id, source_key)` 和 `(kb_id, target_key)` 建索引。
+- 检索日志中的 citations 必须限制数量和字段长度，不保存完整 passage。
+
+首期在单个文档内合并同一实体/关系并保留 `chunk_ids uuid[]`，以减少表和 join 数量；跨文档遍历按
+规范化 key 汇合。数组会弱化数据库级引用完整性，但在 MVP 的小规模图谱和有界查询下可以接受；
+进入大规模评估前再迁移到
+`graph_entity_chunks` / `graph_relationship_chunks` 映射表。
+
+### 5.2 Qdrant 是可重建索引
+
+collection 不能只按维度命名：两个不同 embedding 模型即使维度相同，向量空间也不兼容。MVP 使用
+全局唯一、启动后不可变的 embedding profile，并以 profile 标识和维度命名：
+
+```text
+collection: {QDRANT_COLLECTION_PREFIX}_chunks_{profile_hash}_{dim}
+distance:   Cosine
+point id:   chunk UUID
+payload:
+  tenant_id   keyword
+  kb_id       keyword
+  document_id keyword
+  chunk_id    keyword
+  ordinal     integer
+  heading     keyword（可空）
+```
+
+`tenant_id`、`kb_id`、`document_id` 必须建立 payload index；`tenant_id` 配置
+`is_tenant: true`。共享 collection 配合 tenant payload index 是
+[Qdrant 多租户文档](https://qdrant.tech/documentation/manage-data/multitenancy/)推荐的方向，
+避免按知识库创建大量 collection。
+
+知识库创建时把当前 profile key、model、dimension 和 collection name 写入 Postgres，仅用于审计和
+一致性校验，不对用户开放编辑。服务启动时若数据库 profile 与配置不匹配，必须拒绝对该知识库检索，
+不能把不同模型的向量混用。
+
+### 5.3 一致性和简化取舍
+
+| 场景 | MVP 处理 |
+|---|---|
+| 新建索引 | 先写 Postgres 状态，再幂等 upsert Qdrant，全部完成后标记 ready |
+| 删除文档 | Postgres 先软删除并立即排除检索，再异步清理 Qdrant 和图谱来源 |
+| 重建文档 | 同一 document 串行执行；先标 indexing 并清理旧索引，再重建 |
+| 重建失败 | document 进入 failed，暂时不可检索，重试后恢复 |
+| 孤儿向量 | 周期任务按 document_id 与 Postgres 对账后删除 |
+| Qdrant 丢失 | 从 `knowledge_chunks` 重新 embedding；图谱仍在 Postgres，不需要重新抽取 |
+
+MVP 不实现 generation/active-version 原子切换，因此单文档重建期间会暂时不可检索。这是为减少 schema、
+任务和查询复杂度而接受的显式取舍。
+
+## 6. 检索算法和 MCP 输出
+
+### 6.1 有界 GraphRAG
 
 ```mermaid
-flowchart TB
-  Q0[用户问题] --> AUTH[校验 run token 授权范围]
-  AUTH --> EMB[query 向量化]
-  EMB --> VEC[Qdrant 超额召回 topK x RERANK_FACTOR<br/>filter: tenant_id + kb_id + metadata]
-  VEC --> FETCH[Postgres 批量取原文]
-  FETCH --> GRAPH{graph_enabled?}
-  GRAPH -->|是| SEED[命中 chunk 反查实体种子]
-  SEED --> HOP[N 跳遍历 graph_relationships]
-  GRAPH -->|否| MERGE
-  HOP --> MERGE[合并去重成候选池]
-  MERGE --> RR[rerank]
-  RR --> TOP[取 topN]
-  TOP --> RES[passages + relations + citations]
-  RES --> LOG[写 knowledge_retrieval_logs]
+flowchart LR
+  QUERY[query] --> EMBED[query embedding]
+  EMBED --> VECTOR[Qdrant 超额召回]
+  VECTOR --> READY[Postgres 过滤 ready 文档并取原文]
+  READY --> SEEDS[命中 chunk 反查实体]
+  SEEDS --> GRAPH[有界多跳遍历]
+  READY --> MERGE[候选证据]
+  GRAPH --> MERGE
+  MERGE --> RANK[确定性排序去重]
+  RANK --> RESULT[passages + relations + citations]
 ```
 
-要点：
+默认流程：
 
-- **超额召回 + rerank**：这是对 demo19 硬编码 `slice(0, 8)` 的正式替代。Qdrant 取
-  `topK × RERANK_FACTOR`，与图谱命中合并为候选池，rerank 后取 topN。
-- rerank provider 可配：`none | llm | cohere | bge`，默认用现有模型网关做 LLM rerank，
-  不引入新厂商依赖。失败时**降级为向量原始排序**并记录 `rerank_status`，不让整次检索失败。
-- 缓存：按 `(kb_id, query, 候选集 hash)` 做短时缓存。
-- 输出结构：
+1. Qdrant 按 token 内的 `tenant_id + kbIds` 过滤，召回 `topK × candidateFactor`。
+2. Postgres 批量获取 chunk，并再次过滤未 ready 或已删除的 document。
+3. 只用向量命中 chunk 反查实体种子。
+4. 按层查询图关系，限制 `maxSeeds`、`maxHops`、`maxFanoutPerNode` 和 `maxRelations`。
+5. 向量命中保留原始相似度；graph-only 证据按种子分数和 hop 衰减，稳定排序并去重。
+6. 只收集向量命中和最终选中关系的来源 chunk；不能像 demo 一样把所有访问实体的 chunk 都加入证据。
+7. 取最终 topN，截断单条文本和总工具输出。
+
+首期 `rerank_status` 固定为 `not_requested`。保留 `Reranker` 接口，但不实现额外 provider；仓库当前
+没有可供 knowledge-service 直接复用的独立“模型网关服务”，不能在文档中假设其存在。
+
+### 6.2 类型
 
 ```ts
 type Citation = {
   chunkId: string;
   documentId: string;
   documentName: string;
-  page?: number;
+  ordinal: number;
+  heading?: string;
   score: number;
   via: 'vector' | 'graph' | 'both';
 };
 
 type RetrieveResult = {
+  retrievalId: string;
   passages: Array<{ citation: Citation; text: string }>;
-  relations: Array<{ source: string; relation: string; target: string; chunkIds: string[] }>;
+  relations: Array<{
+    source: string;
+    relation: string;
+    target: string;
+    chunkIds: string[];
+  }>;
   seedEntities: string[];
-  stats: { vectorHits: number; reranked: boolean; graphHops: number; searchedKbs: number };
+  stats: {
+    vectorHits: number;
+    graphHops: number;
+    searchedKbs: number;
+    durationMs: number;
+    truncated: boolean;
+  };
 };
 ```
 
-## 7. 权限与多租户
+### 6.3 MCP 返回边界
 
-**可见性模型**：私有（默认）+ 可选共享到租户。
+`graphrag_search` 的 MCP result 分成两部分：
+
+- `content`：供模型阅读的有界证据文本，带稳定的 `[S1]`、`[S2]` 标签。
+- `structuredContent`：`retrievalId`、citations、有限 relations 和 stats，不含完整 passage。
+
+现有 Agent Core 的工具输出归一化只保留可打印文本，不能自动把 MCP `structuredContent` 变成事件。
+实现必须显式读取 ToolMessage artifact/content block，在对应 tool call 完成时发出
+`retrieval.completed`，并用 `toolCallId` / `retrievalId` 关联，不能只修改 `loadMcpTools`。
+
+## 7. 权限与运行快照
+
+可读规则：
 
 ```text
-可读 = kb.tenant_id === auth.tenantId
-       AND ( kb.visibility === 'tenant'
-             OR kb.owner_user_id === auth.userId
-             OR auth.roles ∩ {owner, admin} ≠ ∅ )
+kb.tenant_id === auth.tenantId
+AND (
+  kb.visibility === 'tenant'
+  OR kb.owner_user_id === auth.userId
+  OR auth.roles 与 {owner, admin} 有交集
+)
 ```
 
-- 写操作（上传/索引/删除）沿用同一判定，member 只能改自己创建的 private 知识库。
-- 跨租户一律返回 404，不泄露资源存在性。
-- 判定函数只在 `apps/api` 实现一处，检索侧复用同一规则。
+- API 是资源授权的唯一入口。跨租户、不可见和不存在统一返回 404，避免泄露资源存在性。
+- `POST /api/chat` 必须把完整 kbIds 交给 repository，由 `createRun` 在同一事务中完成批量授权、run
+  snapshot 和 outbox；禁止静默丢弃无权限 ID，也禁止部分成功。
+- 写权限要求同租户且当前用户是创建者，或拥有 owner/admin 角色；member 只能修改自己创建的知识库。
+- knowledge-service 不重新查询用户角色，只校验 Worker 签发的短时 run token。
+- token 载荷至少包含 `tenantId`、`userId`、`sessionId`、`runId`、`kbIds`、`exp` 和唯一标识。
+- MVP 的工具输入不暴露 kbIds，服务始终搜索 token 中的完整授权集合；以后若增加收窄参数，也只能取
+  token kbIds 的子集。
+- MCP 使用 HTTP Authorization header 传 token，不通过进程级 env 注入 per-run 身份。
+- 每次检索写 `knowledge_retrieval_logs`，日志失败不影响返回，但必须进入应用日志和指标。
 
-**检索授权（关键）**：模型不能通过传 `kb_id` 越权。
+## 8. 现有项目接入点
 
-1. Worker 在 `createRuntime` 时，用共享密钥签发短时 token，载荷含
-   `{ tenantId, userId, sessionId, runId, kbIds[] }`，有效期与 run 对齐。
-2. token 通过 MCP server 的 env/headers 传入 `apps/knowledge-service`（per-run 构造
-   `MultiServerMCPClient` 配置，天然隔离）。
-3. 服务端**只信 token，不信模型参数**；模型传入的 `kb_id` 仅能在已授权集合内二次收窄。
-4. 每次检索写 `knowledge_retrieval_logs`，可审计。
+### 8.1 `packages/contracts`
 
-## 8. 与 chat 的接入点
+- 新增 `citationSchema`。
+- 新增 `retrieval.completed`：
+  `retrievalId`、`toolCallId`、`knowledgeBaseIds`、`query`、`citations`、有限 `relations`和 `stats`。
+- `createRunSchema` 增加 `knowledgeBaseIds: z.array(z.uuid()).max(10).optional()`。
+- `runJobSchema` 的 `start`、`resume-approval`、`resume-question` 都携带
+  `knowledgeBaseIds`。
+- 对数组长度、字符串长度和 payload 总量设置上限，防止 `run_events` 膨胀。
 
-### 8.1 契约（必须最先改）
+`persistEvent` 会执行 `agentEventSchema.parse(event)`，所以契约和测试必须先于 Worker 发出新事件。
 
-`persistEvent` 会对每个事件执行 `agentEventSchema.parse(event)`，未注册的事件类型会直接抛错
-导致 run 失败，因此契约必须先于 Worker 改动。
+### 8.2 `packages/db`
 
-- `packages/contracts/src/index.ts`
-  - 新增 `citationSchema`。
-  - 新增 `retrieval.completed` 事件：携带 `knowledgeBaseIds`、`query`、`citations`、`relations`、
-    `seedEntities`、`durationMs`。**只带元数据与引用，不带原文**，避免 `run_events.payload` 膨胀。
-  - `createRunSchema` 增加 `knowledgeBaseIds: z.array(z.uuid()).max(10).optional()`。
-  - `runJobSchema` 的**三个 kind（start / resume-approval / resume-question）都要带**
-    `knowledgeBaseIds`，否则中断恢复后知识库上下文丢失。
+- 增加第 5 节的数据表和索引。
+- `createRun` 在同一事务完成批量授权、保存 run snapshot，并把 kbIds 放入 outbox 的 `RunJob`。
+- `resolveInterrupt` 从 agent run 读取快照构造 resume job，不从 session 当前默认值读取。
+- 知识索引 job 使用稳定 ID、租约/超时字段和条件状态更新，保证重复消费幂等。
+- 所有仓储方法必须显式接收 `tenantId`，不得只按资源 ID 查询。
 
-### 8.2 前端 `apps/web/app/components/resilient-chat.tsx`
+### 8.3 `apps/api`
 
-| 位置 | 改动 |
-|---|---|
-| `topbar-actions` | 挂载 `KnowledgeBasePicker` 多选器，数据来自 `GET /api/knowledge-bases`；空选即不启用，行为与现状一致 |
-| `prepareSendMessagesRequest` | body 增加 `knowledge_base_ids: string[]`；选择值随 `chatId` 本地持久化，刷新/重连不丢 |
-| `onData` | 新增 `retrieval.completed` 分支 → 更新引用列表；`agentEventToTrace` 增加映射（命中 N 片段 / M 关系） |
-| 引用渲染 | 现有 `data-agent` 是 `transient: true`，刷新即丢。若引用需在历史消息中长期可见，需在 `chat-stream.ts` 的 `chunksFrom` 中额外发出**非 transient** 的自定义 data part（如 `data-citations`） |
+- `chatRequestSchema` 接收 `knowledge_base_ids`，转换为内部 camelCase。
+- `POST /api/chat` 把完整 kbIds 交给 `createRun`，由 repository 保证校验和创建的事务边界。
+- 增加最小管理 API：
+  - `GET/POST /api/knowledge-bases`
+  - `GET/DELETE /api/knowledge-bases/:id`
+  - `POST /api/knowledge-bases/:id/documents`
+  - `POST /api/knowledge-bases/:id/documents/:docId/confirm`
+  - `GET /api/knowledge-bases/:id/index-jobs`
+- 预签名上传复用现有 `S3ArtifactStore` 模式，但使用独立的 knowledge object key 前缀。
+- API 只配置上传限制、对象存储和知识索引队列；不持有 Qdrant 或 embedding 配置。
 
-新增页面：`apps/web/app/knowledge/…`（列表 / 新建 / 上传 / 索引进度 / 删除）。
+### 8.4 `apps/worker` 与 `packages/agent-core`
 
-### 8.3 API `apps/api`
+- `createRuntime` 仅在 run snapshot 非空时创建独立 GraphRAG MCP client。
+- Worker 用共享 secret 签发 run token，通过 MCP header 传递。
+- 工具使用仓库内唯一名称 `graphrag_search`。
+- 只对这个受信、只读、来源确定的工具精确免审批；不能仅按通用工具名或整个 MCP server 放行。
+- system prompt 只在工具成功加载后注入知识库使用说明，要求证据不足时明确说明。
+- Agent Core 需要支持：
+  1. 现有 MCP client 与 GraphRAG client 隔离加载和释放。
+  2. 精确的只读工具免审批规则。
+  3. structured content 提取、大小限制和 `retrieval.completed` 事件发射。
+  4. GraphRAG 连接/调用失败不终止整个 runtime。
+- `tool.completed` 继续保留精简、截断后的模型可见输出；完整原文不能进入事件表。
 
-- `routes.ts`：`chatRequestSchema` 增加 `knowledge_base_ids`；`POST /api/chat` 在 `createRun` 前
-  对每个 kbId 做授权校验，不合法返回 404/403，不静默丢弃。
-- 新增 KB 管理路由：`GET/POST /api/knowledge-bases`、`GET/DELETE /api/knowledge-bases/:id`、
-  `POST /api/knowledge-bases/:id/documents`（预签名）、`POST .../documents/:docId/confirm`、
-  `GET .../index-jobs`。上传复用现有 `S3ArtifactStore` 预签名模式
-  （见 `packages/artifacts/src/index.ts`）。
-- `config.ts`：新增 Qdrant / 知识库 / 上传限额相关配置。
+因此，“Agent Core 唯一改动是合并 `loadMcpTools` 配置”不成立，文档和计划都必须覆盖上述事件桥接。
 
-### 8.4 数据层 `packages/db`
+### 8.5 `apps/web`
 
-- `schema.ts`：新增 7 张表定义 + `agentSessions.knowledgeBaseIds`。
-- `repository.ts`：
-  - `createRun` 落库 `knowledgeBaseIds`，并把 `knowledgeBaseIds` 放进 `insertDispatch` 的
-    payload（outbox payload 就是 `RunJob` 本体，Worker 只认它）。
-  - `resolveInterrupt` 构造 `common` 时同样带上会话的 `knowledgeBaseIds`。
-  - 新增知识库/文档/索引任务/检索日志的仓储方法。
+- 在 `resilient-chat/chat-runtime.tsx` 的 `topbar-actions` 区域挂载多选知识库选择器。
+- 在 `chat-runtime.tsx` 的 `prepareSendMessagesRequest` 增加 `knowledge_base_ids`。
+- 选择值按 `chatId` 保存；它是 UI 默认值，不覆盖已创建 run 的授权快照。
+- 增加轻量知识库管理页：列表、新建、Markdown/TXT 上传、索引状态、删除。
+- `chat-stream.ts` 为引用发非 transient `data-citations` message part。
+- 实时 `onData` 处理引用状态；`agentEventToTrace` 增加检索摘要。
+- 历史 API 按 run 汇总持久的 `retrieval.completed`，在 assistant `HistoryMessage` 上返回 citations；
+  `resilient-chat/types.ts` 增加该可选字段，`resilient-chat/utils.ts` 的 `messagesFromHistory` 重建相同
+  `data-citations` part。
 
-### 8.5 Worker 与 Agent Core
+只改实时 `onData` 不够：当前历史恢复只重建文本，刷新后引用会丢失。
 
-- `apps/worker/src/processor.ts` 的 `createRuntime`：在既有 `mcpConfigPath` 之外动态追加
-  GraphRAG MCP server 条目（仅当 `knowledgeBaseIds` 非空），并签发 run token。
-- `packages/agent-core/src/deep-agent.ts` 的 `loadMcpTools` 扩展为接受 `extraServers` 与
-  `configPath` 合并（`MultiServerMCPClient` 本身接受配置对象）。**这是整个方案对 Agent 核心的
-  唯一改动，且为纯增量。**
-- **只读工具免审批（必要）**：现有 `mcpApprovalRules` 对所有 MCP 工具默认要求人工审批。
-  `knowledge_search` / `list_knowledge_bases` 是只读检索，必须加入白名单（与 `ask_user` 同类
-  处理），否则每次检索都会弹审批，体验不可接受。
-- **systemPrompt 注入**：告知本会话已启用的知识库名称，要求涉及知识库内容时先调用
-  `knowledge_search`，基于返回证据作答并标注来源，证据不足时明确说明。缺少这句 Agent 可能
-  不知道有知识库存在而不调用工具。
-- **工具输出瘦身**：`tool.completed` 的 output 会原样进 `run_events.payload` 并走 SSE，
-  MCP 侧应返回精简证据（限量、单条截断），完整原文只在生成答案时使用。
-- **降级**：GraphRAG 不可达时，工具返回明确错误文本让 Agent 继续通用作答，而不是让整次 run 失败。
-- `config.ts` 新增 `GRAPHRAG_ENABLED`、`GRAPHRAG_MCP_URL`、`GRAPHRAG_TOKEN_SECRET`、
-  `GRAPHRAG_TIMEOUT_MS`、`GRAPHRAG_MAX_CITATIONS`。
-
-### 8.6 不变的边界
-
-- `apps/worker` **不依赖** `@repo/knowledge-graphrag`，只通过 MCP/HTTP 调用。
-- LlamaIndex、Qdrant 客户端、文档解析依赖只出现在新增的两个包内，不进 `agent-core`、不进
-  `apps/worker`。
-- E2B 沙箱链路、LangGraph checkpoint 与中断/恢复语义、outbox 派发机制均不变。
-
-## 9. 包与进程结构
+## 9. 新增包与依赖边界
 
 ```text
-packages/knowledge-graphrag/          # 库：无副作用、可测试
+packages/knowledge-graphrag/
 ├── src/
-│   ├── index.ts                      # 对外 API：retrieve / buildIndex / 类型
-│   ├── graph/                        # InMemoryPropertyGraph 迁入（DB 加载视图）
-│   ├── parser/                       # md / txt / PDF / docx
-│   ├── chunker/                      # 切块（chunkSize/overlap 可配）
-│   ├── embedder/                     # embedding 客户端，实例注入
-│   ├── extractor/                    # 实体/关系抽取，实例注入 LLM
-│   ├── retriever/                    # 混合检索 + 多跳 + 合并去重
-│   ├── reranker/                     # none | llm | cohere | bge
-│   ├── store/                        # Postgres + Qdrant 仓储
-│   └── jobs/                         # 索引任务处理器
+│   ├── index.ts
+│   ├── graph/          # demo 语义 + PropertyGraphStore 接口
+│   ├── parser/         # 仅 markdown / text
+│   ├── chunker/
+│   ├── embedder/       # 实例注入
+│   ├── extractor/      # 实例注入，禁止全局 Settings 副作用
+│   ├── retriever/
+│   ├── reranker/       # 首期只有 none，实现扩展接口
+│   ├── store/          # Postgres + Qdrant
+│   └── jobs/
 └── test/
 
-apps/knowledge-service/               # 进程：索引消费 + MCP 检索
+apps/knowledge-service/
 ├── src/
 │   ├── config.ts
-│   ├── consumer.ts                   # 消费 knowledge-index 队列
-│   ├── indexer.ts                    # 索引管线装配
-│   └── mcp/server.ts                 # MCP server（/mcp + /healthz）
+│   ├── consumer.ts
+│   ├── reconciler.ts
+│   ├── indexer.ts
+│   └── mcp/server.ts
 └── test/
 ```
 
-包名 `@repo/knowledge-graphrag`，遵循仓库既有约定（`"type": "module"`、`types`/`development`/
-`default` 三条件导出、tsconfig 继承 `tsconfig.base.json`）。`turbo.json` 的
-build/typecheck/test 会自动纳入，无需改 turbo 配置。
+- `apps/worker` 不依赖 `@repo/knowledge-graphrag`，只通过 MCP 调用。
+- GraphRAG 运行时新增的 LlamaIndex 和 Qdrant client 依赖只进入新增 package/app，不进入 Agent Core
+  或 Worker。
+- `packages/ai-cli` 当前已经声明部分 LlamaIndex 依赖，实施时先确认是否真的被引用；首期不为“整理依赖”
+  顺手修改无关代码。只有确认未使用且迁移不会影响 CLI 时，才在独立任务中清理。
+- 新包遵循现有 ESM、workspace export 和 tsconfig 约定；`turbo.json` 无需为包发现机制额外修改。
 
-## 10. 基础设施
+## 10. 配置、基础设施与可观察性
 
-| 项 | 变化 |
+### 10.1 配置归属
+
+| 进程 | 配置 |
 |---|---|
-| `infra/compose.yaml` | 新增 `qdrant` 服务（`qdrant/qdrant`，端口 + volume）；**Postgres 镜像不用换** |
-| 队列 | 复用现有 Redis，新增 BullMQ 队列 `knowledge-index` |
-| 配置 | `QDRANT_URL`、`QDRANT_API_KEY`、`QDRANT_COLLECTION_PREFIX`、`EMBEDDING_MODEL`、`KNOWLEDGE_DOCUMENT_MAX_BYTES`、`GRAPHRAG_MCP_URL`、`GRAPHRAG_TOKEN_SECRET`、`RERANK_*` |
-| 部署 | `apps/knowledge-service` 为新增可独立部署单元，与 `apps/api`、`apps/worker` 并列 |
-| `.env.example` | 补充以上配置项 |
+| API | `KNOWLEDGE_DOCUMENT_MAX_BYTES`、knowledge queue 名称、现有 S3 配置 |
+| Worker | `GRAPHRAG_ENABLED`、`GRAPHRAG_MCP_URL`、`GRAPHRAG_TOKEN_SECRET`、`GRAPHRAG_TIMEOUT_MS` |
+| knowledge-service | Qdrant URL/key/prefix、embedding model/dim/profile、extractor model、并发/预算、token secret |
 
-## 11. 实施顺序
+`GRAPHRAG_TOKEN_SECRET` 只由 Worker 和 knowledge-service 持有。API 不需要 Qdrant、embedding 或 GraphRAG
+token 配置。
 
-1. **契约先行**：`contracts`（citation、`retrieval.completed`、`knowledgeBaseIds`）+ migration 008
-   + `db` 仓储。否则新事件会在 `persistEvent` 解析失败导致 run 失败。
-2. `packages/knowledge-graphrag` 库：parser → chunker → embedder → Qdrant store → retriever →
-   reranker → extractor。
-3. `apps/knowledge-service`：队列消费 + 索引管线 + MCP server。
-4. `apps/api`：KB 管理路由 + `/api/chat` 权限校验与透传。
-5. `apps/worker` + `agent-core`：MCP 动态注入、run token、只读免审批白名单、systemPrompt。
-6. `apps/web`：知识库选择器 + 管理页 + 引用卡片。
-7. `infra/compose.yaml` 与 `.env.example`，端到端联调。
+### 10.2 基础设施
 
-## 12. 风险与注意点
+- `infra/compose.yaml` 新增 Qdrant service 和持久 volume。
+- 复用现有 Redis，新增 `knowledge-index` BullMQ queue。
+- 复用现有 Postgres 和 S3 兼容对象存储。
+- `.env.example` 按进程归属补充配置。
+- `apps/knowledge-service` 是唯一新增部署单元。
 
-| 风险 | 影响 | 处置 |
-|---|---|---|
-| 事件契约未同步 | `persistEvent` 解析失败，run 直接 failed | 契约先行，补契约单测 |
-| MCP 工具默认需审批 | 每次检索弹审批，体验崩坏 | 只读工具白名单 |
-| 检索输出过大 | `run_events` 膨胀、SSE 卡顿 | MCP 侧限量截断，事件只带元数据与引用 |
-| 中断恢复丢知识库 | 审批/提问恢复后不再检索 | `resume-*` job 与 `resolveInterrupt` 都带 kbIds |
-| 索引成本不可控 | 逐块 LLM 抽取慢且贵 | 并发/重试/预算上限；`graph_enabled=false` 可退化 |
-| 双库不一致 | 已删文档仍被检索到 | Postgres 权威 + 逻辑删除优先 + 清理任务 |
-| embedding 维度不匹配 | 检索结果错乱或报错 | 建库锁定模型与维度，检索前校验，不一致直接报错 |
-| 提示注入 | 检索内容被当作指令 | 检索结果标记为数据而非指令；按 tenant 隔离并授权校验 |
-| 扫描版 PDF | 无文本层，解析为空 | 阶段 1 不支持 OCR，明确失败并提示 |
-| 文档内容外发 | 合规风险 | embedding/抽取/rerank 会把文档内容发给模型供应商，上传界面需提示；Qdrant 与 Postgres 均自部署，数据不出域 |
-| Qdrant 数据丢失 | 检索不可用 | 可从 Postgres 全量重建，但重建成本 = 重嵌入 + 重抽取，仍建议纳入备份 |
+### 10.3 指标和日志
 
-## 13. 本期未覆盖
+至少记录：
 
-- OCR（扫描版 PDF / 图片）。
-- 知识库成员级细粒度授权（当前为 private / tenant 两档）。
-- 知识库版本与快照回滚。
-- 检索结果的人工反馈与评估集回归。
+- index job 各阶段耗时、重试次数、失败码、chunk/entity/relation 数。
+- embedding 和 extraction 调用次数、token/费用（provider 可提供时）。
+- retrieval latency、vector hits、graph relations、最终 citations、截断和降级状态。
+- MCP 初始化失败、调用超时和 token 校验失败。
+- queued/stale job 补偿扫描数量。
+
+日志不得包含完整文档或完整 passage。
+
+## 11. TDD 实施顺序
+
+每一阶段都先写失败测试，再做最小实现，通过后再进入下一阶段：
+
+1. **契约与 run snapshot**
+   - citation / retrieval event schema。
+   - create/start/resume job 的 kbIds。
+   - migration 009、run/session 字段和批量授权仓储。
+2. **纯算法包**
+   - 从 demo 迁移 graph 行为测试。
+   - Markdown/TXT parser、chunker、确定性 ID。
+   - 有界 traversal、合并去重和 citation provenance。
+3. **存储与索引任务**
+   - Qdrant payload filter/profile 校验。
+   - 真实 SHA-256 校验。
+   - job 幂等、失败重试和 queued/stale 补偿。
+4. **knowledge-service**
+   - MCP token 范围测试。
+   - `graphrag_search` content/structuredContent 上限。
+   - health、consumer 和受控降级。
+5. **API**
+   - KB CRUD、上传确认和状态接口。
+   - chat 批量授权、统一 404、创建 run 原子性。
+6. **Worker 与 Agent Core**
+   - 可选 client 隔离。
+   - 精确免审批。
+   - structuredContent → `retrieval.completed`。
+   - start/resume 快照一致性和失败降级。
+7. **Web**
+   - picker 请求透传。
+   - 实时引用和历史重建。
+   - 最小管理流程。
+8. **基础设施与端到端**
+   - compose、env 示例。
+   - 上传 Markdown → ready → 选中 KB → 检索 → 回答引用 → 刷新后引用仍存在。
+
+详细文件级实施计划在本设计审核通过后另写，不在设计文档中混入尚未验证的代码片段。
+
+## 12. MVP 验收标准
+
+- 不选择知识库时，现有单元测试和核心聊天流程行为不变。
+- 用户能创建 private 知识库并上传 Markdown/TXT。
+- 索引任务进程异常退出后可被补偿机制恢复，不会永久停在 queued。
+- 相同活动文档内容不会重复索引。
+- run 创建后即使修改下一次请求的 UI 选择，resume 仍使用原 run 快照。
+- 模型不能通过工具参数越权检索 token 外的 tenant/kb。
+- GraphRAG 不可用时 Agent 仍能结束 run，并明确显示知识库不可用。
+- 引用包含文档名、chunk/ordinal、heading（若有）、score 和命中方式。
+- 页面刷新和历史重连后引用不丢失。
+- Qdrant 删除后能从 Postgres chunk 重新 embedding 恢复，不重新抽取图谱。
+
+## 13. 风险与处置
+
+| 风险 | 处置 |
+|---|---|
+| 新事件未注册导致 run 失败 | 契约和 parser 测试先行 |
+| API 提交后入队前崩溃 | index_jobs 持久账本 + 稳定 jobId + 补偿扫描 |
+| 客户端伪造哈希/MIME | 索引器重新计算字节哈希并校验文本内容 |
+| 同维度不同模型混用 | 单一 profile + profile hash collection + 运行时一致性校验 |
+| 图遍历爆炸 | seed/hop/fanout/relation 四重上限 |
+| 工具输出撑大事件表 | content、structuredContent、event 各自限量 |
+| MCP 连接拖垮 Agent | 可选 client 隔离、超时和受控降级 |
+| 中断恢复授权漂移 | agent_runs 保存不可变 kbIds 快照 |
+| 刷新后引用消失 | 非 transient data part + 历史事件重建 |
+| 提示注入 | 将 passage 明确标记为不可信数据，禁止把内容当系统指令 |
+| 文档内容外发 | 上传界面提示 embedding/extraction 会发送内容到配置的模型供应商 |
+| Qdrant 数据丢失 | 从 Postgres chunks 重嵌入；图谱无需重抽取 |
+
+## 14. 后续阶段
+
+- PDF/DOCX 与 OCR。
+- generation-based 无损重建。
+- 标准化 graph provenance 映射表。
+- 多 embedding profile 和 collection 路由。
+- 可插拔 reranker、缓存与评估集。
+- 成员级 ACL、知识库版本和审计管理界面。
