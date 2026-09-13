@@ -1,6 +1,7 @@
 .composer-wrap {
   background: var(--surface);
-  padding: 0 30px 16px;
+  /* 左右内边距与 .message-list 对齐，过程区与任务列表的左右边界才会重合。 */
+  padding: 0 34px 16px;
 }
 
 .composer-activity {
@@ -115,6 +116,7 @@
 
 .send-button.is-stop {
   background: #44404d;
+  border-radius: 999px;
 }
 
 .suggestions {

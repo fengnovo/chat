@@ -43,6 +43,20 @@ const eventBase = {
 export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({ ...eventBase, type: z.literal('run.started') }),
   z.object({ ...eventBase, type: z.literal('assistant.delta'), text: z.string() }),
+  /**
+   * 模型在「带工具调用的轮次」里输出的过程旁白。
+   * 这类文本属于执行过程而非最终答复，前端只在可折叠的过程区展示，
+   * 不能混进最终消息正文。
+   */
+  z.object({ ...eventBase, type: z.literal('assistant.narration'), text: z.string() }),
+  /** 单次模型调用的真实用量增量；前端按 run 累加即为本轮总消耗。 */
+  z.object({
+    ...eventBase,
+    type: z.literal('usage.updated'),
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }),
   z.object({
     ...eventBase,
     type: z.literal('model.retry'),

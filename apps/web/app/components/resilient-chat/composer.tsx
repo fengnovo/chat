@@ -1,6 +1,8 @@
 import type { FormEvent } from 'react';
 
 import { Icon } from './icon';
+import { AgentTodoList } from './message';
+import type { AgentTodo } from './types';
 
 function Composer({
   activity,
@@ -14,6 +16,7 @@ function Composer({
   onSuggestion,
   suggestions,
   tokens,
+  todos,
 }: {
   activity: string | null;
   disabled: boolean;
@@ -26,9 +29,11 @@ function Composer({
   onSuggestion: (suggestion: string) => Promise<void>;
   suggestions: string[];
   tokens: number;
+  todos: AgentTodo[];
 }) {
   return (
     <div className="composer-wrap">
+      {todos.length > 0 && <AgentTodoList todos={todos} />}
       {activity && (
         <div className="composer-activity" role="status" aria-live="polite">
           <span className="activity-spinner" aria-hidden="true" />

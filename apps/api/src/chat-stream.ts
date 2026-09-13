@@ -50,6 +50,38 @@ function frame(chunk: UiChunk): string {
   return `data: ${JSON.stringify(chunk)}\n\n`;
 }
 
+/**
+ * 合并并发调用：任务进行中收到的调用会被记为「待再跑一次」，而不是丢弃。
+ * SSE 推送必须这样处理——最后一次通知（run.completed）若恰好撞上进行中的
+ * flush 而被丢掉，finish 永远不会发出，前端会停在「正在执行」，
+ * 并且任务计划停留在中间快照。
+ *
+ * @param task 返回 true 表示已经完成，无需再跑。
+ */
+function createCoalescedRunner(
+  task: () => Promise<boolean>,
+): () => Promise<void> {
+  let running = false;
+  let pending = false;
+  return async () => {
+    if (running) {
+      pending = true;
+      return;
+    }
+    running = true;
+    try {
+      do {
+        pending = false;
+        // eslint-disable-next-line no-await-in-loop -- 串行重跑，避免并发写同一响应
+        const finished = await task();
+        if (finished) return;
+      } while (pending);
+    } finally {
+      running = false;
+    }
+  };
+}
+
 function requestedStart(request: FastifyRequest, total: number): number {
   if (request.headers['x-page-resume'] === '1') return 0;
   const query = request.query as { startIndex?: string };
@@ -77,7 +109,6 @@ export async function streamWorkflowRun(
   const initialChunks = chunksFrom(runId, initialEvents);
   let chunkCursor = requestedStart(request, initialChunks.length);
   let closed = false;
-  let flushing = false;
 
   reply.hijack();
   reply.raw.writeHead(200, {
@@ -91,24 +122,25 @@ export async function streamWorkflowRun(
   });
   reply.raw.flushHeaders();
 
-  const flush = async () => {
-    if (closed || flushing) return;
-    flushing = true;
-    try {
-      const events = await services.repository.listEvents(request.auth, runId, 0, 100_000);
-      const chunks = chunksFrom(runId, events);
-      for (const chunk of chunks.slice(chunkCursor)) {
-        reply.raw.write(frame(chunk));
-        chunkCursor += 1;
-      }
-      if (chunks.some((chunk) => chunk.type === 'finish')) {
-        closed = true;
-        reply.raw.end();
-      }
-    } finally {
-      flushing = false;
+  // flush 期间到达的通知必须排队重跑，不能直接丢弃：
+  // 最后一次通知（通常是 run.completed）若被丢掉，finish 永远不会发出，
+  // 前端就会停在「正在执行」并且任务计划停在中间状态。
+  const flush = createCoalescedRunner(async () => {
+    // 已经收尾：后续通知直接视为完成，避免重复 end()。
+    if (closed) return true;
+    const events = await services.repository.listEvents(request.auth, runId, 0, 100_000);
+    const chunks = chunksFrom(runId, events);
+    for (const chunk of chunks.slice(chunkCursor)) {
+      reply.raw.write(frame(chunk));
+      chunkCursor += 1;
     }
-  };
+    if (chunks.some((chunk) => chunk.type === 'finish')) {
+      closed = true;
+      reply.raw.end();
+      return true;
+    }
+    return false;
+  });
 
   subscriber.on('message', () => void flush());
   subscriber.on('error', (error: Error) =>
@@ -126,4 +158,4 @@ export async function streamWorkflowRun(
   });
 }
 
-export { chunksFrom };
+export { chunksFrom, createCoalescedRunner };

@@ -19,6 +19,8 @@ for (const NODE_ENV of ['development', 'test', 'production'] as const) {
     assert.equal(config.E2B_TIMEOUT_MS, 3_600_000);
     assert.equal(config.E2B_API_URL, undefined);
     assert.equal(config.E2B_SANDBOX_URL, undefined);
+    assert.equal(config.AGENT_RECURSION_LIMIT, 600);
+    assert.equal(config.AGENT_MODEL_CALL_LIMIT, 120);
   });
 }
 

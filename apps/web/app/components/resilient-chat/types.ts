@@ -48,13 +48,26 @@ type PendingInterrupt = Extract<
 >;
 type AgentTodo = Extract<AgentEvent, { type: 'todo.updated' }>['todos'][number];
 
-type AgentActivityEntry = {
-  id: string;
-  invocationId: string;
-  tool: string;
-  phase: 'start' | 'end';
-  at: number;
-};
+type AgentActivityEntry =
+  | {
+      kind: 'tool';
+      id: string;
+      invocationId: string;
+      tool: string;
+      phase: 'start' | 'end';
+      at: number;
+      /** 工具调用参数（对话流内已限长）。 */
+      input: unknown;
+      /** 工具执行结果/打印输出（对话流内已限长）。 */
+      output: unknown;
+    }
+  | {
+      /** 模型在带工具调用的轮次里输出的过程旁白，不属于最终答复。 */
+      kind: 'narration';
+      id: string;
+      text: string;
+      at: number;
+    };
 
 type AgentActivityState = {
   entries: AgentActivityEntry[];

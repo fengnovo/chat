@@ -50,6 +50,31 @@ async function checkedExecute(sandbox: RemoteWorkspaceSandbox, command: string):
   return result.output;
 }
 
+/** 镜像内预装的离线 React/Vite 依赖，沙箱无网络时唯一的依赖来源。 */
+const OFFLINE_WEB_RUNTIME = '/opt/chat-web-runtime/node_modules';
+
+/**
+ * 把离线 Web 运行时接到工作区，让子目录里的项目能向上解析到依赖。
+ * 必须建真实目录再逐包软链：整体软链会让 vite 无法写 node_modules/.vite-temp，
+ * 构建会以 ENOENT 失败（这正是 Agent 之前反复重写文件的原因之一）。
+ * 已存在则跳过，避免覆盖 Agent 自己准备的依赖。
+ */
+async function linkOfflineWebRuntime(
+  sandbox: RemoteWorkspaceSandbox,
+  workspace: string,
+): Promise<void> {
+  if (!workspace.startsWith('/')) return;
+  const nodeModules = `${workspace}/node_modules`;
+  const script = [
+    `if [ -d ${shellQuote(OFFLINE_WEB_RUNTIME)} ] && [ ! -e ${shellQuote(nodeModules)} ]; then`,
+    `  mkdir -p ${shellQuote(nodeModules)}/.bin &&`,
+    `  for p in ${shellQuote(OFFLINE_WEB_RUNTIME)}/*; do [ -e "$p" ] || continue; ln -sfn "$p" ${shellQuote(nodeModules)}/"$(basename "$p")"; done &&`,
+    `  for b in ${shellQuote(OFFLINE_WEB_RUNTIME)}/.bin/*; do [ -e "$b" ] || continue; ln -sfn "$b" ${shellQuote(nodeModules)}/.bin/"$(basename "$b")"; done`,
+    `fi`,
+  ].join('\n');
+  await sandbox.execute(script);
+}
+
 export async function prepareWorkspace(
   sandbox: RemoteWorkspaceSandbox,
   workspace: string,
@@ -58,6 +83,7 @@ export async function prepareWorkspace(
   initializeSource: boolean,
 ): Promise<string> {
   await checkedExecute(sandbox, `mkdir -p -- ${shellQuote(workspace)}`);
+  await linkOfflineWebRuntime(sandbox, workspace);
   if (!initializeSource || !source || source.type === 'empty') return workspace;
 
   const listing = await checkedExecute(

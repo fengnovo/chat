@@ -16,11 +16,6 @@ function messageText(message: ResilientMessage) {
     .join('');
 }
 
-function estimateTokens(text: string) {
-  const length = text.trim().length;
-  return length === 0 ? 0 : Math.ceil(length / 4);
-}
-
 function formatDuration(seconds: number) {
   if (seconds < 60) return `${seconds}秒`;
   const minutes = Math.floor(seconds / 60);
@@ -35,6 +30,7 @@ function deriveAgentActivity(
 ): Omit<AgentStatus, 'tokens'> {
   const outstanding = new Set<string>();
   for (const entry of state.entries) {
+    if (entry.kind !== 'tool') continue;
     if (entry.phase === 'start') outstanding.add(entry.invocationId);
     else outstanding.delete(entry.invocationId);
   }
@@ -45,12 +41,14 @@ function deriveAgentActivity(
           .reverse()
           .find(
             (entry) =>
-              entry.phase === 'start' && outstanding.has(entry.invocationId),
+              entry.kind === 'tool' &&
+              entry.phase === 'start' &&
+              outstanding.has(entry.invocationId),
           ) ?? null);
 
   return {
     entries: state.entries,
-    runningTool: running?.tool ?? null,
+    runningTool: running?.kind === 'tool' ? running.tool : null,
     elapsedSeconds: state.startedAt
       ? Math.max(0, Math.floor((now - state.startedAt) / 1_000))
       : 0,
@@ -74,6 +72,56 @@ function messagesFromHistory(messages: HistoryMessage[]): ResilientMessage[] {
 
 function isPendingStatus(status: RunStatus) {
   return !['completed', 'failed', 'cancelled'].includes(status);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asText(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * 执行日志里主行显示的摘要：命令直接给 `$ cmd`，
+ * 文件类工具给路径，读文件给行范围，其余退化为紧凑 JSON。
+ */
+function toolCallSummary(tool: string, input: unknown): string {
+  const args = asRecord(input);
+  if (typeof input === 'string') return input;
+  if (tool === 'execute') return `$ ${String(args.command ?? '')}`.trim();
+  if (tool === 'write_file' || tool === 'edit_file') {
+    const filePath = String(args.file_path ?? args.path ?? '');
+    const content = args.content;
+    return typeof content === 'string'
+      ? `${filePath} · ${content.length} 字符`
+      : filePath;
+  }
+  if (tool === 'read_file') {
+    const filePath = String(args.file_path ?? args.path ?? '');
+    const start = args.start_line ?? args.offset;
+    const end = args.end_line ?? args.limit;
+    return start || end ? `${filePath} · 行 ${start ?? ''}-${end ?? ''}` : filePath;
+  }
+  if (tool === 'delete') return String(args.file_path ?? args.path ?? '');
+  if (tool === 'write_todos') return `${(args.todos as unknown[] | undefined)?.length ?? 0} 项`;
+  const keys = Object.keys(args);
+  if (keys.length === 0) return '';
+  const compact = asText(input).replace(/\s+/g, ' ');
+  return compact.length > 140 ? `${compact.slice(0, 140)}…` : compact;
+}
+
+/** 执行日志里展开的详细内容：参数与结果原文，供打印输出展示。 */
+function toolDetailText(value: unknown): string {
+  return asText(value);
 }
 
 function failureFromRun(run: RunSummary | null): TaskFailure | null {
@@ -100,11 +148,12 @@ function formatSessionTime(value: string) {
 
 export {
   deriveAgentActivity,
-  estimateTokens,
   failureFromRun,
   formatDuration,
   formatSessionTime,
   isPendingStatus,
   messageText,
   messagesFromHistory,
+  toolCallSummary,
+  toolDetailText,
 };

@@ -356,19 +356,15 @@
     justify-self: start;
   }
 
+  /* 与 .message-list 的左右内边距（15px）保持一致，过程区与任务列表才会左右对齐。 */
   .composer-wrap {
-    padding-left: 12px;
-    padding-right: 12px;
+    padding-left: 15px;
+    padding-right: 15px;
   }
 
   .agent-interrupt {
     margin-left: 0;
     padding: 16px;
-  }
-
-  .agent-status {
-    margin-left: 0;
-    padding: 13px;
   }
 
   .agent-interrupt ul li {

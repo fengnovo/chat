@@ -26,7 +26,7 @@ import { initialTrace } from './constants';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
 import { TaskFailureNotice, friendlyError } from './failure-notice';
 import { Icon } from './icon';
-import { AgentTodoList, Message, ThinkingRow } from './message';
+import { Message, ThinkingRow } from './message';
 import { PendingInteraction } from './pending-interaction';
 import { SessionActionDialog } from './session-dialog';
 import { Sidebar } from './sidebar';
@@ -48,7 +48,6 @@ import type {
 } from './types';
 import {
   deriveAgentActivity,
-  estimateTokens,
   failureFromRun,
   isPendingStatus,
   messageText,
@@ -115,6 +114,7 @@ function ChatRuntime() {
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
   const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
+  const [generatedTokens, setGeneratedTokens] = useState(0);
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
@@ -242,19 +242,46 @@ function ChatRuntime() {
             startedAt: Date.parse(event.timestamp) || Date.now(),
             lastEventAt: Date.now(),
           });
+          setGeneratedTokens(0);
         }
-        if (event.type === 'tool.started' || event.type === 'tool.completed') {
-          const phase = event.type === 'tool.started' ? 'start' : 'end';
+        if (event.type === 'usage.updated') {
+          // 真实用量：每次模型调用报一条增量，按 run 累加即为本轮生成量。
+          setGeneratedTokens((current) => current + event.outputTokens);
+        }
+        if (event.type === 'assistant.narration') {
+          // 过程旁白只进过程区，不进消息正文。
           const at = Date.parse(event.timestamp) || Date.now();
           setActivity((current) => ({
             entries: [
               ...current.entries.slice(-19),
               {
+                kind: 'narration',
+                id: `narration-${event.timestamp}-${current.entries.length}`,
+                text: event.text,
+                at,
+              },
+            ],
+            startedAt: current.startedAt ?? at,
+            lastEventAt: Date.now(),
+          }));
+        }
+        if (event.type === 'tool.started' || event.type === 'tool.completed') {
+          const phase = event.type === 'tool.started' ? 'start' : 'end';
+          const at = Date.parse(event.timestamp) || Date.now();
+          const input = event.type === 'tool.started' ? event.input : null;
+          const output = event.type === 'tool.completed' ? event.output : null;
+          setActivity((current) => ({
+            entries: [
+              ...current.entries.slice(-19),
+              {
+                kind: 'tool',
                 id: `${event.type}-${event.invocationId}-${event.timestamp}`,
                 invocationId: event.invocationId,
                 tool: event.tool,
                 phase,
                 at,
+                input,
+                output,
               },
             ],
             startedAt: current.startedAt ?? at,
@@ -386,18 +413,15 @@ function ChatRuntime() {
   }, [isBusy]);
 
   const agentActivity: AgentStatus = useMemo(() => {
-    // token 只在当前这轮运行期间统计，运行结束后保留最终值
-    const streamingAssistant =
-      lastMessage?.role === 'assistant' ? lastMessage : null;
-    const runActive = isBusy || activity.startedAt !== null;
+    // 用量来自模型返回的真实 usage，运行结束后保留最终值
     return {
       ...deriveAgentActivity(activity, isBusy, activityClock),
-      tokens:
-        runActive && streamingAssistant
-          ? estimateTokens(messageText(streamingAssistant))
-          : 0,
+      tokens: activity.startedAt !== null || isBusy ? generatedTokens : 0,
     };
-  }, [activity, activityClock, isBusy, lastMessage]);
+  }, [activity, activityClock, generatedTokens, isBusy]);
+
+  // 与 AgentStatusPanel 的显示条件保持一致：有过程记录才显示。
+  const processPanelVisible = agentActivity.entries.length > 0;
 
   useEffect(() => {
     // 已经有缓存就先直接渲染，切回页面时不再重复拉取会话列表
@@ -550,6 +574,7 @@ function ChatRuntime() {
       setPendingInterrupt(null);
       setAgentTodos([]);
       setActivity(emptyActivity);
+      setGeneratedTokens(0);
       setInteractionError(null);
       setRunFailure(failureFromRun(latestRun));
       sessionRef.current = new ResilientSession();
@@ -627,6 +652,7 @@ function ChatRuntime() {
     setPendingInterrupt(null);
     setAgentTodos([]);
     setActivity(emptyActivity);
+    setGeneratedTokens(0);
     setInteractionError(null);
     setRunFailure(null);
     sessionRef.current = new ResilientSession();
@@ -990,7 +1016,6 @@ function ChatRuntime() {
               ))}
               {status === 'submitted' && !hasAssistantPlaceholder && <ThinkingRow />}
               <AgentStatusPanel busy={isBusy} status={agentActivity} />
-              {agentTodos.length > 0 && <AgentTodoList todos={agentTodos} />}
               {pendingInterrupt && (
                 <PendingInteraction
                   key={pendingInterrupt.interruptId}
@@ -1042,11 +1067,14 @@ function ChatRuntime() {
                 ? '等待你的审批后继续'
                 : pendingInterrupt?.type === 'question.required'
                   ? '等待你的回答后继续'
-                  : status === 'submitted'
-                    ? '正在连接 Agent…'
-                    : status === 'streaming'
-                      ? 'Agent 正在处理请求…'
-                      : null
+                  : // 过程区可见时不再重复提示；其余时间保留反馈，避免纯思考阶段毫无动静。
+                    processPanelVisible
+                    ? null
+                    : status === 'submitted'
+                      ? '正在连接 Agent…'
+                      : status === 'streaming'
+                        ? 'Agent 正在处理请求…'
+                        : null
           }
           disabled={Boolean(error) || Boolean(pendingInterrupt)}
           disabledPlaceholder={
@@ -1062,6 +1090,7 @@ function ChatRuntime() {
           onSuggestion={submitText}
           suggestions={suggestions}
           tokens={agentActivity.tokens}
+          todos={agentTodos}
         />
 
       </section>

@@ -50,6 +50,9 @@ export class TaskRunner {
             receivedChars: answer.length,
             updatedAt: Date.now(),
           });
+        } else if (event.type === 'assistant.narration') {
+          // 工具轮次里的过程旁白：只记日志，不计入最终答复。
+          tuiLog(`${A.dim}${event.text}${A.reset}`);
         } else if (event.type === 'todo.updated') {
           tuiSetTodos(event.todos);
         } else if (event.type === 'tool.started') {

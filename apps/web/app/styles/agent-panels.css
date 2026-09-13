@@ -1,4 +1,3 @@
-.agent-todos,
 .agent-interrupt {
   background: #faf9ff;
   border: 1px solid #ded8fa;
@@ -20,12 +19,6 @@
   font-weight: 650;
 }
 
-.agent-todos .agent-panel-head > strong,
-.agent-todos .agent-panel-head .eyebrow {
-  font-size: 14px;
-}
-
-.agent-todos ol,
 .agent-interrupt ul {
   display: grid;
   gap: 8px;
@@ -34,17 +27,86 @@
   padding: 0;
 }
 
-.agent-todos li {
+/* 任务计划：输入框上方的紧凑状态条 */
+.task-bar {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 auto 8px;
+  max-width: 1050px;
+  overflow: hidden;
+}
+
+.task-bar-head {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  display: flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+  padding: 9px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.task-bar-head:hover {
+  background: #faf9ff;
+}
+
+.task-bar-head > svg:first-child {
+  color: var(--violet);
+  flex: 0 0 auto;
+}
+
+.task-bar-head > svg:last-child {
+  color: var(--ink-muted);
+  flex: 0 0 auto;
+  margin-left: auto;
+  transition: transform 160ms ease;
+}
+
+.task-bar-head[aria-expanded='true'] > svg:last-child {
+  transform: rotate(90deg);
+}
+
+.task-bar-count {
+  flex: 0 0 auto;
+}
+
+.task-bar-current {
+  color: var(--ink-muted);
+  flex: 1 1 auto;
+  font-weight: 400;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-bar-list {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.task-bar-list li {
   align-items: center;
   color: var(--ink-soft);
   display: grid;
-  font-size: 14px;
+  font-size: 13px;
   gap: 9px;
-  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
   line-height: 1.45;
 }
 
-.agent-todos li > span {
+.task-bar-list li > span {
   align-items: center;
   background: white;
   border: 1px solid var(--line);
@@ -52,90 +114,190 @@
   color: var(--ink-muted);
   display: flex;
   font-family: var(--font-mono);
-  font-size: 11px;
-  height: 26px;
+  font-size: 10px;
+  height: 22px;
   justify-content: center;
-  width: 26px;
+  width: 22px;
 }
 
-.agent-todos li.is-completed {
+.task-bar-list li.is-completed {
   color: var(--ink-muted);
   text-decoration: line-through;
 }
 
-.agent-todos li.is-completed > span {
+.task-bar-list li.is-completed > span {
   background: var(--green-soft);
   border-color: #b7dfd0;
   color: var(--green);
 }
 
-.agent-todos li.is-in_progress {
+.task-bar-list li.is-in_progress {
   color: var(--ink);
   font-weight: 600;
 }
 
-.agent-status {
+/* 过程区：默认折叠，展开后固定 200px 高度、内部滚动 */
+/* 宽度与输入框上方的任务列表保持一致：同一列宽（max-width 1050）并居中。 */
+.agent-process {
   background: #fbfaf7;
   border: 1px solid #e7e2d6;
   border-radius: 12px;
-  margin: 2px 0 26px 47px;
-  padding: 14px 16px;
+  margin: 2px auto 26px;
+  max-width: 1050px;
+  overflow: hidden;
 }
 
-.agent-status-head {
+.agent-process-head {
   align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
   display: flex;
-  gap: 10px;
-  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+  padding: 12px 14px;
+  text-align: left;
+  width: 100%;
 }
 
-.agent-status-title {
+.agent-process-head:hover {
+  background: #f6f4ee;
+}
+
+.agent-process-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-process-time {
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.agent-process-toggle {
   align-items: center;
   color: var(--ink-muted);
   display: flex;
-  font-family: var(--font-mono);
+  flex: 0 0 auto;
   font-size: 12px;
-  font-weight: 650;
-  gap: 6px;
+  font-weight: 500;
+  gap: 3px;
 }
 
-.agent-status-log {
+.agent-process-head[aria-expanded='true'] .agent-process-toggle svg {
+  transform: rotate(90deg);
+}
+
+.agent-process-toggle svg {
+  transition: transform 160ms ease;
+}
+
+.agent-process-body {
+  border-top: 1px solid #e7e2d6;
   display: grid;
   gap: 6px;
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
+  overflow-y: auto;
+  padding: 10px 14px;
 }
 
-.agent-status-log li {
+/* 过程旁白：模型在工具轮次里的说明文字 */
+.process-narration {
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  word-break: break-word;
+}
+
+/* 工具调用行 */
+.process-tool {
+  display: grid;
+  gap: 4px;
+}
+
+.process-tool-head {
   align-items: center;
+  background: transparent;
+  border: 0;
   color: var(--ink-soft);
   display: flex;
   font-family: var(--font-mono);
-  font-size: 13px;
-  gap: 8px;
-  line-height: 1.45;
+  font-size: 12px;
+  gap: 7px;
+  padding: 2px 0;
+  text-align: left;
+  width: 100%;
 }
 
-.agent-status-log li svg {
+.process-tool-head:disabled {
+  cursor: default;
+}
+
+.process-tool-head > svg:first-child {
   color: var(--ink-muted);
   flex: 0 0 auto;
 }
 
-.agent-status-log li.is-end svg {
+.process-tool.is-end .process-tool-head > svg:first-child {
   color: var(--green);
 }
 
-.agent-status-now {
-  align-items: center;
-  border-top: 1px solid #e7e2d6;
+.process-tool-name {
   color: var(--ink);
-  display: flex;
-  font-size: 13px;
   font-weight: 600;
-  gap: 8px;
-  margin: 12px 0 0;
-  padding-top: 11px;
+}
+
+.process-tool-state {
+  color: var(--ink-muted);
+}
+
+.process-tool-head > svg:last-child {
+  margin-left: auto;
+  transition: transform 160ms ease;
+}
+
+.process-tool-head[aria-expanded='true'] > svg:last-child {
+  transform: rotate(90deg);
+}
+
+.process-tool-detail {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.process-tool-cmd {
+  background: #f3efe6;
+  border-radius: 6px;
+  color: var(--ink);
+  display: block;
+  font-size: 12px;
+  overflow-x: auto;
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.process-tool-output {
+  background: #f7f5f0;
+  border-left: 2px solid #ded8c8;
+  border-radius: 0 6px 6px 0;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .agent-interrupt {

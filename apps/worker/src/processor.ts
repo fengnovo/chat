@@ -156,6 +156,8 @@ async function createRuntime(
       job.tenantId,
     ),
     autoApproveTools: job.approvalMode === 'session',
+    recursionLimit: services.config.AGENT_RECURSION_LIMIT,
+    modelCallLimit: services.config.AGENT_MODEL_CALL_LIMIT,
     signal,
     mcpConfigPath:
       services.config.MCP_CONFIG_PATH ?? `${root}/packages/ai-cli/mcp/mcp.json`,
@@ -278,7 +280,12 @@ export function createRunProcessor(services: ProcessorServices) {
         for await (const event of events) {
           await persistEvent(services, job, event);
           terminalEventWritten = terminalStatus(event) !== null;
-          if (event.type === 'run.cancelled' || event.type === 'run.failed') shouldKill = true;
+          if (event.type === 'run.cancelled') shouldKill = true;
+          // 步数耗尽时工作区是完整的，保留它用户才能接着上一轮继续；
+          // 只有真正的执行失败才回收沙箱。
+          if (event.type === 'run.failed' && event.code !== 'AGENT_STEP_LIMIT') {
+            shouldKill = true;
+          }
         }
       } catch (error) {
         shouldKill = controller.signal.aborted || !terminalEventWritten;

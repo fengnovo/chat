@@ -31,6 +31,10 @@ function agentEventToTrace(event: AgentEvent): PipelineEvent | null {
   switch (event.type) {
     case 'assistant.delta':
       return null;
+    case 'assistant.narration':
+      return null;
+    case 'usage.updated':
+      return null;
     case 'run.started':
       return {
         ...base,

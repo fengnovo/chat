@@ -15,10 +15,15 @@ function taskFailureCopy(failure: TaskFailure) {
       detail: '当前模型额度不足。你可以稍后再试，或联系管理员切换可用模型。',
     };
   }
-  if (detail.includes('recursion') || detail.includes('step limit')) {
+  if (
+    detail.includes('recursion') ||
+    detail.includes('step limit') ||
+    detail.includes('call limit')
+  ) {
     return {
       title: '任务没有顺利收敛',
-      detail: 'Agent 的执行步骤已达到上限。请缩小任务范围或补充更明确的要求后继续。',
+      detail:
+        'Agent 执行步骤已达到上限，但已完成的文件和沙箱都保留着。点「继续对话」让它接着上次的进度做完即可。',
     };
   }
   if (

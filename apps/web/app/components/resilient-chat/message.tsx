@@ -1,4 +1,5 @@
 import { AIBoundary } from '@cognicatch/react';
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -154,31 +155,45 @@ function ThinkingRow() {
 }
 
 function AgentTodoList({ todos }: { todos: AgentTodo[] }) {
+  const [open, setOpen] = useState(false);
+  const completed = todos.filter((todo) => todo.status === 'completed').length;
+  const active = todos.find((todo) => todo.status === 'in_progress');
+
   return (
-    <section className="agent-todos" aria-label="Agent 任务计划">
-      <div className="agent-panel-head">
-        <span className="eyebrow">TASK PLAN</span>
-        <strong>
-          {todos.filter((todo) => todo.status === 'completed').length}/
-          {todos.length}
-        </strong>
-      </div>
-      <ol>
-        {todos.map((todo, index) => (
-          <li className={`is-${todo.status}`} key={`${index}-${todo.content}`}>
-            <span>
-              {todo.status === 'completed' ? (
-                <Icon name="check" size={12} />
-              ) : todo.status === 'in_progress' ? (
-                <span className="pulse-dot" />
-              ) : (
-                index + 1
-              )}
-            </span>
-            {todo.content}
-          </li>
-        ))}
-      </ol>
+    <section className="task-bar" aria-label="Agent 任务计划">
+      <button
+        aria-expanded={open}
+        className="task-bar-head"
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Icon name="list" size={15} />
+        <span className="task-bar-count">
+          {completed}/{todos.length} 个任务已完成
+        </span>
+        {active && !open && (
+          <span className="task-bar-current">{active.content}</span>
+        )}
+        <Icon name="chevron" size={13} />
+      </button>
+      {open && (
+        <ol className="task-bar-list">
+          {todos.map((todo, index) => (
+            <li className={`is-${todo.status}`} key={`${index}-${todo.content}`}>
+              <span>
+                {todo.status === 'completed' ? (
+                  <Icon name="check" size={12} />
+                ) : todo.status === 'in_progress' ? (
+                  <span className="pulse-dot" />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              {todo.content}
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

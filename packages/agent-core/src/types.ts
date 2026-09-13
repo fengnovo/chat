@@ -42,6 +42,10 @@ export interface HeadlessAgentOptions {
   skills?: string[];
   memory?: string[];
   autoApproveTools?: boolean;
+  /** 单次运行允许的 LangGraph super-step 上限；多步长任务需要足够余量。 */
+  recursionLimit?: number;
+  /** 单次运行允许的模型调用次数上限。 */
+  modelCallLimit?: number;
   signal?: AbortSignal;
 }
 

@@ -59,7 +59,7 @@ test('git clone executes inside the sandbox and resume does not initialize sourc
     true,
   );
   assert.ok(sandbox.commands.some((command) => command.includes('git -c credential.helper=')));
-  const commandCount = sandbox.commands.length;
+  sandbox.commands.length = 0;
   await prepareWorkspace(
     sandbox,
     '/mnt/user-data/workspace',
@@ -67,7 +67,27 @@ test('git clone executes inside the sandbox and resume does not initialize sourc
     async () => new Uint8Array(),
     false,
   );
-  assert.equal(sandbox.commands.length, commandCount + 1);
+  // 恢复时不应再次 clone，只做目录准备与离线运行时接入。
+  assert.equal(sandbox.commands.some((command) => command.includes(' clone ')), false);
+});
+
+test('offline web runtime is linked into the workspace so builds resolve deps', async () => {
+  const sandbox = new FakeSandbox();
+  await prepareWorkspace(
+    sandbox,
+    '/mnt/user-data/workspace',
+    { type: 'empty' },
+    async () => new Uint8Array(),
+    true,
+  );
+  const linkCommand = sandbox.commands.find((command) =>
+    command.includes('/opt/chat-web-runtime/node_modules'),
+  );
+  assert.ok(linkCommand, 'expected an offline runtime link step');
+  // 必须是真实目录 + 逐包软链：整体软链会让 vite 无法写 .vite-temp。
+  assert.ok(linkCommand.includes('mkdir -p'));
+  assert.ok(linkCommand.includes('ln -sfn'));
+  assert.ok(linkCommand.includes('/.bin'));
 });
 
 for (const unsafePath of ['../escape', '/absolute', 'src/../escape', 'src\0escape']) {

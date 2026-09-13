@@ -49,6 +49,9 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   FALLBACK_MODELS: z.string().optional(),
   MODEL_MAX_TOKENS: z.coerce.number().int().min(1_000).max(200_000).default(16_000),
+  // 多步编码任务需要数百个 super-step；预算过低会把接近完成的任务判为失败。
+  AGENT_RECURSION_LIMIT: z.coerce.number().int().min(50).max(10_000).default(600),
+  AGENT_MODEL_CALL_LIMIT: z.coerce.number().int().min(10).max(10_000).default(120),
   MCP_CONFIG_PATH: z.string().optional(),
 });
 
