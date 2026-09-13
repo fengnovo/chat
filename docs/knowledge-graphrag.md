@@ -541,8 +541,8 @@ OPENAI_API_KEY=<主模型密钥>
 OPENAI_BASE_URL=https://api.openai.com/v1
 
 EMBEDDING_PROVIDER=bailian
-EMBEDDING_PROFILE=bailian-text-embedding-v4-1024
-EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_PROFILE=bailian-qwen3.7-text-embedding-1024
+EMBEDDING_MODEL=qwen3.7-text-embedding
 EMBEDDING_DIM=1024
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 EMBEDDING_API_KEY=<百炼密钥>
@@ -554,6 +554,9 @@ QDRANT_COLLECTION_PREFIX=knowledge
 `openai-compatible` 必须显式设置 base URL。三种 provider 都必须显式设置 `EMBEDDING_MODEL`、
 `EMBEDDING_DIM` 和独立的 `EMBEDDING_API_KEY`，不会回退复用 `OPENAI_API_KEY` 或
 `OPENAI_BASE_URL`。
+
+`qwen3.7-text-embedding` 用于索引和查询向量；`qwen3.7-text-rerank` 是召回后的重排模型，
+不能配置到 `EMBEDDING_MODEL`。当前 MVP 已接入 Embedding，尚未接入独立的 Rerank 配置和调用链。
 
 OpenAI-compatible embedder 默认把输入切成最多 10 条一批，以符合百炼
 `text-embedding-v4` 的单次请求限制。程序化构造时可用 `batchSize` 调小或按其他兼容供应商限制调整；
