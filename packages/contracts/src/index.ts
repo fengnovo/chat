@@ -35,6 +35,53 @@ export const userQuestionSchema = z.object({
   allowCustom: z.boolean(),
 });
 
+export const knowledgeBaseIdsSchema = z
+  .array(z.uuid())
+  .max(10)
+  .refine((ids) => new Set(ids).size === ids.length, {
+    message: 'knowledge base ids must be unique',
+  });
+
+export const citationSchema = z.object({
+  chunkId: z.uuid(),
+  documentId: z.uuid(),
+  documentName: z.string().trim().min(1).max(255),
+  ordinal: z.number().int().nonnegative(),
+  heading: z.string().trim().max(500).optional(),
+  score: z.number().finite().min(-1).max(1),
+  via: z.enum(['vector', 'graph', 'both']),
+});
+
+export const relationCitationSchema = z.object({
+  source: z.string().trim().min(1).max(255),
+  relation: z.string().trim().min(1).max(255),
+  target: z.string().trim().min(1).max(255),
+  chunkIds: z.array(z.uuid()).max(10),
+});
+
+export const retrievalStatsSchema = z.object({
+  vectorHits: z.number().int().nonnegative().max(10_000),
+  graphHops: z.number().int().nonnegative().max(100),
+  searchedKbs: z.number().int().nonnegative().max(10),
+  durationMs: z.number().int().nonnegative().max(300_000),
+  truncated: z.boolean(),
+});
+
+export const knowledgeRunTokenClaimsSchema = z.object({
+  tenantId: z.uuid(),
+  userId: z.uuid(),
+  sessionId: z.uuid(),
+  runId: z.uuid(),
+  kbIds: knowledgeBaseIdsSchema,
+  jti: z.uuid(),
+  exp: z.number().int().positive(),
+  aud: z.literal('knowledge-service'),
+});
+
+export type KnowledgeRunTokenClaims = z.infer<
+  typeof knowledgeRunTokenClaimsSchema
+>;
+
 const eventBase = {
   runId: z.uuid(),
   timestamp: z.string().datetime(),
@@ -85,6 +132,17 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     invocationId: z.string(),
     tool: z.string(),
     output: z.unknown(),
+  }),
+  z.object({
+    ...eventBase,
+    type: z.literal('retrieval.completed'),
+    retrievalId: z.uuid(),
+    toolCallId: z.string().min(1).max(255),
+    knowledgeBaseIds: knowledgeBaseIdsSchema,
+    query: z.string().trim().min(1).max(10_000),
+    citations: z.array(citationSchema).max(20),
+    relations: z.array(relationCitationSchema).max(20),
+    stats: retrievalStatsSchema,
   }),
   z.object({ ...eventBase, type: z.literal('todo.updated'), todos: z.array(todoSchema) }),
   z.object({
@@ -184,6 +242,7 @@ export const uploadProjectSchema = z.object({
 
 export const createRunSchema = z.object({
   message: z.string().trim().min(1).max(100_000),
+  knowledgeBaseIds: knowledgeBaseIdsSchema.default([]),
 });
 
 export const approvalDecisionSchema = z.object({
@@ -220,6 +279,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     workspacePath: z.string(),
     workspaceSource: workspaceSourceSchema.optional(),
     approvalMode: z.enum(['manual', 'session']).optional(),
+    knowledgeBaseIds: knowledgeBaseIdsSchema,
   }),
   z.object({
     kind: z.literal('resume-approval'),
@@ -230,6 +290,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     workspacePath: z.string(),
     decision: approvalDecisionSchema,
     approvalMode: z.enum(['manual', 'session']).optional(),
+    knowledgeBaseIds: knowledgeBaseIdsSchema,
   }),
   z.object({
     kind: z.literal('resume-question'),
@@ -240,6 +301,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     workspacePath: z.string(),
     answer: questionAnswerSchema,
     approvalMode: z.enum(['manual', 'session']).optional(),
+    knowledgeBaseIds: knowledgeBaseIdsSchema,
   }),
 ]);
 

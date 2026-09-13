@@ -53,6 +53,7 @@ export interface RunRecord {
   sessionId: string;
   status: RunStatus;
   userMessage: string;
+  knowledgeBaseIds: string[];
   lastEventSeq: number;
   cancelRequestedAt: string | null;
   errorCode: string | null;
@@ -156,6 +157,9 @@ function runOf(row: QueryResultRow): RunRecord {
     sessionId: String(row.session_id),
     status: row.status as RunStatus,
     userMessage: String(row.user_message),
+    knowledgeBaseIds: Array.isArray(row.knowledge_base_ids)
+      ? row.knowledge_base_ids.map(String)
+      : [],
     lastEventSeq: Number(row.last_event_seq),
     cancelRequestedAt: row.cancel_requested_at ? iso(row.cancel_requested_at as Date) : null,
     errorCode: row.error_code === null ? null : String(row.error_code),
@@ -507,7 +511,12 @@ export class AgentRepository {
 
   async createRun(
     context: AuthContext,
-    input: { sessionId: string; message: string; idempotencyKey?: string },
+    input: {
+      sessionId: string;
+      message: string;
+      knowledgeBaseIds?: string[];
+      idempotencyKey?: string;
+    },
   ): Promise<{ run: RunRecord; created: boolean; outboxId?: string }> {
     return inTransaction(this.pool, async (client) => {
       if (input.idempotencyKey) {
@@ -531,11 +540,23 @@ export class AgentRepository {
       );
       if (!session.rows[0]) throw new RepositoryNotFoundError('session');
 
+      const knowledgeBaseIds = [...new Set(input.knowledgeBaseIds ?? [])];
+      const visible = await client.query(
+        `SELECT id FROM knowledge_bases
+         WHERE tenant_id = $1 AND deleted_at IS NULL AND id = ANY($2::uuid[])
+           AND (visibility = 'tenant' OR owner_user_id = $3
+             OR $4::text[] && ARRAY['owner', 'admin']::text[])`,
+        [context.tenantId, knowledgeBaseIds, context.userId, context.roles],
+      );
+      if (visible.rowCount !== knowledgeBaseIds.length) {
+        throw new RepositoryNotFoundError('knowledge_base');
+      }
+
       const id = randomUUID();
       const result = await client.query(
         `INSERT INTO agent_runs
-           (id, tenant_id, user_id, session_id, status, user_message, idempotency_key)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6)
+           (id, tenant_id, user_id, session_id, status, user_message, knowledge_base_ids, idempotency_key)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6::uuid[], $7)
          RETURNING *`,
         [
           id,
@@ -543,6 +564,7 @@ export class AgentRepository {
           context.userId,
           input.sessionId,
           input.message,
+          knowledgeBaseIds,
           input.idempotencyKey ?? null,
         ],
       );
@@ -560,6 +582,7 @@ export class AgentRepository {
         message: input.message,
         workspacePath: String(session.rows[0].workspace_path),
         approvalMode: session.rows[0].approval_mode as 'manual' | 'session',
+        knowledgeBaseIds,
         ...(workspaceSource ? { workspaceSource } : {}),
       });
       return { run, created: true, outboxId };
@@ -813,7 +836,7 @@ export class AgentRepository {
   ): Promise<InterruptRecord | null> {
     return inTransaction(this.pool, async (client) => {
       const run = await client.query(
-        `SELECT r.user_id, r.session_id, w.path AS workspace_path,
+        `SELECT r.user_id, r.session_id, r.knowledge_base_ids, w.path AS workspace_path,
                 s.approval_mode
          FROM agent_runs r
          JOIN agent_sessions s ON s.id = r.session_id
@@ -860,6 +883,9 @@ export class AgentRepository {
         runId,
         workspacePath: String(run.rows[0].workspace_path),
         approvalMode,
+        knowledgeBaseIds: Array.isArray(run.rows[0].knowledge_base_ids)
+          ? run.rows[0].knowledge_base_ids.map(String)
+          : [],
       };
       const job: RunJob =
         kind === 'approval'
