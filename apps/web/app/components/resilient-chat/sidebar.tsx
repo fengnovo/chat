@@ -16,9 +16,13 @@ function Sidebar({
   inactive,
   loaded,
   loadingMore,
+  menuSessionId,
   onClose,
+  onDelete,
   onLoadMore,
+  onMenu,
   onNewChat,
+  onRename,
   onRefresh,
   onSelect,
   onToggleCollapse,
@@ -35,9 +39,13 @@ function Sidebar({
   inactive: boolean;
   loaded: boolean;
   loadingMore: boolean;
+  menuSessionId: string | null;
   onClose: () => void;
+  onDelete: (session: WebSessionSummary) => void;
   onLoadMore: () => void;
+  onMenu: (sessionId: string | null) => void;
   onNewChat: () => void;
+  onRename: (session: WebSessionSummary) => void;
   onRefresh: () => void;
   onSelect: (session: WebSessionSummary) => void;
   onToggleCollapse: () => void;
@@ -77,7 +85,7 @@ function Sidebar({
           type="button"
           onClick={onToggleCollapse}
         >
-          <Icon name="chevron" size={16} />
+          <Icon name="chevron" size={20} />
         </button>
         {collapsed && (
           <button
@@ -86,7 +94,7 @@ function Sidebar({
             type="button"
             onClick={onToggleCollapse}
           >
-            <Icon name="chevron" size={16} />
+            <Icon name="chevron" size={20} />
           </button>
         )}
         <button
@@ -125,6 +133,7 @@ function Sidebar({
         {sessions.map((session) => {
           const active = session.externalKey === activeChatId;
           const switching = switchingSessionId === session.id;
+          const menuOpen = menuSessionId === session.id;
           return (
             <div
               className={active ? 'session-item is-active' : 'session-item'}
@@ -150,6 +159,37 @@ function Sidebar({
                   </small>
                 </span>
               </button>
+              <button
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                aria-label={`管理对话：${session.title}`}
+                className="session-more"
+                type="button"
+                onClick={() => onMenu(menuOpen ? null : session.id)}
+              >
+                <Icon name="more" size={17} />
+              </button>
+              {menuOpen && (
+                <div className="session-menu" role="menu">
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => onRename(session)}
+                  >
+                    <Icon name="edit" size={15} />
+                    重命名
+                  </button>
+                  <button
+                    className="is-danger"
+                    role="menuitem"
+                    type="button"
+                    onClick={() => onDelete(session)}
+                  >
+                    <Icon name="trash" size={15} />
+                    删除
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type PointerEvent, useMemo, useRef, useState } from 'react';
 
 import { Icon } from './icon';
 
@@ -187,12 +187,83 @@ function FilePreview({ file }: { file: TouchedFile }) {
   );
 }
 
+const MIN_FILES_WIDTH = 320;
+const MAX_FILES_WIDTH = 680;
+const MIN_CHAT_WIDTH = 360;
+const DEFAULT_FILES_WIDTH = 420;
+
+/** 文件面板左边缘的拖拽条：左右拖动改变整个文件面板的宽度。 */
+function PanelResizer({
+  onResize,
+  onDoubleClick,
+}: {
+  onResize: (width: number) => void;
+  onDoubleClick: () => void;
+}) {
+  const dragRef = useRef<{ x: number; width: number; max: number } | null>(null);
+
+  function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const panel = event.currentTarget.closest(
+      '.file-panel',
+    ) as HTMLElement | null;
+    const currentWidth = panel?.offsetWidth ?? DEFAULT_FILES_WIDTH;
+    const max = Math.min(
+      MAX_FILES_WIDTH,
+      window.innerWidth - MIN_CHAT_WIDTH,
+    );
+    dragRef.current = {
+      x: event.clientX,
+      width: currentWidth,
+      max,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add('is-file-resizing');
+  }
+
+  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // 鼠标向左拖 -> 面板变宽
+    const next = Math.min(
+      drag.max,
+      Math.max(MIN_FILES_WIDTH, drag.width + drag.x - event.clientX),
+    );
+    onResize(next);
+  }
+
+  function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    document.body.classList.remove('is-file-resizing');
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  return (
+    <div
+      aria-label="拖动调整文件面板宽度"
+      aria-orientation="vertical"
+      className="file-panel-resizer"
+      role="separator"
+      onDoubleClick={onDoubleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+    />
+  );
+}
+
 function FilePanel({
   files,
   onClose,
+  onResize,
+  onResetWidth,
 }: {
   files: TouchedFile[];
   onClose: () => void;
+  onResize: (width: number) => void;
+  onResetWidth: () => void;
 }) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const tree = useMemo(() => buildFileTree(files), [files]);
@@ -203,6 +274,7 @@ function FilePanel({
 
   return (
     <aside className="file-panel" aria-label="AI 生成的文件">
+      <PanelResizer onResize={onResize} onDoubleClick={onResetWidth} />
       <header className="file-panel-head">
         <div className="file-panel-title">
           <Icon name="folder" size={17} />
@@ -250,4 +322,8 @@ function FilePanel({
   );
 }
 
-export { FilePanel, type TouchedFile };
+export {
+  DEFAULT_FILES_WIDTH,
+  FilePanel,
+  type TouchedFile,
+};

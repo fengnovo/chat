@@ -1,6 +1,7 @@
 import { useChat } from '@ai-sdk/react';
 import { WorkflowChatTransport } from '@ai-sdk/workflow';
 import {
+  type CSSProperties,
   type FormEvent,
   useCallback,
   useEffect,
@@ -26,7 +27,10 @@ import { Composer } from './composer';
 import { initialTrace } from './constants';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
 import { TaskFailureNotice, friendlyError } from './failure-notice';
-import { FilePanel } from './file-panel';
+import {
+  DEFAULT_FILES_WIDTH,
+  FilePanel,
+} from './file-panel';
 import type { TouchedFile } from './file-panel';
 import { Icon } from './icon';
 import { Message, ThinkingRow } from './message';
@@ -115,6 +119,7 @@ function ChatRuntime() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [filesWidth, setFilesWidth] = useState(DEFAULT_FILES_WIDTH);
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
@@ -612,6 +617,22 @@ function ChatRuntime() {
     sidebarOpen,
   ]);
 
+  // 会话右键菜单（重命名/删除）打开时，点击菜单和"…"按钮以外的区域立即关闭。
+  useEffect(() => {
+    if (!sessionMenuId) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.session-menu') || target.closest('.session-more')) {
+        return;
+      }
+      setSessionMenuId(null);
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () =>
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [sessionMenuId]);
+
   // 只滚动会话容器自己：scrollIntoView 会连带滚动所有祖先（包括窗口），
   // 处理中高频触发时会把整个页面滚走，露出底部大片空白。
   // 依赖里纳入过程记录与任务列表，「正在执行」容器每次更新都会跟随到底。
@@ -1073,6 +1094,11 @@ function ChatRuntime() {
   return (
     <main
       className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${filesOpen ? 'is-files-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}
+      style={
+        {
+          '--files-width': `${filesWidth}px`,
+        } as CSSProperties
+      }
     >
       <Sidebar
         activeChatId={conversation.chatId}
@@ -1083,13 +1109,31 @@ function ChatRuntime() {
         loaded={sessionsLoaded}
         hasMore={Boolean(sessionsNextCursor)}
         loadingMore={loadingMoreSessions}
+        menuSessionId={sessionMenuId}
         inactive={Boolean(sessionDialog)}
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+        onDelete={(session) => {
+          dialogReturnFocusRef.current = document.activeElement
+            ?.closest('.session-item')
+            ?.querySelector<HTMLElement>('.session-more') ?? null;
+          setSessionMenuId(null);
+          setSessionDialogError(null);
+          setSessionDialog({ kind: 'delete', session });
+        }}
         onLoadMore={() => void loadMoreSessions()}
+        onMenu={setSessionMenuId}
         onClose={() => setSidebarOpen(false)}
         onNewChat={() => {
           setSidebarOpen(false);
           void handleNewChat();
+        }}
+        onRename={(session) => {
+          dialogReturnFocusRef.current = document.activeElement
+            ?.closest('.session-item')
+            ?.querySelector<HTMLElement>('.session-more') ?? null;
+          setSessionMenuId(null);
+          setSessionDialogError(null);
+          setSessionDialog({ kind: 'rename', session });
         }}
         onRefresh={() => void refreshSessions()}
         onSelect={(session) => {
@@ -1139,7 +1183,7 @@ function ChatRuntime() {
               aria-expanded={filesOpen}
               onClick={() => setFilesOpen((current) => !current)}
             >
-              <Icon name="folder" />
+              <Icon name="folder" size={18} />
             </button>
             <button
               className="icon-button"
@@ -1148,7 +1192,7 @@ function ChatRuntime() {
               aria-expanded={traceOpen}
               onClick={() => setTraceOpen((current) => !current)}
             >
-              <Icon name="panel" />
+              <Icon name="panel" size={18} />
             </button>
           </div>
         </header>
@@ -1286,7 +1330,12 @@ function ChatRuntime() {
       />
 
       {filesOpen && (
-        <FilePanel files={touchedFiles} onClose={() => setFilesOpen(false)} />
+        <FilePanel
+          files={touchedFiles}
+          onClose={() => setFilesOpen(false)}
+          onResize={setFilesWidth}
+          onResetWidth={() => setFilesWidth(DEFAULT_FILES_WIDTH)}
+        />
       )}
 
       {sessionDialog && (

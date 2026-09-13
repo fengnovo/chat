@@ -54,6 +54,11 @@
   width: 44px;
 }
 
+.topbar-actions .icon-button {
+  height: 36px;
+  width: 36px;
+}
+
 .icon-button:hover,
 .mobile-icon-button:hover {
   background: var(--surface-soft);

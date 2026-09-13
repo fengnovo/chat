@@ -11,11 +11,12 @@
 }
 
 .app-shell.is-files-open {
-  grid-template-columns: 264px minmax(0, 1fr) 420px;
+  grid-template-columns: 264px minmax(0, 1fr) var(--files-width, 420px);
 }
 
 .app-shell.is-trace-open.is-files-open {
-  grid-template-columns: 264px minmax(0, 1fr) 360px 420px;
+  grid-template-columns: 264px minmax(0, 1fr) 360px
+    var(--files-width, 420px);
 }
 
 .app-shell.is-sidebar-collapsed {
@@ -27,9 +28,10 @@
 }
 
 .app-shell.is-sidebar-collapsed.is-files-open {
-  grid-template-columns: 72px minmax(0, 1fr) 420px;
+  grid-template-columns: 72px minmax(0, 1fr) var(--files-width, 420px);
 }
 
 .app-shell.is-sidebar-collapsed.is-trace-open.is-files-open {
-  grid-template-columns: 72px minmax(0, 1fr) 360px 420px;
+  grid-template-columns: 72px minmax(0, 1fr) 360px
+    var(--files-width, 420px);
 }
