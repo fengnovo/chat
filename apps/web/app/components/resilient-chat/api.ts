@@ -18,6 +18,19 @@ async function fetchSessionPage(cursor?: string, signal?: AbortSignal) {
   } satisfies SessionPage;
 }
 
+type SessionFile = {
+  path: string;
+  content: string | null;
+  operation: string;
+};
+
+async function fetchSessionFiles(sessionId: string, signal?: AbortSignal) {
+  const response = await fetch(`/api/agent/sessions/${sessionId}/files`, { signal });
+  if (!response.ok) return [];
+  const payload = (await response.json()) as { files: SessionFile[] };
+  return payload.files;
+}
+
 async function responseError(response: Response, fallback: string) {
   const payload = (await response.json().catch(() => null)) as
     | { error?: string }
@@ -29,4 +42,4 @@ async function responseError(response: Response, fallback: string) {
   return payload?.error ? knownErrors[payload.error] ?? fallback : fallback;
 }
 
-export { fetchSessionPage, responseError };
+export { fetchSessionFiles, fetchSessionPage, responseError, type SessionFile };

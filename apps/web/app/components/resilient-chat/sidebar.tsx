@@ -1,3 +1,5 @@
+import Image from 'next/image';
+
 import { useEffect, useRef } from 'react';
 
 import { Icon } from './icon';
@@ -7,6 +9,7 @@ import type { WebSessionSummary } from './types';
 function Sidebar({
   activeChatId,
   busy,
+  collapsed,
   creating,
   error,
   hasMore,
@@ -14,20 +17,22 @@ function Sidebar({
   loaded,
   loadingMore,
   menuSessionId,
-  onDelete,
   onClose,
+  onDelete,
   onLoadMore,
   onMenu,
   onNewChat,
   onRename,
   onRefresh,
   onSelect,
+  onToggleCollapse,
   open,
   sessions,
   switchingSessionId,
 }: {
   activeChatId: string;
   busy: boolean;
+  collapsed: boolean;
   creating: boolean;
   error: string | null;
   hasMore: boolean;
@@ -35,14 +40,15 @@ function Sidebar({
   loaded: boolean;
   loadingMore: boolean;
   menuSessionId: string | null;
-  onDelete: (session: WebSessionSummary) => void;
   onClose: () => void;
+  onDelete: (session: WebSessionSummary) => void;
   onLoadMore: () => void;
   onMenu: (sessionId: string | null) => void;
   onNewChat: () => void;
   onRename: (session: WebSessionSummary) => void;
   onRefresh: () => void;
   onSelect: (session: WebSessionSummary) => void;
+  onToggleCollapse: () => void;
   open: boolean;
   sessions: WebSessionSummary[];
   switchingSessionId: string | null;
@@ -54,14 +60,43 @@ function Sidebar({
   }, [open]);
 
   return (
-    <aside className="sidebar" inert={inactive || undefined}>
+    <aside
+      className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}
+      inert={inactive || undefined}
+    >
       <div className="brand">
         <span className="brand-mark">
-          <Icon name="layers" size={20} />
+          <Image
+            alt="Keen Agent"
+            className="brand-logo"
+            height={32}
+            src="/keen-ai-logo.png"
+            width={32}
+          />
         </span>
-        <span>
-          <strong>Keen Agent</strong>
-        </span>
+        {!collapsed && (
+          <span>
+            <strong>Keen Agent</strong>
+          </span>
+        )}
+        <button
+          aria-label="收起左侧栏"
+          className="sidebar-collapse"
+          type="button"
+          onClick={onToggleCollapse}
+        >
+          <Icon name="chevron" size={24} />
+        </button>
+        {collapsed && (
+          <button
+            aria-label="展开左侧栏"
+            className="sidebar-expand"
+            type="button"
+            onClick={onToggleCollapse}
+          >
+            <Icon name="chevron" size={24} />
+          </button>
+        )}
         <button
           aria-label="关闭历史对话"
           className="sidebar-close"
@@ -74,17 +109,18 @@ function Sidebar({
       </div>
 
       <button
-        aria-label="新建对话"
+        aria-label={creating ? '正在创建对话' : '新建对话'}
         className="new-chat-button"
         disabled={creating}
         type="button"
         onClick={onNewChat}
       >
         <Icon name="plus" size={17} />
-        <span>{creating ? '正在创建…' : '新建对话'}</span>
+        {!collapsed && <span>{creating ? '正在创建…' : '新建对话'}</span>}
       </button>
 
-      <nav aria-label="历史对话" className="session-nav">
+      {!collapsed && (
+        <nav aria-label="历史对话" className="session-nav">
         {!loaded && <p className="session-list-status">正在加载历史记录…</p>}
         {loaded && error && (
           <button className="session-list-retry" type="button" onClick={onRefresh}>
@@ -168,6 +204,7 @@ function Sidebar({
           </button>
         )}
       </nav>
+      )}
     </aside>
   );
 }

@@ -10,6 +10,7 @@ import type { AgentTodo, InsightCard, ResilientMessage } from './types';
 function Message({
   copied,
   dismissedCards,
+  liveLabel,
   message,
   onBoundaryError,
   onCopy,
@@ -18,6 +19,8 @@ function Message({
 }: {
   copied: boolean;
   dismissedCards: Set<string>;
+  /** 流式生成但还没有正文时，气泡内实时展示的当前动作/思考。 */
+  liveLabel: string | null;
   message: ResilientMessage;
   onBoundaryError: () => void;
   onCopy: (id: string, text: string) => Promise<void>;
@@ -48,7 +51,12 @@ function Message({
               <MarkdownContent content={text} />
             )
           ) : streaming ? (
-            <StreamingDots />
+            <span className="streaming-live">
+              <StreamingDots />
+              {liveLabel && (
+                <span className="streaming-live-text">{liveLabel}</span>
+              )}
+            </span>
           ) : (
             <p className="message-empty">本轮没有返回任何内容，可以重新发送这条消息。</p>
           )}

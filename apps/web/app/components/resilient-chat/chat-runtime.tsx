@@ -1,6 +1,7 @@
 import { useChat } from '@ai-sdk/react';
 import { WorkflowChatTransport } from '@ai-sdk/workflow';
 import {
+  type CSSProperties,
   type FormEvent,
   useCallback,
   useEffect,
@@ -21,11 +22,16 @@ import {
 import { ResilientSession } from '@/app/lib/session';
 
 import { AgentStatusPanel } from './agent-status';
-import { fetchSessionPage, responseError } from './api';
+import { fetchSessionFiles, fetchSessionPage, responseError } from './api';
 import { Composer } from './composer';
 import { initialTrace } from './constants';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
 import { TaskFailureNotice, friendlyError } from './failure-notice';
+import {
+  DEFAULT_FILES_WIDTH,
+  FilePanel,
+} from './file-panel';
+import type { TouchedFile } from './file-panel';
 import { Icon } from './icon';
 import { Message, ThinkingRow } from './message';
 import { PendingInteraction } from './pending-interaction';
@@ -33,6 +39,7 @@ import { SessionActionDialog } from './session-dialog';
 import { Sidebar } from './sidebar';
 import { TracePanel } from './trace-panel';
 import type {
+  AgentActivityEntry,
   AgentActivityState,
   AgentStatus,
   AgentTodo,
@@ -54,7 +61,6 @@ import {
   messageText,
   messagesFromHistory,
 } from './utils';
-import { Welcome } from './welcome';
 
 let cachedSessions: SessionCache<WebSessionSummary> | null | undefined;
 
@@ -110,11 +116,15 @@ function ChatRuntime() {
   );
   const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesWidth, setFilesWidth] = useState(DEFAULT_FILES_WIDTH);
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
   const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
+  const [historyFiles, setHistoryFiles] = useState<TouchedFile[]>([]);
   const [generatedTokens, setGeneratedTokens] = useState(0);
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [interactionBusy, setInteractionBusy] = useState(false);
@@ -140,7 +150,10 @@ function ChatRuntime() {
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const sessionRef = useRef(new ResilientSession());
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  // 用户是否停在会话底部附近：在底部时新内容自动跟随；主动上滑查看时不打断。
+  const stickToBottomRef = useRef(true);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarWasOpenRef = useRef(false);
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -178,6 +191,28 @@ function ChatRuntime() {
       setSessionsLoaded(true);
     }
   }, []);
+
+  // 首次加载时，如果当前对话对应一条历史会话，拉取它的文件记录。
+  const historyFilesLoadedRef = useRef(false);
+  useEffect(() => {
+    if (historyFilesLoadedRef.current || !sessionsLoaded) return;
+    const match = sessions.find(
+      (session) => session.externalKey === conversation.chatId,
+    );
+    if (!match) return;
+    historyFilesLoadedRef.current = true;
+    void fetchSessionFiles(match.id)
+      .then((files) =>
+        setHistoryFiles(
+          files.map((file) => ({
+            path: file.path,
+            content: file.content,
+            operation: file.operation as TouchedFile['operation'],
+          })),
+        ),
+      )
+      .catch(() => undefined);
+  }, [sessionsLoaded, sessions, conversation.chatId]);
 
   const transport = useMemo(() => {
     return new WorkflowChatTransport<ResilientMessage>({
@@ -582,18 +617,130 @@ function ChatRuntime() {
     sidebarOpen,
   ]);
 
+  // 会话右键菜单（重命名/删除）打开时，点击菜单和"…"按钮以外的区域立即关闭。
   useEffect(() => {
-    const reducedMotion = window.matchMedia(
-      '(prefers-reduced-motion: reduce)',
-    ).matches;
-    messagesEndRef.current?.scrollIntoView({
-      behavior: reducedMotion ? 'auto' : 'smooth',
-      block: 'end',
-    });
-  }, [messages, error, pendingInterrupt, runFailure]);
+    if (!sessionMenuId) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.session-menu') || target.closest('.session-more')) {
+        return;
+      }
+      setSessionMenuId(null);
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () =>
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [sessionMenuId]);
+
+  // 只滚动会话容器自己：scrollIntoView 会连带滚动所有祖先（包括窗口），
+  // 处理中高频触发时会把整个页面滚走，露出底部大片空白。
+  // 依赖里纳入过程记录与任务列表，「正在执行」容器每次更新都会跟随到底。
+  useEffect(() => {
+    const container = conversationRef.current;
+    if (!container || !stickToBottomRef.current) return;
+    container.scrollTop = container.scrollHeight;
+  }, [
+    messages,
+    agentActivity.entries,
+    agentTodos,
+    generatedTokens,
+    pendingInterrupt,
+    error,
+    runFailure,
+  ]);
+
+  function handleConversationScroll() {
+    const container = conversationRef.current;
+    if (!container) return;
+    const distance =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    stickToBottomRef.current = distance < 96;
+  }
+
+  // 任意容器尺寸变化（展开「正在执行」面板、工具日志追加、任务条变高、
+  // 输入区撑高等）只要用户还停在底部，就立刻跟随到底。
+  useEffect(() => {
+    const container = conversationRef.current;
+    const list = messageListRef.current;
+    if (!container) return;
+    const follow = () => {
+      if (stickToBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+      }
+    };
+    const observer = new ResizeObserver(follow);
+    if (list) observer.observe(list);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  // 助手还没输出正文时，气泡里实时显示它正在做什么：优先用模型的过程旁白，
+  // 没有旁白时回退到当前正在执行的工具名，避免只剩三个点、用户不知道进展。
+  const liveActivityLabel = useMemo(() => {
+    const latestNarration = [...agentActivity.entries]
+      .reverse()
+      .find((entry): entry is Extract<AgentActivityEntry, { kind: 'narration' }> =>
+        entry.kind === 'narration',
+      );
+    if (latestNarration) return latestNarration.text;
+    if (agentActivity.runningTool) {
+      return `正在执行 ${agentActivity.runningTool}…`;
+    }
+    return null;
+  }, [agentActivity.entries, agentActivity.runningTool]);
+
+  // 从工具调用记录里提取 AI 操作过的文件，按路径去重，保留最后一次操作的内容。
+  // 合并历史会话的文件记录（从后端加载）和当前 run 的实时工具调用。
+  const touchedFiles = useMemo<TouchedFile[]>(() => {
+    const fileOps = new Map<string, TouchedFile>();
+    for (const file of historyFiles) {
+      fileOps.set(file.path, file);
+    }
+    for (const entry of agentActivity.entries) {
+      if (entry.kind !== 'tool') continue;
+      const tool = entry.tool;
+      if (
+        tool !== 'write_file' &&
+        tool !== 'edit_file' &&
+        tool !== 'read_file' &&
+        tool !== 'delete'
+      ) {
+        continue;
+      }
+      const args =
+        entry.input && typeof entry.input === 'object'
+          ? (entry.input as Record<string, unknown>)
+          : {};
+      const filePath = String(args.file_path ?? args.path ?? '').trim();
+      if (!filePath) continue;
+
+      let content: string | null = fileOps.get(filePath)?.content ?? null;
+      if (tool === 'write_file' || tool === 'edit_file') {
+        const raw = args.content;
+        if (typeof raw === 'string') content = raw;
+      } else if (tool === 'read_file' && entry.output != null) {
+        const out = entry.output;
+        if (typeof out === 'string') content = out;
+        else if (out && typeof out === 'object') {
+          const record = out as Record<string, unknown>;
+          const candidate = record.content ?? record.text ?? record.output;
+          if (typeof candidate === 'string') content = candidate;
+        }
+      }
+
+      fileOps.set(filePath, {
+        path: filePath,
+        content,
+        operation: tool,
+      });
+    }
+    return [...fileOps.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }, [agentActivity.entries, historyFiles]);
 
   async function selectSession(session: WebSessionSummary) {
     if (session.externalKey === conversation.chatId) return;
+    stickToBottomRef.current = true;
     setSwitchingSessionId(session.id);
     setSessionsError(null);
     try {
@@ -615,6 +762,16 @@ function ChatRuntime() {
             pending: isPendingStatus(latestRun.status),
           }
         : null;
+
+      // 并行加载该会话历史里 AI 操作过的文件，供文件面板展示。
+      const files = await fetchSessionFiles(session.id).catch(() => []);
+      setHistoryFiles(
+        files.map((file) => ({
+          path: file.path,
+          content: file.content,
+          operation: file.operation as TouchedFile['operation'],
+        })),
+      );
 
       await stop();
       clearError();
@@ -646,9 +803,14 @@ function ChatRuntime() {
   async function submitText(value: string) {
     const trimmed = value.trim();
     if (!trimmed || isBusy || error) return;
+    stickToBottomRef.current = true;
     setInput('');
     setSuggestions([]);
     setRunFailure(null);
+    // 新消息开始时清掉上一轮残留的过程记录/任务计划，避免"你好"也先冒出上轮的工具执行。
+    setActivity(emptyActivity);
+    setAgentTodos([]);
+    setGeneratedTokens(0);
     sessionRef.current.addUserMessage(trimmed);
     setTrace([
       localEvent('request', 'running', '正在提交新消息', 'useChat 已锁定输入并创建请求'),
@@ -696,6 +858,7 @@ function ChatRuntime() {
   }
 
   function resetConversation(chatId: string) {
+    stickToBottomRef.current = true;
     clearError();
     clearPersistedRun();
     setConversation({
@@ -710,6 +873,7 @@ function ChatRuntime() {
     setPendingInterrupt(null);
     setAgentTodos([]);
     setActivity(emptyActivity);
+    setHistoryFiles([]);
     setGeneratedTokens(0);
     setInteractionError(null);
     setRunFailure(null);
@@ -736,7 +900,6 @@ function ChatRuntime() {
       }
       await stopCurrentConversation();
       resetConversation(externalKey);
-      setNotice('已创建空白工作区');
       await refreshSessions();
     } catch (caught) {
       setSessionsError(
@@ -930,11 +1093,17 @@ function ChatRuntime() {
 
   return (
     <main
-      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''}`}
+      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${filesOpen ? 'is-files-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}
+      style={
+        {
+          '--files-width': `${filesWidth}px`,
+        } as CSSProperties
+      }
     >
       <Sidebar
         activeChatId={conversation.chatId}
         busy={isBusy || creatingSession}
+        collapsed={sidebarCollapsed}
         creating={creatingSession}
         error={sessionsError}
         loaded={sessionsLoaded}
@@ -942,6 +1111,7 @@ function ChatRuntime() {
         loadingMore={loadingMoreSessions}
         menuSessionId={sessionMenuId}
         inactive={Boolean(sessionDialog)}
+        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
         onDelete={(session) => {
           dialogReturnFocusRef.current = document.activeElement
             ?.closest('.session-item')
@@ -1006,16 +1176,15 @@ function ChatRuntime() {
             </button>
           </div>
           <div className="topbar-actions">
-            <span className={`connection-pill ${isBusy ? 'is-busy' : ''}`}>
-              <span className="status-dot" />
-              {status === 'streaming'
-                ? '正在流式生成'
-                : status === 'submitted'
-                  ? '正在建立连接'
-                  : error
-                    ? '连接中断'
-                    : '全部系统正常'}
-            </span>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={filesOpen ? '隐藏文件面板' : '显示文件面板'}
+              aria-expanded={filesOpen}
+              onClick={() => setFilesOpen((current) => !current)}
+            >
+              <Icon name="folder" size={16} />
+            </button>
             <button
               className="icon-button"
               type="button"
@@ -1023,25 +1192,19 @@ function ChatRuntime() {
               aria-expanded={traceOpen}
               onClick={() => setTraceOpen((current) => !current)}
             >
-              <Icon name="panel" />
-            </button>
-            <button
-              className="icon-button"
-              disabled={creatingSession}
-              type="button"
-              aria-label={creatingSession ? '正在新建对话' : '新建对话'}
-              onClick={() => void handleNewChat()}
-            >
-              <Icon name="refresh" />
+              <Icon name="panel" size={16} />
             </button>
           </div>
         </header>
 
-        <div className="conversation" aria-live="polite">
-          {!hasConversation ? (
-            <Welcome onPrompt={submitText} />
-          ) : (
-            <div className="message-list">
+        <div
+          className="conversation"
+          aria-live="polite"
+          ref={conversationRef}
+          onScroll={handleConversationScroll}
+        >
+          {hasConversation && (
+            <div className="message-list" ref={messageListRef}>
               {messages.map((message) => (
                 <Message
                   copied={copiedMessage === message.id}
@@ -1069,6 +1232,13 @@ function ChatRuntime() {
                     isBusy &&
                     message.id === lastMessage?.id &&
                     message.role === 'assistant'
+                  }
+                  liveLabel={
+                    isBusy &&
+                    message.id === lastMessage?.id &&
+                    message.role === 'assistant'
+                      ? liveActivityLabel
+                      : null
                   }
                 />
               ))}
@@ -1112,7 +1282,6 @@ function ChatRuntime() {
                   </button>
                 </div>
               )}
-              <div ref={messagesEndRef} />
             </div>
           )}
         </div>
@@ -1159,6 +1328,15 @@ function ChatRuntime() {
         onClose={() => setTraceOpen(false)}
         trace={trace}
       />
+
+      {filesOpen && (
+        <FilePanel
+          files={touchedFiles}
+          onClose={() => setFilesOpen(false)}
+          onResize={setFilesWidth}
+          onResetWidth={() => setFilesWidth(DEFAULT_FILES_WIDTH)}
+        />
+      )}
 
       {sessionDialog && (
         <SessionActionDialog

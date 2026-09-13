@@ -7,6 +7,15 @@
     grid-template-columns: 220px minmax(0, 1fr) 320px;
   }
 
+  .app-shell.is-files-open {
+    grid-template-columns: 220px minmax(0, 1fr) var(--files-width, 320px);
+  }
+
+  .app-shell.is-trace-open.is-files-open {
+    grid-template-columns: 220px minmax(0, 1fr) 300px
+      var(--files-width, 320px);
+  }
+
   .sidebar {
     padding-left: 13px;
     padding-right: 13px;
@@ -27,9 +36,22 @@
     grid-template-columns: 78px minmax(0, 1fr) 300px;
   }
 
+  .app-shell.is-files-open {
+    grid-template-columns: 78px minmax(0, 1fr) 300px;
+  }
+
+  .app-shell.is-trace-open.is-files-open {
+    grid-template-columns: 78px minmax(0, 1fr) 280px 300px;
+  }
+
   .sidebar {
     align-items: center;
-    padding: 18px 12px;
+    padding: 16px 10px;
+  }
+
+  .sidebar-collapse,
+  .sidebar-expand {
+    display: none;
   }
 
   .brand {
@@ -189,10 +211,6 @@
     display: flex;
   }
 
-  .topbar-actions .connection-pill {
-    display: none;
-  }
-
   .trace-scrim {
     background: rgb(18 16 24 / 44%);
     border: 0;
@@ -220,13 +238,29 @@
     transform: translateX(0);
   }
 
-  .trace-head .mobile-icon-button {
-    display: flex;
+  .file-panel {
+    bottom: 0;
+    box-shadow: -15px 0 40px rgb(17 14 25 / 20%);
+    max-width: 420px;
+    position: fixed;
+    right: 0;
+    top: 0;
+    transform: translateX(105%);
+    transition: transform 240ms ease;
+    width: calc(100% - 42px);
+    z-index: 21;
   }
 
-  .welcome {
-    padding-left: 20px;
-    padding-right: 20px;
+  .app-shell.is-files-open .file-panel {
+    transform: translateX(0);
+  }
+
+  .file-panel-resizer {
+    display: none;
+  }
+
+  .trace-head .mobile-icon-button {
+    display: flex;
   }
 }
 
@@ -245,7 +279,7 @@
   }
 
   .chat-column {
-    grid-template-rows: 68px minmax(0, 1fr) auto;
+    grid-template-rows: 56px minmax(0, 1fr) auto;
   }
 
   .topbar {
@@ -254,51 +288,6 @@
 
   .topbar .icon-button {
     display: none;
-  }
-
-  .welcome {
-    justify-content: flex-start;
-    padding-bottom: 24px;
-    padding-top: 38px;
-  }
-
-  .welcome-symbol {
-    height: 83px;
-    width: 83px;
-  }
-
-  .ring-one {
-    height: 83px;
-    width: 83px;
-  }
-
-  .ring-two {
-    height: 66px;
-    width: 66px;
-  }
-
-  .symbol-core {
-    border-radius: 17px;
-    height: 53px;
-    width: 53px;
-  }
-
-  .welcome h2 {
-    font-size: 28px;
-  }
-
-  .welcome > p {
-    font-size: 12px;
-  }
-
-  .prompt-grid {
-    gap: 7px;
-    grid-template-columns: 1fr;
-    margin-top: 24px;
-  }
-
-  .prompt-grid button {
-    min-height: 58px;
   }
 
   .message-list {
@@ -388,7 +377,6 @@
   .streaming-dots i,
   .pulse-dot,
   .activity-spinner,
-  .connection-pill.is-busy .status-dot,
   .skeleton-panel,
   .skeleton-line,
   .skeleton-orb,

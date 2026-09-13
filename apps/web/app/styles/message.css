@@ -344,3 +344,18 @@
 .streaming-dots i:nth-child(3) {
   animation-delay: 240ms;
 }
+
+/* 助手还没输出正文时：加载点 + 实时动作/思考旁白 */
+.streaming-live {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.streaming-live-text {
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
