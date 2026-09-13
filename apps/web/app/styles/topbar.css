@@ -29,6 +29,8 @@
   align-items: center;
   display: flex;
 }
+.knowledge-picker { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.knowledge-picker label { display: flex; gap: 3px; align-items: center; }
 
 .topbar-title {
   gap: 11px;

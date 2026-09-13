@@ -67,6 +67,7 @@ function messagesFromHistory(messages: HistoryMessage[]): ResilientMessage[] {
       runId: message.runId,
     },
     parts: [{ type: 'text', text: message.text }],
+    ...(message.citations?.length ? { parts: [{ type: 'text', text: message.text }, { type: 'data-citations', data: { citations: message.citations } }] } : {}),
   }));
 }
 

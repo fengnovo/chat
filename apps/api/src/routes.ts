@@ -215,6 +215,9 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
         .filter((event) => event.type === 'assistant.delta')
         .map((event) => event.text)
         .join('');
+      const citations = (eventGroups[index] ?? [])
+        .filter((event) => event.type === 'retrieval.completed')
+        .flatMap((event) => event.citations);
       return [
         {
           id: `user-${run.id}`,
@@ -231,6 +234,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
                 role: 'assistant' as const,
                 text: assistantText,
                 createdAt: run.updatedAt,
+                ...(citations.length ? { citations } : {}),
               },
             ]
           : []),

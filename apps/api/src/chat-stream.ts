@@ -29,7 +29,14 @@ function chunksFrom(runId: string, events: PersistedAgentEvent[]): UiChunk[] {
       chunks.push({ type: 'text-delta', id: textId, delta: event.text });
       continue;
     }
-    chunks.push({ type: 'data-agent', data: event, transient: true });
+    let agentData: PersistedAgentEvent = event;
+    if (event.type === 'retrieval.completed') {
+      // Keep the process trace, while also persisting an auditable citation part.
+      chunks.push({ type: 'data-citations', data: { ...event, citations: event.citations.map(({ chunkId, documentId, documentName, ordinal, heading, score, via }) => ({ chunkId, documentId, documentName, ordinal, ...(heading ? { heading } : {}), score, via })) }, transient: false });
+      const { citations: _citations, ...traceEvent } = event;
+      agentData = traceEvent as PersistedAgentEvent;
+    }
+    chunks.push({ type: 'data-agent', data: agentData, transient: true });
     if (
       !finished &&
       ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)

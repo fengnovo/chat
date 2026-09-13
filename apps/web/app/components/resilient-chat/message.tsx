@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { Icon } from './icon';
 import { messageText } from './utils';
 import type { AgentTodo, InsightCard, ResilientMessage } from './types';
+import { CitationList } from './citation-list';
 
 function Message({
   copied,
@@ -29,6 +30,10 @@ function Message({
 }) {
   const text = messageText(message);
   const cards = message.parts.filter((part) => part.type === 'data-card');
+  const citations = message.parts.filter((part) => part.type === 'data-citations').flatMap((part) => {
+    const data = part.data as { citations?: import('./types').Citation[] };
+    return data.citations ?? [];
+  });
   const isUser = message.role === 'user';
 
   return (
@@ -79,6 +84,8 @@ function Message({
               </AIBoundary>
             ) : null,
           )}
+
+        {!isUser && <CitationList citations={citations} />}
 
         {!isUser && text && (
           <div className="message-actions">

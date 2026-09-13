@@ -129,3 +129,33 @@ test('a coalesced runner stops rerunning once the task reports completion', asyn
   await run();
   assert.equal(runs, 2);
 });
+
+test('retrieval completion keeps the transient trace and emits bounded persistent citations', () => {
+  const retrieval = {
+    runId,
+    timestamp: new Date().toISOString(),
+    type: 'retrieval.completed' as const,
+    retrievalId: '00000000-0000-4000-8000-000000000002',
+    toolCallId: 'tool-1',
+    knowledgeBaseIds: [],
+    query: 'hello',
+    citations: [{
+      chunkId: '00000000-0000-4000-8000-000000000003',
+      documentId: '00000000-0000-4000-8000-000000000004',
+      documentName: 'guide.md',
+      ordinal: 2,
+      heading: 'Intro',
+      score: 0.91,
+      via: 'vector' as const,
+    }],
+    relations: [],
+    stats: { vectorHits: 1, graphHops: 0, searchedKbs: 0, durationMs: 5, truncated: false },
+  };
+  const citationChunk = chunksFrom(runId, [retrieval]).find((chunk) => chunk.type === 'data-citations');
+  assert.deepEqual((citationChunk?.data as { citations?: unknown[] })?.citations, retrieval.citations);
+  assert.equal(citationChunk?.transient, false);
+  assert.ok(chunksFrom(runId, [retrieval]).some((chunk) => chunk.type === 'data-agent'));
+  const trace = chunksFrom(runId, [retrieval]).find((chunk) => chunk.type === 'data-agent');
+  assert.equal((trace?.data as { citations?: unknown[] }).citations, undefined);
+  assert.equal(JSON.stringify(citationChunk).includes('passage'), false);
+});

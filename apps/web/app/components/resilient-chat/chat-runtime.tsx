@@ -22,7 +22,7 @@ import {
 import { ResilientSession } from '@/app/lib/session';
 
 import { AgentStatusPanel } from './agent-status';
-import { fetchSessionFiles, fetchSessionPage, responseError } from './api';
+import { fetchKnowledgeBases, fetchSessionFiles, fetchSessionPage, responseError } from './api';
 import { Composer } from './composer';
 import { initialTrace } from './constants';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
@@ -34,6 +34,7 @@ import {
 import type { TouchedFile } from './file-panel';
 import { Icon } from './icon';
 import { Message, ThinkingRow } from './message';
+import { KnowledgeBasePicker, knowledgeBaseIdsForChat } from './knowledge-base-picker';
 import { PendingInteraction } from './pending-interaction';
 import { SessionActionDialog } from './session-dialog';
 import { Sidebar } from './sidebar';
@@ -149,6 +150,10 @@ function ChatRuntime() {
   const [sessionDialogError, setSessionDialogError] = useState<string | null>(null);
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [knowledgeBases, setKnowledgeBases] = useState<Array<{ id: string; name: string; status?: string }>>([]);
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>(() =>
+    typeof window === 'undefined' ? [] : knowledgeBaseIdsForChat(conversation.chatId),
+  );
   const sessionRef = useRef(new ResilientSession());
   const conversationRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
@@ -191,6 +196,10 @@ function ChatRuntime() {
       setSessionsLoaded(true);
     }
   }, []);
+  useEffect(() => { void fetchKnowledgeBases().then(setKnowledgeBases).catch(() => undefined); }, []);
+  useEffect(() => {
+    setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId));
+  }, [conversation.chatId]);
 
   // 首次加载时，如果当前对话对应一条历史会话，拉取它的文件记录。
   const historyFilesLoadedRef = useRef(false);
@@ -225,6 +234,7 @@ function ChatRuntime() {
             messages,
             chat_id: id,
             trigger,
+            ...(knowledgeBaseIds.length ? { knowledge_base_ids: knowledgeBaseIds } : {}),
           },
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -264,6 +274,7 @@ function ChatRuntime() {
     conversation.chatId,
     conversation.resumeRun,
     refreshSessions,
+    knowledgeBaseIds,
   ]);
 
   const {
@@ -1176,6 +1187,7 @@ function ChatRuntime() {
             </button>
           </div>
           <div className="topbar-actions">
+            <KnowledgeBasePicker chatId={conversation.chatId} bases={knowledgeBases} value={knowledgeBaseIds} onChange={setKnowledgeBaseIds} />
             <button
               className="icon-button"
               type="button"

@@ -35,6 +35,8 @@ function agentEventToTrace(event: AgentEvent): PipelineEvent | null {
       return null;
     case 'usage.updated':
       return null;
+    case 'retrieval.completed':
+      return { ...base, stage: 'verify', status: 'success', title: '已完成知识检索', detail: `${event.citations.length} 条引用 · ${event.stats.durationMs}ms` };
     case 'run.started':
       return {
         ...base,

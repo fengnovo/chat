@@ -5,6 +5,11 @@
   width: 100%;
 }
 
+.citation-list { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+.citation-list h4 { margin: 0 0 6px; font-size: 12px; }
+.citation-list ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink-soft); }
+.citation-list li { display: flex; flex-wrap: wrap; gap: 7px; }
+
 .message-row {
   align-items: flex-start;
   display: flex;

@@ -39,6 +39,7 @@ type ResilientData = {
   pipeline: PipelineEvent;
   card: InsightCard | null;
   suggestions: string[];
+  citations: { citations: Citation[] };
 };
 
 type ResilientMessage = UIMessage<MessageMetadata, ResilientData>;
@@ -109,6 +110,17 @@ type HistoryMessage = {
   role: 'user' | 'assistant';
   text: string;
   createdAt: string;
+  citations?: Citation[];
+};
+
+type Citation = {
+  chunkId: string;
+  documentId: string;
+  documentName: string;
+  ordinal: number;
+  heading?: string;
+  score: number;
+  via: 'vector' | 'graph' | 'both';
 };
 
 type SessionHistory = {
@@ -146,6 +158,7 @@ export type {
   AgentTodo,
   ConversationSeed,
   HistoryMessage,
+  Citation,
   InsightCard,
   MessageMetadata,
   PendingInterrupt,
