@@ -32,3 +32,9 @@ Initial commit: `c1ef356` — `feat: add knowledge base api and indexing queue`
 - RED: added a Fastify inject regression with an existing tenant-visible KB owned by another user; before the guard it returned 500/attempted writes instead of uniform 404.
 - GREEN: routes now perform a mandatory owner/admin write authorization check before presigning or object verification. The test asserts upload and confirm both return 404 with zero artifact and queue activity; DB authorization coverage remains in place.
 - Verification: API tests 16 passed; DB tests 11 passed with 1 pre-existing integration skip; API and DB typechecks passed; `git diff --check` passed.
+
+## Fix round 4 (faithful queue/mutation regression)
+
+- Strengthened the Fastify regression fixture to model an existing same-tenant `visibility='tenant'` KB owned by another user, with write authorization computed from owner/admin roles.
+- Injected the exact queue instance used by the route and asserted zero queue adds, presigns, object verification, document inserts, and confirm calls for both unauthorized endpoints.
+- Verification: API tests 16 passed; DB tests 11 passed with 1 pre-existing integration skip; API and DB typechecks passed; `git diff --check` passed.

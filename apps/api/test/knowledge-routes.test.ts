@@ -11,7 +11,7 @@ const userId = '00000000-0000-4000-8000-000000000003';
 const kbId = '00000000-0000-4000-8000-000000000004';
 const documentId = '00000000-0000-4000-8000-000000000005';
 
-function makeApp(repository: Record<string, unknown>, artifacts = {}) {
+function makeApp(repository: Record<string, unknown>, artifacts = {}, knowledgeQueue = { add: async () => ({}) }) {
   const app = Fastify();
   app.decorateRequest('auth');
   app.addHook('preHandler', async (request) => {
@@ -20,7 +20,7 @@ function makeApp(repository: Record<string, unknown>, artifacts = {}) {
   return registerKnowledgeRoutes(app, {
     repository: { canWriteKnowledgeBase: async () => true, ...repository } as any,
     artifacts,
-    knowledgeQueue: { add: async () => ({}) },
+    knowledgeQueue,
     config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 10 },
   }).then(() => app);
 }
@@ -96,16 +96,23 @@ test('regular member cannot upload or confirm an existing tenant-visible KB', as
   let presigns = 0;
   let verifies = 0;
   let adds = 0;
+  const queue = { adds: [] as unknown[], add: async (...args: unknown[]) => { queue.adds.push(args); return {}; } };
+  const kb = { id: kbId, tenantId, visibility: 'tenant', ownerUserId: 'different-owner' };
+  let createdDocuments = 0;
+  let confirmedDocuments = 0;
   const app = await makeApp({
-    canWriteKnowledgeBase: async () => false,
-    createDocumentUpload: async () => { throw new Error('must not create'); },
+    listKnowledgeBases: async () => [kb],
+    getKnowledgeBase: async () => kb,
+    canWriteKnowledgeBase: async (auth: { userId: string; roles: string[] }) => kb.ownerUserId === auth.userId || auth.roles.some((role) => role === 'owner' || role === 'admin'),
+    createDocumentUpload: async () => { createdDocuments += 1; throw new Error('must not create'); },
     getKnowledgeDocument: async () => ({ id: documentId, kbId, objectKey: 'knowledge/x.md' }),
-    confirmDocumentUpload: async () => { throw new Error('must not confirm'); },
-  }, { createUpload: async () => { presigns += 1; }, verifyObject: async () => { verifies += 1; } });
+    confirmDocumentUpload: async () => { confirmedDocuments += 1; throw new Error('must not confirm'); },
+  }, { createUpload: async () => { presigns += 1; }, verifyObject: async () => { verifies += 1; } }, queue);
   const upload = await app.inject({ method: 'POST', url: `/api/knowledge-bases/${kbId}/documents/uploads`, payload: { name: 'x.md', mime: 'text/markdown', sizeBytes: 1, sha256: 'a'.repeat(64) } });
   const confirm = await app.inject({ method: 'POST', url: `/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`, payload: { sizeBytes: 1, sha256: 'a'.repeat(64) } });
   assert.equal(upload.statusCode, 404);
   assert.equal(confirm.statusCode, 404);
   assert.equal(presigns + verifies + adds, 0);
+  assert.equal(createdDocuments + confirmedDocuments + queue.adds.length, 0);
   await app.close();
 });
