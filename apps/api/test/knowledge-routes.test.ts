@@ -18,7 +18,7 @@ function makeApp(repository: Record<string, unknown>, artifacts = {}) {
     request.auth = { tenantId, userId, roles: [] };
   });
   return registerKnowledgeRoutes(app, {
-    repository,
+    repository: repository as any,
     artifacts,
     knowledgeQueue: { add: async () => ({}) },
     config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 10 },
@@ -80,7 +80,7 @@ test('confirm verifies object size and enqueues one active index job', async () 
     repository: {
       getKnowledgeDocument: async () => ({ id: documentId, kbId, objectKey: 'knowledge/x.md', sizeBytes: 3, sha256: 'b'.repeat(64), status: 'pending' }),
       confirmDocumentUpload: async () => ({ created: confirms++ === 0, document: { id: documentId }, job: { id: 'job-1' } }),
-    },
+    } as any,
     artifacts: { verifyObject: async () => {} }, knowledgeQueue: queue,
     config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 10 },
   });

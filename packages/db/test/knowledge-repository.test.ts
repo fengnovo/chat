@@ -43,3 +43,15 @@ test('terminal transition is one atomic SQL statement', async () => {
   assert.equal(queries.filter((q) => /knowledge_index_jobs/i.test(q) && /knowledge_documents/i.test(q)).length, 1);
   assert.match(queries.at(-1)!, /WITH|RETURNING/i);
 });
+
+test('knowledge API repository exposes authorized CRUD and atomic upload confirmation', async () => {
+  const queries: string[] = [];
+  const pool: any = { query: async (text: string) => { queries.push(text); if (/knowledge_index_jobs.*status/i.test(text)) return { rows: [], rowCount: 0 }; return { rows: [{ id: 'kb', document_id: 'doc', job_id: 'job' }], rowCount: 1 }; } };
+  const repo = new KnowledgeRepository(pool);
+  const auth = { tenantId: 'tenant', userId: 'user', roles: [] };
+  await repo.listKnowledgeBases(auth);
+  await repo.getKnowledgeDocument(auth, 'kb', 'doc');
+  await repo.confirmDocumentUpload(auth, 'kb', 'doc', { sizeBytes: 1, sha256: 'a'.repeat(64) });
+  assert.ok(queries.some((q) => /knowledge_bases/i.test(q) && /tenant_id/i.test(q)));
+  assert.ok(queries.some((q) => /knowledge_index_jobs/i.test(q) && /BEGIN|COMMIT|INSERT/i.test(q)));
+});

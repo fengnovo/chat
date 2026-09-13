@@ -20,7 +20,7 @@ interface BuildAppOptions {
   publisher?: Redis;
   queue?: Queue;
   knowledgeQueue?: Queue;
-  knowledgeRepository?: import('./types.js').KnowledgeRepositoryApi;
+  knowledgeRepository: import('./types.js').KnowledgeRepositoryApi;
   artifacts?: S3ArtifactStore;
 }
 
@@ -128,7 +128,7 @@ export async function buildApp(options: BuildAppOptions) {
   });
   await registerKnowledgeRoutes(app, {
     config: options.config,
-    repository: options.knowledgeRepository ?? (options.repository as unknown as import('./types.js').KnowledgeRepositoryApi),
+    repository: options.knowledgeRepository,
     knowledgeQueue,
     artifacts,
   });

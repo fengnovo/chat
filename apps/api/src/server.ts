@@ -1,4 +1,4 @@
-import { createDatabase, migrateDatabase } from '@repo/db';
+import { createDatabase, KnowledgeRepository, migrateDatabase } from '@repo/db';
 
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
@@ -7,7 +7,7 @@ const config = loadConfig();
 const database = createDatabase(config.DATABASE_URL);
 
 await migrateDatabase(database.pool);
-const app = await buildApp({ config, repository: database.repository });
+const app = await buildApp({ config, repository: database.repository, knowledgeRepository: new KnowledgeRepository(database.pool) });
 
 let shuttingDown = false;
 const shutdown = async () => {

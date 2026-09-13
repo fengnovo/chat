@@ -13,4 +13,10 @@
 
 ## Commit
 
-Pending: `feat: add knowledge base api and indexing queue`
+Initial commit: `c1ef356` — `feat: add knowledge base api and indexing queue`
+
+## Fix round 1 (P0 production composition)
+
+- RED: added a DB repository contract test; it failed because the knowledge API methods were absent.
+- GREEN: `KnowledgeRepository` now implements mandatory tenant/user/role-authorized KB/document CRUD, upload creation, and atomic confirm (queued document plus deduplicated active index job). `server.ts` constructs and injects it from the real database pool; unsafe optional-method fallback was removed.
+- Verification: API tests 15 passed; DB tests 10 passed with 1 pre-existing integration skip; API and DB typechecks passed; `git diff --check` passed.
