@@ -1,13 +1,17 @@
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
 import { S3ArtifactStore } from '@repo/artifacts';
 import { type AuthContext, RUN_QUEUE_NAME } from '@repo/contracts';
 import type { AgentRepository } from '@repo/db';
+import { ForbiddenKnowledgeError, RepositoryConflictError } from '@repo/db';
 import { Queue } from 'bullmq';
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { ZodError } from 'zod';
 
-import { AuthenticationError, createAuthenticator } from './auth.js';
+import { registerAdminRoutes } from './admin-routes.js';
+import { AuthenticationError, ForbiddenError, createAuthenticator } from './auth.js';
+import { registerAuthRoutes } from './auth-routes.js';
 import type { ApiConfig } from './config.js';
 import { RunOutboxDispatcher } from './outbox.js';
 import { registerRoutes } from './routes.js';
@@ -29,6 +33,10 @@ export async function buildApp(options: BuildAppOptions) {
     logger: true,
     bodyLimit: Math.max(1_048_576, options.config.PROJECT_UPLOAD_MAX_BYTES * 2),
   });
+  const authenticate = createAuthenticator(options.config, {
+    loadMembership: (tenantId, userId) =>
+      options.repository.getMembershipRole(tenantId, userId),
+  });
   const publisher =
     options.publisher ??
     new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -40,9 +48,12 @@ export async function buildApp(options: BuildAppOptions) {
     new Queue(RUN_QUEUE_NAME, {
       connection: queueConnection!,
     });
-  const knowledgeQueueConnection = options.knowledgeQueue ? null : new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
-  const knowledgeQueue = options.knowledgeQueue ?? new Queue('knowledge-index', { connection: knowledgeQueueConnection! });
-  const authenticate = createAuthenticator(options.config);
+  const knowledgeQueueConnection = options.knowledgeQueue
+    ? null
+    : new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
+  const knowledgeQueue =
+    options.knowledgeQueue ??
+    new Queue('knowledge-index', { connection: knowledgeQueueConnection! });
   const artifacts =
     options.artifacts ??
     new S3ArtifactStore({
@@ -80,11 +91,38 @@ export async function buildApp(options: BuildAppOptions) {
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     exposedHeaders: ['x-agent-run-id'],
   });
+  await app.register(cookie);
 
+  const PUBLIC_PATHS = new Set([
+    '/api/auth/login',
+    '/api/auth/register',
+    '/api/auth/logout',
+  ]);
   app.decorateRequest('auth');
   app.addHook('preHandler', async (request, reply) => {
+    const pathname = request.url.split('?')[0] ?? request.url;
     if (request.url.startsWith('/health/')) return;
-    request.auth = await authenticate(request.headers.authorization);
+    if (PUBLIC_PATHS.has(pathname)) {
+      // 登录与自助注册都是匿名入口，共用同一 IP 限流桶，防撞库与批量注册。
+      if (pathname === '/api/auth/login' || pathname === '/api/auth/register') {
+        const [count] = (await publisher.eval(
+          `local current = redis.call('INCR', KEYS[1])
+           if current == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+           return {current, redis.call('PTTL', KEYS[1])}`,
+          1,
+          `rate:login:${request.ip}`,
+          options.config.RATE_LIMIT_WINDOW_MS,
+        )) as [number, number];
+        if (count > options.config.RATE_LIMIT_REQUESTS) {
+          return reply.code(429).send({ error: 'rate_limit_exceeded' });
+        }
+      }
+      return;
+    }
+    request.auth = await authenticate({
+      authorization: request.headers.authorization,
+      cookie: request.headers.cookie,
+    });
     await options.repository.ensureIdentity(request.auth);
     const rateKey = `rate:api:${request.auth.tenantId}:${request.auth.userId}`;
     const [count, ttl] = (await publisher.eval(
@@ -112,6 +150,17 @@ export async function buildApp(options: BuildAppOptions) {
     if (error instanceof AuthenticationError) {
       return reply.code(401).send({ error: 'unauthorized', message: error.message });
     }
+    if (error instanceof ForbiddenError) {
+      return reply.code(403).send({ error: 'forbidden', message: error.message });
+    }
+    if (error instanceof ForbiddenKnowledgeError) {
+      return reply
+        .code(403)
+        .send({ error: 'knowledge_base_permission_required', message: error.message });
+    }
+    if (error instanceof RepositoryConflictError) {
+      return reply.code(409).send({ error: error.code });
+    }
     request.log.error({ error }, 'request failed');
     return reply.code(500).send({ error: 'internal_error' });
   });
@@ -131,6 +180,13 @@ export async function buildApp(options: BuildAppOptions) {
     repository: options.knowledgeRepository,
     knowledgeQueue,
     artifacts,
+  });
+  registerAuthRoutes(app, {
+    config: options.config,
+    repository: options.repository,
+  });
+  registerAdminRoutes(app, {
+    repository: options.repository,
   });
 
   app.addHook('onReady', async () => outbox.start());

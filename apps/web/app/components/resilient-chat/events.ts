@@ -148,6 +148,13 @@ function countSseFrames(text: string) {
 function createTrackedFetch(): typeof fetch {
   return async (input, init) => {
     const response = await fetch(input, init);
+    // 与 apiFetch 保持一致：会话过期时跳转登录页（/api/chat 也受鉴权保护）。
+    if (
+      response.status === 401 &&
+      !window.location.pathname.startsWith('/login')
+    ) {
+      window.location.assign('/login');
+    }
     if (!response.ok || !response.body) return response;
 
     const runId = response.headers.get('x-workflow-run-id');

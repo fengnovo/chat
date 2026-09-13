@@ -14,6 +14,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "node --env-file-if-exists=../../.env --conditions=development --import tsx src/migrate.ts",
+    "seed": "node --env-file-if-exists=../../.env --conditions=development --import tsx src/seed.ts",
     "test": "node --conditions=development --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {

@@ -1,9 +1,22 @@
 import type { SessionPage, SessionSummary, WebSessionSummary } from './types';
 
+// 统一 fetch 入口：未登录（401）时跳转登录页；/login 页面内不跳转防止循环。
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  if (
+    response.status === 401 &&
+    typeof window !== 'undefined' &&
+    !window.location.pathname.startsWith('/login')
+  ) {
+    window.location.assign('/login');
+  }
+  return response;
+}
+
 async function fetchSessionPage(cursor?: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ limit: '20' });
   if (cursor) query.set('cursor', cursor);
-  const response = await fetch(`/api/agent/sessions?${query}`, { signal });
+  const response = await apiFetch(`/api/agent/sessions?${query}`, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const payload = (await response.json()) as {
     data: SessionSummary[];
@@ -25,7 +38,7 @@ type SessionFile = {
 };
 
 async function fetchSessionFiles(sessionId: string, signal?: AbortSignal) {
-  const response = await fetch(`/api/agent/sessions/${sessionId}/files`, { signal });
+  const response = await apiFetch(`/api/agent/sessions/${sessionId}/files`, { signal });
   if (!response.ok) return [];
   const payload = (await response.json()) as { files: SessionFile[] };
   return payload.files;
@@ -63,15 +76,16 @@ type KnowledgeBase = {
   name: string;
   description?: string;
   status?: string;
+  owner_user_id?: string | null;
   documents?: KnowledgeDocument[];
 };
-async function fetchKnowledgeBases(signal?: AbortSignal) { const response = await fetch('/api/knowledge-bases', { signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return (await response.json() as { data: KnowledgeBase[] }).data; }
+async function fetchKnowledgeBases(signal?: AbortSignal) { const response = await apiFetch('/api/knowledge-bases', { signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return (await response.json() as { data: KnowledgeBase[] }).data; }
 async function fetchKnowledgeDocuments(kbId: string, signal?: AbortSignal) {
-  const response = await fetch(`/api/knowledge-bases/${kbId}/documents`, { signal });
+  const response = await apiFetch(`/api/knowledge-bases/${kbId}/documents`, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json() as { data: KnowledgeDocument[] }).data;
 }
-async function createKnowledgeBase(input: { name: string; description?: string; visibility?: 'private' | 'tenant' }) { const response = await fetch('/api/knowledge-bases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json() as KnowledgeBase; }
+async function createKnowledgeBase(input: { name: string; description?: string; visibility?: 'private' | 'tenant' }) { const response = await apiFetch('/api/knowledge-bases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json() as KnowledgeBase; }
 async function uploadKnowledgeDocument(kbId: string, file: File) {
   const content = new Uint8Array(await file.arrayBuffer());
   const digest = await crypto.subtle.digest('SHA-256', content);
@@ -81,7 +95,7 @@ async function uploadKnowledgeDocument(kbId: string, file: File) {
   const mime = file.type === 'text/plain' || /\.txt$/i.test(file.name)
     ? 'text/plain'
     : 'text/markdown';
-  const response = await fetch(`/api/knowledge-bases/${kbId}/documents/uploads`, {
+  const response = await apiFetch(`/api/knowledge-bases/${kbId}/documents/uploads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: file.name, mime, sizeBytes: file.size, sha256 }),
@@ -117,7 +131,7 @@ async function uploadKnowledgeDocument(kbId: string, file: File) {
   });
   if (!uploadResponse.ok) throw new Error(`HTTP ${uploadResponse.status}`);
 
-  const confirmResponse = await fetch(
+  const confirmResponse = await apiFetch(
     `/api/knowledge-bases/${kbId}/documents/${payload.document.id}/confirm`,
     {
       method: 'POST',
@@ -131,5 +145,127 @@ async function uploadKnowledgeDocument(kbId: string, file: File) {
     | { document: KnowledgeDocument };
   return 'document' in confirmed ? confirmed.document : confirmed;
 }
-async function deleteKnowledgeBase(kbId: string) { const response = await fetch(`/api/knowledge-bases/${kbId}`, { method: 'DELETE' }); if (!response.ok) throw new Error(`HTTP ${response.status}`); }
+async function deleteKnowledgeBase(kbId: string) { const response = await apiFetch(`/api/knowledge-bases/${kbId}`, { method: 'DELETE' }); if (!response.ok) throw new Error(`HTTP ${response.status}`); }
 export { fetchKnowledgeBases, fetchKnowledgeDocuments, createKnowledgeBase, uploadKnowledgeDocument, deleteKnowledgeBase, type KnowledgeBase, type KnowledgeDocument };
+
+// ---- 认证与当前用户 ----
+export type CurrentUser = {
+  id: string;
+  displayName: string;
+  role: 'admin' | 'owner' | 'member';
+  tenantId: string;
+  authMode?: 'dev' | 'password' | 'oidc';
+};
+
+export async function fetchCurrentUser(signal?: AbortSignal): Promise<CurrentUser | null> {
+  const response = await fetch('/api/auth/me', { signal });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { user?: CurrentUser };
+  return payload.user ?? null;
+}
+
+export async function login(username: string, password: string): Promise<CurrentUser> {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) throw new Error(response.status === 401 ? 'invalid_credentials' : `HTTP ${response.status}`);
+  const payload = (await response.json()) as { user: CurrentUser };
+  return payload.user;
+}
+
+export type RegisterInput = {
+  username: string;
+  displayName: string;
+  password: string;
+};
+
+export async function register(input: RegisterInput): Promise<CurrentUser> {
+  const response = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (response.ok) {
+    return ((await response.json()) as { user: CurrentUser }).user;
+  }
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string }
+    | null;
+  if (response.status === 403 && payload?.error === 'signup_disabled') {
+    throw new Error('signup_disabled');
+  }
+  if (response.status === 409) {
+    throw new Error('username_taken');
+  }
+  throw new Error(payload?.error ?? `HTTP ${response.status}`);
+}
+
+export async function logout(): Promise<void> {
+  await fetch('/api/auth/logout', { method: 'POST' });
+}
+
+// ---- 管理员：用户管理与知识库授权 ----
+export type AdminUser = {
+  id: string;
+  username: string | null;
+  displayName: string;
+  role: 'admin' | 'owner' | 'member';
+  grantedKbCount: number;
+  createdAt: string;
+};
+
+async function requireOk(response: Response, fallback: string) {
+  if (response.ok) return;
+  const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+  throw new Error(payload?.error ?? fallback);
+}
+
+export async function listAdminUsers(): Promise<AdminUser[]> {
+  const response = await apiFetch('/api/admin/users');
+  await requireOk(response, '加载用户失败');
+  return (await response.json() as { data: AdminUser[] }).data;
+}
+
+export async function createAdminUser(input: {
+  username: string;
+  displayName: string;
+  password: string;
+  role: AdminUser['role'];
+}): Promise<AdminUser> {
+  const response = await apiFetch('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  await requireOk(response, '创建用户失败');
+  return await response.json() as AdminUser;
+}
+
+export async function updateAdminUser(
+  userId: string,
+  patch: { role?: AdminUser['role']; displayName?: string; password?: string },
+): Promise<void> {
+  const response = await apiFetch(`/api/admin/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  await requireOk(response, '更新用户失败');
+}
+
+export async function fetchUserKbGrants(userId: string): Promise<string[]> {
+  const response = await apiFetch(`/api/admin/users/${userId}/knowledge-bases`);
+  await requireOk(response, '加载授权失败');
+  return (await response.json() as { data: string[] }).data;
+}
+
+export async function replaceUserKbGrants(userId: string, knowledgeBaseIds: string[]): Promise<void> {
+  const response = await apiFetch(`/api/admin/users/${userId}/knowledge-bases`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ knowledgeBaseIds }),
+  });
+  await requireOk(response, '保存授权失败');
+}

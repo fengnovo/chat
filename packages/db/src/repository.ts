@@ -541,15 +541,19 @@ export class AgentRepository {
       if (!session.rows[0]) throw new RepositoryNotFoundError('session');
 
       const knowledgeBaseIds = [...new Set(input.knowledgeBaseIds ?? [])];
-      const visible = await client.query(
-        `SELECT id FROM knowledge_bases
-         WHERE tenant_id = $1 AND deleted_at IS NULL AND id = ANY($2::uuid[])
-           AND (visibility = 'tenant' OR owner_user_id = $3
-             OR $4::text[] && ARRAY['owner', 'admin']::text[])`,
-        [context.tenantId, knowledgeBaseIds, context.userId, context.roles],
-      );
-      if (visible.rowCount !== knowledgeBaseIds.length) {
-        throw new RepositoryNotFoundError('knowledge_base');
+      if (knowledgeBaseIds.length > 0) {
+        const visible = await client.query(
+          `SELECT id FROM knowledge_bases
+           WHERE tenant_id = $1 AND deleted_at IS NULL AND id = ANY($2::uuid[])
+             AND (visibility = 'tenant' OR owner_user_id = $3
+               OR EXISTS (SELECT 1 FROM knowledge_base_grants g
+                          WHERE g.kb_id = knowledge_bases.id AND g.user_id = $3 AND g.tenant_id = $1)
+               OR $4::text[] && ARRAY['admin']::text[])`,
+          [context.tenantId, knowledgeBaseIds, context.userId, context.roles],
+        );
+        if (visible.rowCount !== knowledgeBaseIds.length) {
+          throw new RepositoryNotFoundError('knowledge_base');
+        }
       }
 
       const id = randomUUID();
@@ -1041,6 +1045,209 @@ export class AgentRepository {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async getMembershipRole(tenantId: string, userId: string): Promise<string | null> {
+    const result = await this.pool.query(
+      `SELECT role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantId, userId],
+    );
+    return result.rows[0] ? String(result.rows[0].role) : null;
+  }
+
+  async findUserForLogin(
+    username: string,
+  ): Promise<{ id: string; displayName: string; passwordHash: string | null; tenantId: string; role: string } | null> {
+    const result = await this.pool.query(
+      `SELECT u.id, u.display_name, u.password_hash, tm.tenant_id, tm.role
+       FROM users u
+       JOIN tenant_memberships tm ON tm.user_id = u.id
+       WHERE u.username = $1
+       ORDER BY tm.created_at ASC
+       LIMIT 1`,
+      [username],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      id: String(row.id),
+      displayName: String(row.display_name),
+      passwordHash: row.password_hash === null ? null : String(row.password_hash),
+      tenantId: String(row.tenant_id),
+      role: String(row.role),
+    };
+  }
+
+  async getUserDisplayName(tenantId: string, userId: string): Promise<string | null> {
+    const result = await this.pool.query(
+      `SELECT u.display_name FROM users u
+       JOIN tenant_memberships tm ON tm.user_id = u.id
+       WHERE u.id = $2 AND tm.tenant_id = $1`,
+      [tenantId, userId],
+    );
+    return result.rows[0] ? String(result.rows[0].display_name) : null;
+  }
+
+  async listTenantUsers(
+    tenantId: string,
+  ): Promise<Array<{ id: string; username: string | null; displayName: string; role: string; grantedKbCount: number; createdAt: string }>> {
+    const result = await this.pool.query(
+      `SELECT u.id, u.username, u.display_name, tm.role, tm.created_at,
+              (SELECT count(*)::int FROM knowledge_base_grants g
+                WHERE g.tenant_id = tm.tenant_id AND g.user_id = u.id) AS granted_kb_count
+       FROM users u
+       JOIN tenant_memberships tm ON tm.user_id = u.id AND tm.tenant_id = $1
+       ORDER BY tm.created_at ASC, u.id ASC`,
+      [tenantId],
+    );
+    return result.rows.map((row) => ({
+      id: String(row.id),
+      username: row.username === null ? null : String(row.username),
+      displayName: String(row.display_name),
+      role: String(row.role),
+      grantedKbCount: Number(row.granted_kb_count),
+      createdAt: iso(row.created_at as Date),
+    }));
+  }
+
+  async createTenantUser(
+    tenantId: string,
+    input: { id?: string; username: string; displayName: string; passwordHash: string; role: string },
+  ): Promise<{ id: string; username: string; displayName: string; role: string }> {
+    return inTransaction(this.pool, async (client) => {
+      const id = input.id ?? randomUUID();
+      try {
+        const user = await client.query(
+          `INSERT INTO users (id, username, display_name, password_hash)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, username, display_name`,
+          [id, input.username, input.displayName, input.passwordHash],
+        );
+        await client.query(
+          `INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)
+           ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+          [tenantId, id, input.role],
+        );
+        const row = user.rows[0];
+        return {
+          id: String(row.id),
+          username: String(row.username),
+          displayName: String(row.display_name),
+          role: input.role,
+        };
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505') {
+          throw new RepositoryConflictError('username_taken');
+        }
+        throw error;
+      }
+    });
+  }
+
+  async updateTenantUser(
+    tenantId: string,
+    userId: string,
+    patch: { role?: string; displayName?: string; passwordHash?: string },
+  ): Promise<{ id: string; username: string | null; displayName: string; role: string } | null> {
+    return inTransaction(this.pool, async (client) => {
+      // 先确认用户属于该租户，避免给跨租户 UUID 写入。
+      const membership = await client.query(
+        `SELECT role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      if (!membership.rows[0]) return null;
+
+      // 分开更新：不要让同一个参数同时出现在 SET 和 `$n::text IS NOT NULL`
+      // 表达式中，否则 node-postgres 不绑定类型时 PG 报 42P18（参数类型不定）。
+      if (patch.role !== undefined) {
+        await client.query(
+          `UPDATE tenant_memberships SET role = $3
+           WHERE tenant_id = $1 AND user_id = $2`,
+          [tenantId, userId, patch.role],
+        );
+      }
+      if (patch.displayName !== undefined || patch.passwordHash !== undefined) {
+        await client.query(
+          `UPDATE users
+           SET display_name = COALESCE($2, display_name),
+               password_hash = COALESCE($3, password_hash)
+           WHERE id = $1`,
+          [userId, patch.displayName ?? null, patch.passwordHash ?? null],
+        );
+      }
+
+      const user = await client.query(
+        `SELECT id, username, display_name FROM users WHERE id = $1`,
+        [userId],
+      );
+      if (!user.rows[0]) return null;
+      const roleRow = await client.query(
+        `SELECT role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      if (!roleRow.rows[0]) return null;
+      const row = user.rows[0];
+      return {
+        id: String(row.id),
+        username: row.username === null ? null : String(row.username),
+        displayName: String(row.display_name),
+        role: String(roleRow.rows[0].role),
+      };
+    });
+  }
+
+  async listKnowledgeBaseGrants(tenantId: string, userId: string): Promise<string[]> {
+    const result = await this.pool.query(
+      `SELECT kb_id FROM knowledge_base_grants WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantId, userId],
+    );
+    return result.rows.map((row) => String(row.kb_id));
+  }
+
+  async replaceKnowledgeBaseGrants(
+    tenantId: string,
+    userId: string,
+    kbIds: string[],
+    grantedBy: string,
+  ): Promise<string[]> {
+    const unique = [...new Set(kbIds)];
+    return inTransaction(this.pool, async (client) => {
+      const membership = await client.query(
+        `SELECT 1 FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      if (!membership.rows[0]) throw new RepositoryNotFoundError('user');
+      if (unique.length > 0) {
+        const known = await client.query(
+          `SELECT id FROM knowledge_bases
+           WHERE tenant_id = $1 AND deleted_at IS NULL AND id = ANY($2::uuid[])`,
+          [tenantId, unique],
+        );
+        if (known.rowCount !== unique.length) {
+          throw new RepositoryNotFoundError('knowledge_base');
+        }
+      }
+      await client.query(
+        `DELETE FROM knowledge_base_grants WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      for (const kbId of unique) {
+        await client.query(
+          `INSERT INTO knowledge_base_grants (id, tenant_id, kb_id, user_id, granted_by_user_id)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (kb_id, user_id) DO NOTHING`,
+          [randomUUID(), tenantId, kbId, userId, grantedBy],
+        );
+      }
+      return unique;
+    });
+  }
+}
+
+export class RepositoryConflictError extends Error {
+  constructor(public readonly code: string) {
+    super(code);
+    this.name = 'RepositoryConflictError';
   }
 }
 

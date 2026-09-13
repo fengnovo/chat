@@ -30,7 +30,7 @@ async function runToken(kbId: string) {
 async function mcpCall(token: string, body: unknown, sessionId?: string) {
   const response = await fetch(mcpUrl, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(sessionId ? { 'mcp-session-id': sessionId } : {}) },
+    headers: { authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json', ...(sessionId ? { 'mcp-session-id': sessionId } : {}) },
     body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
   });
   const text = await response.text();

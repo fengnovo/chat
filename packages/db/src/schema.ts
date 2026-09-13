@@ -22,9 +22,27 @@ export const tenants = pgTable('tenants', {
 export const users = pgTable('users', {
   id: uuid('id').primaryKey(),
   externalSubject: text('external_subject').unique(),
+  username: text('username').unique(),
+  passwordHash: text('password_hash'),
   displayName: text('display_name').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const knowledgeBaseGrants = pgTable(
+  'knowledge_base_grants',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    kbId: uuid('kb_id').notNull().references(() => knowledgeBases.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    grantedByUserId: uuid('granted_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('knowledge_base_grants_kb_user_idx').on(table.kbId, table.userId),
+    index('knowledge_base_grants_tenant_user_idx').on(table.tenantId, table.userId),
+  ],
+);
 
 export const tenantMemberships = pgTable(
   'tenant_memberships',

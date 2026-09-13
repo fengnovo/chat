@@ -8,14 +8,15 @@
 | 连接真实大模型                          | 已接通，需用户密钥验收 | Worker 固定使用 `deep` driver；支持 OpenAI、Anthropic 和 OpenAI-compatible endpoint                         |
 | API 多租户隔离                        | 已实现基础能力     | JWT 中的可信 `tenant_id` 决定数据范围，Repository 查询强制带 tenant                                               |
 | API OIDC/JWT 校验                  | 已实现         | 校验签名、issuer、audience、过期时间、`sub` 和 `tenant_id`                                                     |
-| Web 登录页与会话                       | 尚未实现        | 当前 Web 不会登录，也不会向 API 注入 Bearer Token                                                              |
+| Web 登录页与会话                       | 已实现（密码模式）   | `AUTH_MODE=password` 提供 `/login` 用户名密码登录，会话以 HTTP-only Cookie 中的 JWT 承载；API 全部路由（除登录/登出）要求已认证身份          |
 | Web 会话管理                         | 已完成         | 新建会话会立即创建独立 session/thread/workspace；支持历史恢复、切换、重命名、软删除和游标分页                                       |
-| 角色级 RBAC                         | 尚未完整实现      | 能解析 `owner/admin/member`，但业务路由还没有细分角色权限                                                           |
+| 角色级 RBAC                         | 已实现         | `admin`（超级管理员）/ `owner`（知识库拥有者）/ `member`（普通用户）三角色；知识库增删改查限 admin 与 owner，admin 可将知识库授权给用户用于聊天 RAG；权限在 Repository 查询谓词层强制执行 |
+| 知识库与多租户隔离                        | 已实现         | 知识库、文档与授权均带 tenant 过滤；member 仅能访问被授权的知识库                                                          |
 | 会话工作区                            | 已完成         | 新建会话直接创建独立空白 workspace；Web 不再要求选择项目、Git 仓库或本地目录                                             |
 | 开发/测试数据隔离                        | 已完成         | 本地开发使用 `agent` 数据库，集成测试使用独立端口和卷中的 `agent_test` 数据库                                                |
 | Sandbox                          | 配置已接入       | `SANDBOX_RUNTIME` 显式选择 `local-e2b`（本机 E2B-compatible Docker endpoint）或 `e2b-cloud`，dev 与线上环境均可配置；本机端点需单独验收                  |
 
-因此，“能否和真实模型聊天、恢复历史并让 Agent 在会话的空白 workspace 工作”的答案是可以；“能否作为完整的多租户生产 Coding Agent 上线”的答案仍然是还不可以。当前缺少的关键产品链路是 Web 登录、Token 传递、资源配额，以及与 Sandbox 脱钩的 workspace 持久化。
+因此，“能否和真实模型聊天、恢复历史并让 Agent 在会话的空白 workspace 工作”的答案是可以；多租户登录、密码认证与角色级 RBAC 已实现，但“能否作为完整的多租户生产 Coding Agent 上线”的答案仍然是还不可以。当前仍缺少的关键产品链路是 OIDC 模式下的 Web Token 传递、资源配额，以及与 Sandbox 脱钩的 workspace 持久化。
 
 ## 为什么本地页面不要求登录
 
@@ -37,17 +38,37 @@ roles    = [owner]
 
 这个模式的用途是无需身份供应商即可验收队列、SSE、审批和 Worker，不是生产登录方案。
 
-保护措施：当 `NODE_ENV=production` 且 `AUTH_MODE=dev` 时，API 会拒绝启动。切换到 `AUTH_MODE=oidc` 后，没有合法 `Authorization: Bearer <JWT>` 的 API 请求会返回 `401`。
+保护措施：当 `NODE_ENV=production` 且 `AUTH_MODE=dev` 时，API 会拒绝启动。
 
-不过，当前 Web 尚未实现以下部分：
+### 密码登录模式（AUTH_MODE=password）
 
-1. `/login` 页面或外部身份供应商跳转。
-2. 登录回调和服务端 Session/Cookie。
-3. 获取 access token。
-4. 在 Web 的聊天、SSE、审批、取消请求中携带 Bearer Token。
-5. tenant 切换和角色级 UI。
+如需验收 Web 登录与角色 RBAC，将本地配置切换为：
 
-所以现在直接把 API 切到 OIDC，API 会变安全，但 Web 会因为没有 Token 而收到 `401`。这是当前明确的未完成项。
+```dotenv
+AUTH_MODE=password
+AUTH_JWT_SECRET=<openssl rand -hex 32，至少 32 字符>
+```
+
+然后执行迁移与种子：
+
+```bash
+pnpm db:migrate
+pnpm db:seed
+```
+
+种子会写入默认租户和三个演示账号：`admin/admin123`（admin）、`owner/owner123`（owner）、`user/user123`（member）。登录流程：
+
+1. 打开 <http://localhost:3000>，未登录时会被引导到 `/login`。
+2. 使用任一种子账号登录，会话以 HTTP-only Cookie 中的 JWT 承载。
+3. 右上角用户菜单展示当前用户与角色，可退出登录。
+
+角色行为约定：
+
+- `admin`：管理所有知识库（增删改查、上传文档）、在 `/admin/users` 创建用户/分配角色/重置密码、将任意知识库授权给任意用户。
+- `owner`：对自己拥有的知识库可增删改查及上传文档；看不到其他人的私有知识库。
+- `member`：仅可浏览被 admin 授权的知识库，并可在聊天时选择使用其 RAG 能力；无管理入口。
+
+密码登录的具体验收步骤见下文第六节。
 
 ## 一、本地基础环境验收
 
@@ -240,9 +261,31 @@ curl -N "http://127.0.0.1:8000/api/agent/runs/$RUN_ID/events?cursor=10"
 3. 确认页面收到 `run.cancelled`。
 4. 查询 `agent_runs`，状态应为 `cancelled`，不能继续写入 completed 终态。
 
-## 六、OIDC 和跨租户隔离验收
+## 六、密码登录、角色 RBAC 与 OIDC 跨租户隔离验收
 
-这一阶段目前只能从 API 验收；Web 登录集成完成后才能做浏览器验收。
+### 密码登录与角色 RBAC（AUTH_MODE=password）
+
+按上文“密码登录模式”配置并完成 seed 后，用三种角色账号逐项验收：
+
+1. 未登录访问 <http://localhost:3000>：应被重定向到 `/login`；直接 `curl -i http://127.0.0.1:8000/api/agent/sessions` 应返回 `401`。
+2. 自助注册：在登录页点击“立即注册”进入 `/register`，填写新用户名（如 `tester1`，3-64 位字母/数字/`._-`）、显示名和至少 8 位密码；提交后应直接进入首页，左下角角色为“成员”（member）。重复用户名应提示“用户名已被占用”；密码短于 8 位或用户名含空格应被前端/后端拒绝（后端返回 400）。
+3. 使用 `user/user123` 登录（或继续使用刚注册的 member 账号）：
+   - 侧边栏没有“知识库管理”与“用户管理”入口；直接访问 `/admin/users` 应被拒绝。
+   - admin 授权知识库之前，知识库列表为空；聊天时知识库选择器无可用项。
+4. 使用 `owner/owner123` 登录：在知识库页创建一个知识库并上传 Markdown 文档；确认仅自己（和 admin）能看到它。
+5. 使用 `admin/admin123` 登录：
+   - 打开 `/admin/users`：创建一个新用户（member 角色）、修改角色、重置密码。
+   - 找到第 2 步注册的 `tester1`，将其角色改为 `owner`（验证自助注册 → 后台提权的完整链路）。
+   - 将 owner 创建的知识库授权给 `user`。
+   - 创建/编辑/删除任意知识库均应成功。
+6. 重新用 `tester1` 登录：左下角角色应已变为“知识库拥有者”，知识库页出现创建入口；再用 `user/user123` 登录，知识库列表出现被授权的知识库，聊天时选择它提问知识库内容，确认 RAG 引用生效。
+7. 越权检查：用 member 的会话 Cookie 直接调用 `POST /api/knowledge-bases`（创建知识库）、`DELETE /api/knowledge-bases/:id`（删除他人知识库）与 `GET /api/admin/users`，均应返回 `403`。
+8. 登出后所有 API 请求回到 `401`，Web 回到登录页。
+9. 关闭注册开关：设置 `AUTH_SIGNUP_ENABLED=false` 重启 API 后，`POST /api/auth/register` 应返回 `403 signup_disabled`。
+
+### OIDC 与跨租户隔离（AUTH_MODE=oidc）
+
+OIDC 模式目前主要从 API 验收（Web 端 OIDC 登录跳转仍属后续项）。
 
 配置：
 
@@ -300,7 +343,7 @@ curl -i \
 
 通过标准：返回 `404`，不能返回 Tenant A 的任何字段。还应分别测试过期 Token、错误 audience、错误 issuer 和篡改签名，均应返回 `401`。
 
-注意：目前 `roles` 只被解析并写入 membership，尚未实现“member 不能执行某操作”等细粒度 RBAC，因此角色权限不能算验收完成。
+OIDC Token 中的 `roles` 与密码模式共用同一套 RBAC 语义：知识库管理要求 `admin`/`owner`，管理 API 要求 `admin`，member 的知识库访问取决于 admin 授权记录。
 
 ## 七、Artifact 对象存储验收
 

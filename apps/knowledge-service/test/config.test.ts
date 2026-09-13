@@ -29,6 +29,9 @@ test('Bailian embeddings remain isolated from the OpenAI main model credentials'
   assert.equal(config.embeddingModel, 'text-embedding-v4');
   assert.equal(config.embeddingDimension, 1024);
   assert.equal(config.embeddingProfile, 'bailian-v4');
+  assert.equal(config.extractionModel, 'gpt-4o-mini');
+  assert.equal(config.extractionBaseUrl, 'https://api.openai.example/v1');
+  assert.equal(config.extractionApiKey, 'main-model-key');
 });
 
 test('OpenAI-compatible embeddings require an explicit base URL', () => {
@@ -37,6 +40,7 @@ test('OpenAI-compatible embeddings require an explicit base URL', () => {
       ...required,
       EMBEDDING_PROVIDER: 'openai-compatible',
       OPENAI_API_KEY: 'must-not-be-reused',
+      OPENAI_BASE_URL: 'https://api.openai.example/v1',
       EMBEDDING_API_KEY: 'embedding-key',
     }),
     /EMBEDDING_BASE_URL/,

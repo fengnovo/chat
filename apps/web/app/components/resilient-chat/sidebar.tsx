@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import type { ReactNode } from 'react';
 
 import { useEffect, useRef } from 'react';
 
@@ -29,6 +30,7 @@ function Sidebar({
   open,
   sessions,
   switchingSessionId,
+  footer,
 }: {
   activeChatId: string;
   busy: boolean;
@@ -52,6 +54,7 @@ function Sidebar({
   open: boolean;
   sessions: WebSessionSummary[];
   switchingSessionId: string | null;
+  footer?: ReactNode;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -205,6 +208,7 @@ function Sidebar({
         )}
       </nav>
       )}
+      {footer && <div className="sidebar-footer">{footer}</div>}
     </aside>
   );
 }

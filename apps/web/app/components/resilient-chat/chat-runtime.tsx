@@ -35,6 +35,8 @@ import type { TouchedFile } from './file-panel';
 import { Icon } from './icon';
 import { Message, ThinkingRow } from './message';
 import { KnowledgeBasePicker, knowledgeBaseIdsForChat } from './knowledge-base-picker';
+import { UserMenu } from '../auth/user-menu';
+import { apiFetch } from './api';
 import { PendingInteraction } from './pending-interaction';
 import { SessionActionDialog } from './session-dialog';
 import { Sidebar } from './sidebar';
@@ -512,7 +514,7 @@ function ChatRuntime() {
     if (!hasActiveRun || !persisted) return;
 
     const controller = new AbortController();
-    fetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
+    apiFetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -591,7 +593,7 @@ function ChatRuntime() {
     const persisted = readPersistedRun();
     if (!persisted) return;
     const controller = new AbortController();
-    fetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
+    apiFetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -797,7 +799,7 @@ function ChatRuntime() {
     try {
       // 切走前先停止当前任务：如果它在后台运行，就发取消信号并断开流。
       await stopCurrentConversation();
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/agent/sessions/${encodeURIComponent(session.id)}/history`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -900,7 +902,7 @@ function ChatRuntime() {
   async function stopCurrentConversation() {
     const currentRun = readPersistedRun();
     if (currentRun?.pending) {
-      await fetch(
+      await apiFetch(
         `/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`,
         { method: 'POST' },
       ).catch(() => null);
@@ -938,7 +940,7 @@ function ChatRuntime() {
     setSessionsError(null);
     const externalKey = crypto.randomUUID();
     try {
-      const response = await fetch('/api/agent/sessions', {
+      const response = await apiFetch('/api/agent/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -987,7 +989,7 @@ function ChatRuntime() {
     setSessionDialogBusy(true);
     setSessionDialogError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/agent/sessions/${encodeURIComponent(sessionDialog.session.id)}`,
         {
           method: 'PATCH',
@@ -1018,7 +1020,7 @@ function ChatRuntime() {
     setSessionDialogBusy(true);
     setSessionDialogError(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/agent/sessions/${encodeURIComponent(sessionDialog.session.id)}`,
         { method: 'DELETE' },
       );
@@ -1072,7 +1074,7 @@ function ChatRuntime() {
     const segment =
       interrupt.type === 'approval.required' ? 'approvals' : 'questions';
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/agent/runs/${encodeURIComponent(interrupt.runId)}/${segment}/${encodeURIComponent(interrupt.interruptId)}`,
         {
           method: 'POST',
@@ -1121,7 +1123,7 @@ function ChatRuntime() {
       return;
     }
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`,
         { method: 'POST' },
       );
@@ -1254,6 +1256,7 @@ function ChatRuntime() {
             >
               <Icon name="panel" size={16} />
             </button>
+            <UserMenu />
           </div>
         </header>
 

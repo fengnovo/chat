@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import type React from 'react';
 import './globals.css';
 import '@cognicatch/react/style.css';
+import { AuthProvider } from './components/auth/auth-context';
 
 export const metadata: Metadata = {
   title: 'Keen Agent',
@@ -14,7 +15,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       lang='zh-CN'
       className='h-full antialiased'
     >
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

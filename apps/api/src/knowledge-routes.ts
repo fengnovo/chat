@@ -77,7 +77,7 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     const documentId = randomUUID();
     const created = await services.repository.createDocumentUpload(request.auth, { ...input, kbId, documentId, objectKey: `tenants/${request.auth.tenantId}/knowledge/${kbId}/${documentId}/${input.name}` });
     if (!created) return notFound(reply, 'knowledge_base_not_found');
-    const upload = await services.artifacts.createUpload(created.objectKey, input.mime, input.sha256);
+    const upload = await services.artifacts.createUpload(created.object_key ?? created.objectKey, input.mime, input.sha256);
     return reply.code(201).send({ document: created, upload });
   });
 
@@ -88,7 +88,7 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     const document = await services.repository.getKnowledgeDocument(request.auth, id.parse(params.kbId), id.parse(params.documentId));
     if (!document) return notFound(reply, 'document_not_found');
     if (input.sizeBytes > services.config.KNOWLEDGE_DOCUMENT_MAX_BYTES) return reply.code(400).send({ error: 'knowledge_document_too_large' });
-    try { await services.artifacts.verifyObject(document.objectKey, input); } catch (error) {
+    try { await services.artifacts.verifyObject(document.object_key ?? document.objectKey, input); } catch (error) {
       if (error instanceof ArtifactVerificationError) return reply.code(400).send({ error: 'document_verification_failed' });
       throw error;
     }

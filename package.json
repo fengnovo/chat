@@ -18,6 +18,7 @@
     "infra:up": "docker compose -f infra/compose.yaml up -d --wait",
     "infra:down": "docker compose -f infra/compose.yaml down",
     "db:migrate": "pnpm --filter @repo/db migrate",
+    "db:seed": "pnpm --filter @repo/db seed",
     "db:migrate:test": "DATABASE_URL=${DATABASE_TEST_URL:-postgresql://agent:agent@127.0.0.1:55433/agent_test} pnpm --filter @repo/db migrate"
   },
   "keywords": [],

@@ -35,9 +35,14 @@ const schema = z
     OUTBOX_LEASE_MS: z.coerce.number().int().min(1_000).default(30_000),
     OUTBOX_RECONCILE_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
     OUTBOX_STALE_AFTER_MS: z.coerce.number().int().min(5_000).default(30_000),
-    AUTH_MODE: z.enum(['dev', 'oidc']).default('dev'),
+    AUTH_MODE: z.enum(['dev', 'password', 'oidc']).default('dev'),
+    AUTH_JWT_SECRET: z.string().min(32).optional(),
     DEV_TENANT_ID: z.uuid().default('00000000-0000-4000-8000-000000000001'),
     DEV_USER_ID: z.uuid().default('00000000-0000-4000-8000-000000000001'),
+    // 自助注册加入的租户；缺省时加入 DEV_TENANT_ID 指向的默认（seed）租户。
+    SIGNUP_TENANT_ID: z.uuid().optional(),
+    // 公开自助注册开关；未显式配置时仅开发/测试环境开放，生产默认关闭。
+    AUTH_SIGNUP_ENABLED: z.enum(['true', 'false']).optional(),
     OIDC_ISSUER: z.string().url().optional(),
     OIDC_AUDIENCE: z.string().optional(),
     OIDC_JWKS_URL: z.string().url().optional(),
@@ -54,6 +59,13 @@ const schema = z
         code: 'custom',
         path: ['AUTH_MODE'],
         message: 'AUTH_MODE=dev is forbidden in production',
+      });
+    }
+    if (value.AUTH_MODE === 'password' && !value.AUTH_JWT_SECRET) {
+      context.addIssue({
+        code: 'custom',
+        path: ['AUTH_MODE'],
+        message: 'AUTH_JWT_SECRET (min 32 chars) is required when AUTH_MODE=password',
       });
     }
     if (
@@ -94,6 +106,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     ...value,
     DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: path.resolve(value.WORKSPACE_ROOT),
+    SIGNUP_TENANT_ID: value.SIGNUP_TENANT_ID ?? value.DEV_TENANT_ID,
+    SIGNUP_ENABLED:
+      value.AUTH_SIGNUP_ENABLED !== undefined
+        ? value.AUTH_SIGNUP_ENABLED === 'true'
+        : value.NODE_ENV !== 'production',
     KNOWLEDGE_EMBEDDING_PROFILE: hasCompleteEmbeddingProfile ? {
       key: value.EMBEDDING_PROFILE!,
       model: value.EMBEDDING_MODEL!,

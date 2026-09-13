@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KnowledgeRepository } from '../src/knowledge-repository.js';
+import { KnowledgeRepository, ForbiddenKnowledgeError } from '../src/knowledge-repository.js';
 
 test('repository methods include tenant predicates and bound retrieval citations', async () => {
   const queries: string[] = [];
@@ -84,7 +84,7 @@ test('createKnowledgeBase persists the injected embedding profile without model 
   };
   const repo = new KnowledgeRepository(pool, { embeddingProfile: profile });
   await repo.createKnowledgeBase(
-    { tenantId: 'tenant', userId: 'user', roles: [] },
+    { tenantId: 'tenant', userId: 'user', roles: ['owner'] },
     { id: 'kb', name: 'KB' },
   );
 
@@ -102,10 +102,31 @@ test('createKnowledgeBase refuses to invent an embedding profile when none is in
   const repo = new KnowledgeRepository({ query: async () => { queried = true; return { rows: [] }; } } as any);
   await assert.rejects(
     () => repo.createKnowledgeBase(
-      { tenantId: 'tenant', userId: 'user', roles: [] },
+      { tenantId: 'tenant', userId: 'user', roles: ['owner'] },
       { id: 'kb', name: 'KB' },
     ),
     /embedding profile/i,
   );
   assert.equal(queried, false);
+});
+
+test('createKnowledgeBase is limited to owner and admin roles', async () => {
+  const repo = new KnowledgeRepository({ query: async () => ({ rows: [] }) } as any, {
+    embeddingProfile: {
+      key: 'k',
+      model: 'm',
+      dimension: 1,
+      collectionName: 'c',
+    },
+  });
+  await assert.rejects(
+    () => repo.createKnowledgeBase(
+      { tenantId: 'tenant', userId: 'user', roles: ['member'] },
+      { id: 'kb', name: 'KB' },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof ForbiddenKnowledgeError);
+      return true;
+    },
+  );
 });

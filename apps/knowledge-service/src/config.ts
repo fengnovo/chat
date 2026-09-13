@@ -17,7 +17,16 @@ const configSchema = z.object({
   embeddingBaseUrl: z.string({ error: 'EMBEDDING_BASE_URL is required' }).url('EMBEDDING_BASE_URL must be a URL'),
   embeddingDimension: z.coerce.number({ error: 'EMBEDDING_DIM is required' }).int().positive('EMBEDDING_DIM must be positive'),
   embeddingProfile: z.string({ error: 'EMBEDDING_PROFILE is required' }).trim().min(1, 'EMBEDDING_PROFILE is required'),
-  extractionModel: z.string().min(1),
+  extractionModel: z.string().trim().min(1).default('gpt-4o-mini'),
+  extractionBaseUrl: z.string().url('EXTRACTION_BASE_URL/OPENAI_BASE_URL must be a URL'),
+  extractionApiKey: z.string().min(1, 'EXTRACTION_API_KEY/OPENAI_API_KEY is required'),
+  s3Endpoint: z.string().url().default('http://127.0.0.1:59000'),
+  s3PublicEndpoint: z.string().url().optional(),
+  s3Region: z.string().trim().min(1).default('us-east-1'),
+  s3Bucket: z.string().trim().min(1).default('agent-artifacts'),
+  s3AccessKey: z.string().trim().min(1).default('agent'),
+  s3SecretKey: z.string().trim().min(1).default('agent-local-secret'),
+  leaseMs: z.coerce.number().int().positive().default(120_000),
   concurrency: z.coerce.number().int().positive().default(2),
   budget: z.coerce.number().positive().default(1),
 });
@@ -28,6 +37,11 @@ const defaultEmbeddingBaseUrl = (provider: z.infer<typeof embeddingProviderSchem
   if (provider === 'bailian') return 'https://dashscope.aliyuncs.com/compatible-mode/v1';
   return undefined;
 };
+
+// EXTRACTION_MODEL 允许 "openai:gpt-4o-mini" 这种带 provider 前缀的写法，实际调用时只用模型名。
+function normalizeExtractionModel(value: string | undefined): string {
+  return (value ?? 'gpt-4o-mini').trim().replace(/^[a-z0-9-]+:/i, '');
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): KnowledgeServiceConfig {
   const embeddingProvider = embeddingProviderSchema.parse(env.EMBEDDING_PROVIDER ?? 'openai');
@@ -44,7 +58,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KnowledgeServi
     embeddingBaseUrl: env.EMBEDDING_BASE_URL ?? defaultEmbeddingBaseUrl(embeddingProvider),
     embeddingDimension: env.EMBEDDING_DIM,
     embeddingProfile: env.EMBEDDING_PROFILE,
-    extractionModel: env.EXTRACTION_MODEL,
+    extractionModel: normalizeExtractionModel(env.EXTRACTION_MODEL),
+    extractionBaseUrl: env.EXTRACTION_BASE_URL ?? env.OPENAI_BASE_URL,
+    extractionApiKey: env.EXTRACTION_API_KEY ?? env.OPENAI_API_KEY,
+    s3Endpoint: env.S3_ENDPOINT,
+    s3PublicEndpoint: env.S3_PUBLIC_ENDPOINT,
+    s3Region: env.S3_REGION,
+    s3Bucket: env.S3_BUCKET,
+    s3AccessKey: env.S3_ACCESS_KEY,
+    s3SecretKey: env.S3_SECRET_KEY,
+    leaseMs: env.KNOWLEDGE_INDEX_LEASE_MS,
     concurrency: env.KNOWLEDGE_CONCURRENCY,
     budget: env.KNOWLEDGE_BUDGET,
   });

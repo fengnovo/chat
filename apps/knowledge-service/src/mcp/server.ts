@@ -24,7 +24,7 @@ export function createMcpHttpServer(opts: { tokenSecret: string; retriever: any;
       const headers: any = extra.requestInfo?.headers;
       const authorization = headers && typeof headers.get === 'function' ? headers.get('authorization') : headers?.authorization;
       const claims = await verifyRunToken(authorization, opts.tokenSecret);
-      const result = await opts.retriever.retrieve({ tenantId: claims.tenantId, knowledgeBaseIds: claims.kbIds, query });
+      const result = await opts.retriever.retrieve({ tenantId: claims.tenantId, knowledgeBaseIds: claims.kbIds, query, userId: claims.userId, sessionId: claims.sessionId, runId: claims.runId });
       return { content: [{ type: 'text', text: formatBoundedEvidence(result) }], structuredContent: boundedRetrievalMetadata(result) };
     });
     let transport!: StreamableHTTPServerTransport;

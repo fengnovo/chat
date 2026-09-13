@@ -1,3 +1,12 @@
-import { KnowledgeManager } from './knowledge-manager';
+'use client';
 
-export default function KnowledgePage() { return <KnowledgeManager />; }
+import { KnowledgeManager } from './knowledge-manager';
+import { AuthGate } from '../components/auth/auth-gate';
+
+export default function KnowledgePage() {
+  return (
+    <AuthGate>
+      <KnowledgeManager />
+    </AuthGate>
+  );
+}
