@@ -47,7 +47,15 @@ export class KnowledgeRepository {
   }
 
   async listKnowledgeBases(auth: AuthContext): Promise<any[]> {
-    const result = await this.pool.query(`SELECT * FROM knowledge_bases WHERE tenant_id = $1 AND deleted_at IS NULL AND ${KnowledgeRepository.readable('knowledge_bases.id', 2, 1, 3)} ORDER BY created_at DESC`, [auth.tenantId, auth.userId, auth.roles]);
+    const result = await this.pool.query(
+      `SELECT k.*,
+        (SELECT count(*) FROM knowledge_documents d WHERE d.kb_id = k.id AND d.deleted_at IS NULL)::int AS document_count,
+        (SELECT count(*) FROM knowledge_chunks c WHERE c.kb_id = k.id)::int AS chunk_count
+       FROM knowledge_bases k
+       WHERE k.tenant_id = $1 AND k.deleted_at IS NULL AND ${KnowledgeRepository.readable('k.id', 2, 1, 3)}
+       ORDER BY k.updated_at DESC, k.created_at DESC`,
+      [auth.tenantId, auth.userId, auth.roles],
+    );
     return result.rows;
   }
 
@@ -71,6 +79,40 @@ export class KnowledgeRepository {
     return result.rows[0];
   }
 
+  async updateKnowledgeBase(
+    auth: AuthContext,
+    id: string,
+    input: { name?: string | undefined; description?: string | null | undefined; visibility?: 'private' | 'tenant' | undefined },
+  ): Promise<any | null> {
+    const existing = await this.pool.query(
+      `SELECT * FROM knowledge_bases WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL AND ${KnowledgeRepository.writable(3, 4)}`,
+      [auth.tenantId, id, auth.userId, auth.roles],
+    );
+    if (!existing.rows[0]) return null;
+    // 可见性会影响租户内访问范围，仅允许 owner 本人或 admin 调整。
+    const canChangeVisibility =
+      existing.rows[0].owner_user_id === auth.userId || auth.roles.includes('admin');
+    const visibility = canChangeVisibility ? input.visibility : undefined;
+    const result = await this.pool.query(
+      `UPDATE knowledge_bases SET
+         name = COALESCE($3, name),
+         description = CASE WHEN $4::boolean THEN $5 ELSE description END,
+         visibility = COALESCE($6, visibility),
+         updated_at = now()
+       WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
+       RETURNING *`,
+      [
+        auth.tenantId,
+        id,
+        input.name ?? null,
+        input.description !== undefined,
+        input.description ?? null,
+        visibility ?? null,
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async deleteKnowledgeBase(auth: AuthContext, id: string): Promise<boolean> {
     const result = await this.pool.query(`UPDATE knowledge_bases SET deleted_at = now(), updated_at = now() WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL AND ${KnowledgeRepository.writable(3, 4)}`, [auth.tenantId, id, auth.userId, auth.roles]);
     return (result.rowCount ?? 0) > 0;
@@ -84,6 +126,54 @@ export class KnowledgeRepository {
   async getKnowledgeDocument(auth: AuthContext, kbId: string, id: string): Promise<any | null> {
     const result = await this.pool.query(`SELECT d.* FROM knowledge_documents d JOIN knowledge_bases k ON k.id = d.kb_id WHERE d.tenant_id = $1 AND d.kb_id = $2 AND d.id = $3 AND d.deleted_at IS NULL AND k.deleted_at IS NULL AND ${KnowledgeRepository.readable('k.id', 4, 1, 5)}`, [auth.tenantId, kbId, id, auth.userId, auth.roles]);
     return result.rows[0] ?? null;
+  }
+
+  async renameKnowledgeDocument(auth: AuthContext, kbId: string, id: string, name: string): Promise<any | null> {
+    const result = await this.pool.query(
+      `UPDATE knowledge_documents d SET name = $4, updated_at = now()
+       FROM knowledge_bases k
+       WHERE d.tenant_id = $1 AND d.kb_id = $2 AND d.id = $3 AND d.deleted_at IS NULL
+         AND k.id = d.kb_id AND k.deleted_at IS NULL AND ${KnowledgeRepository.writable(5, 6)}
+       RETURNING d.*`,
+      [auth.tenantId, kbId, id, name, auth.userId, auth.roles],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async listDocumentChunks(
+    auth: AuthContext,
+    kbId: string,
+    documentId: string,
+    options: { search?: string | undefined; limit?: number | undefined; offset?: number | undefined } = {},
+  ): Promise<{ rows: any[]; total: number }> {
+    const limit = Math.min(200, Math.max(1, options.limit ?? 100));
+    const offset = Math.max(0, options.offset ?? 0);
+    const hasSearch = Boolean(options.search?.trim());
+    const result = await this.pool.query(
+      `SELECT c.id, c.kb_id, c.document_id, c.ordinal, c.text, c.token_count, c.heading, c.metadata, c.created_at, d.name AS document_name
+       FROM knowledge_chunks c
+       JOIN knowledge_bases k ON k.id = c.kb_id
+       JOIN knowledge_documents d ON d.id = c.document_id
+       WHERE c.tenant_id = $1 AND c.kb_id = $2 AND c.document_id = $3
+         AND k.deleted_at IS NULL AND d.deleted_at IS NULL
+         AND ${KnowledgeRepository.readable('k.id', 4, 1, 5)}
+         AND ($6::text IS NULL OR c.text ILIKE ('%' || $6 || '%') OR c.id::text ILIKE ('%' || $6 || '%'))
+       ORDER BY c.ordinal ASC
+       LIMIT $7 OFFSET $8`,
+      [auth.tenantId, kbId, documentId, auth.userId, auth.roles, hasSearch ? options.search!.trim() : null, limit, offset],
+    );
+    const countResult = await this.pool.query(
+      `SELECT count(*)::int AS total
+       FROM knowledge_chunks c
+       JOIN knowledge_bases k ON k.id = c.kb_id
+       JOIN knowledge_documents d ON d.id = c.document_id
+       WHERE c.tenant_id = $1 AND c.kb_id = $2 AND c.document_id = $3
+         AND k.deleted_at IS NULL AND d.deleted_at IS NULL
+         AND ${KnowledgeRepository.readable('k.id', 4, 1, 5)}
+         AND ($6::text IS NULL OR c.text ILIKE ('%' || $6 || '%') OR c.id::text ILIKE ('%' || $6 || '%'))`,
+      [auth.tenantId, kbId, documentId, auth.userId, auth.roles, hasSearch ? options.search!.trim() : null],
+    );
+    return { rows: result.rows, total: countResult.rows[0]?.total ?? 0 };
   }
 
   async createDocumentUpload(auth: AuthContext, input: any): Promise<any | null> {

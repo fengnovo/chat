@@ -49,10 +49,10 @@ test('e2b-cloud runtime requires an E2B API key', () => {
   assert.equal(config.E2B_SANDBOX_URL, 'http://sandbox.internal:10087');
 });
 
-test('demo agent configuration is rejected', () => {
+test('unsupported agent driver configuration is rejected', () => {
   assert.throws(() => loadWorkerConfig({
     ...requiredKeys,
-    AGENT_DRIVER: 'demo',
+    AGENT_DRIVER: 'invalid-driver',
   }));
 });
 

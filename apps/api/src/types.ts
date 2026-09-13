@@ -13,12 +13,24 @@ export interface KnowledgeRepositoryApi {
   getKnowledgeBase: (auth: AuthContext, id: string) => Promise<unknown | null>;
   canWriteKnowledgeBase: (auth: AuthContext, id: string) => Promise<boolean>;
   createKnowledgeBase: (auth: AuthContext, input: unknown) => Promise<unknown>;
+  updateKnowledgeBase: (
+    auth: AuthContext,
+    id: string,
+    input: { name?: string | undefined; description?: string | null | undefined; visibility?: 'private' | 'tenant' | undefined },
+  ) => Promise<unknown | null>;
   deleteKnowledgeBase: (auth: AuthContext, id: string) => Promise<boolean | 'not_found'>;
   listKnowledgeDocuments: (auth: AuthContext, kbId: string) => Promise<unknown[]>;
   getKnowledgeDocument: (auth: AuthContext, kbId: string, id: string) => Promise<any | null>;
   createDocumentUpload: (auth: AuthContext, input: unknown) => Promise<any>;
   confirmDocumentUpload: (auth: AuthContext, kbId: string, id: string, input: unknown) => Promise<any>;
+  renameKnowledgeDocument: (auth: AuthContext, kbId: string, id: string, name: string) => Promise<any | null>;
   deleteKnowledgeDocument: (auth: AuthContext, kbId: string, id: string) => Promise<boolean | 'not_found'>;
+  listDocumentChunks: (
+    auth: AuthContext,
+    kbId: string,
+    documentId: string,
+    options?: { search?: string | undefined; limit?: number | undefined; offset?: number | undefined },
+  ) => Promise<{ rows: unknown[]; total: number }>;
 }
 
 export interface ApiServices {

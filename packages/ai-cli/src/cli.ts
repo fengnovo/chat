@@ -9,11 +9,11 @@ import { runCli } from './cli/app.js';
 import { A, stopTui } from './tui/index.js';
 
 /**
- * demo20：可实际使用的 Coding Agent CLI
+ * Coding Agent CLI
  *
- * pnpm demo20
- * pnpm demo20 "帮我写一个冒泡排序并测试"
- * pnpm demo20 --cwd /path/to/project
+ * pnpm start
+ * pnpm start "帮我写一个冒泡排序并测试"
+ * pnpm start --cwd /path/to/project
  */
 
 process.on('SIGINT', () => {

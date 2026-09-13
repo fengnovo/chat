@@ -418,7 +418,7 @@ curl -fsS http://127.0.0.1:8001/health/ready
 
 主要结果：
 
-1. Worker 强制使用 `deep + E2B protocol`，拒绝 `demo` 和宿主机执行配置。
+1. Worker 强制使用 `deep + E2B protocol`，拒绝非生产驱动和宿主机执行配置。
 2. E2B 配置缺失时直接启动失败，不再回退宿主机执行。
 3. Session/workspace 的 sandbox ID 持久化到 PostgreSQL。
 4. start/resume 自动 create/connect sandbox。
@@ -427,7 +427,7 @@ curl -fsS http://127.0.0.1:8001/health/ready
 7. E2B 前台命令已接入取消信号，取消时会终止远程进程。
 8. CLI 同样强制使用 E2B，并将 skills、`AGENTS.md` 上传到远程沙箱。
 9. CLI 界面改为显示真实 E2B 工作目录。
-10. 删除 Demo Agent 实现。
+10. 删除内置示例 Agent 实现。
 11. 新增数据库迁移 007\_e2b\_workspace\_sandbox.sql 。
 12. 核心适配器位于 e2b-sandbox.ts 。
 

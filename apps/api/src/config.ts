@@ -52,6 +52,15 @@ const schema = z
     // 优先专用变量；本地沿用 .env 里 worker 的 DOCKER_SANDBOX_SESSIONS_ROOT。
     SANDBOX_SESSIONS_ROOT: z.string().optional(),
     DOCKER_SANDBOX_SESSIONS_ROOT: z.string().optional(),
+    // 知识检索/问答通过 knowledge-service MCP 完成（API 不持有 embedding/Qdrant 凭证）。
+    KNOWLEDGE_MCP_URL: z.string().url().optional(),
+    KNOWLEDGE_MCP_SECRET: z.string().min(8).optional(),
+    KNOWLEDGE_TOKEN_SECRET: z.string().min(8).optional(),
+    KNOWLEDGE_MCP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(15_000),
+    // 知识问答使用的 OpenAI 兼容 Chat Completions 接口（本地为 DeepSeek）。
+    OPENAI_BASE_URL: z.string().url().optional(),
+    OPENAI_API_KEY: z.string().optional(),
+    MODEL: z.string().optional(),
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === 'production' && value.AUTH_MODE === 'dev') {
@@ -117,6 +126,19 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
       dimension: value.EMBEDDING_DIM!,
       collectionPrefix: value.QDRANT_COLLECTION_PREFIX,
     } : undefined,
+    KNOWLEDGE_MCP: (() => {
+      const url = value.KNOWLEDGE_MCP_URL;
+      const secret = value.KNOWLEDGE_MCP_SECRET ?? value.KNOWLEDGE_TOKEN_SECRET;
+      if (!url || !secret) return undefined;
+      return { url, secret, timeoutMs: value.KNOWLEDGE_MCP_TIMEOUT_MS };
+    })(),
+    KNOWLEDGE_QA_MODEL: value.OPENAI_BASE_URL && value.OPENAI_API_KEY
+      ? {
+          baseUrl: value.OPENAI_BASE_URL,
+          apiKey: value.OPENAI_API_KEY,
+          model: value.MODEL ?? 'deepseek-chat',
+        }
+      : undefined,
     SANDBOX_SESSIONS_ROOT: path.isAbsolute(sandboxSessionsRoot)
       ? path.normalize(sandboxSessionsRoot)
       : path.resolve(workerRoot, sandboxSessionsRoot),

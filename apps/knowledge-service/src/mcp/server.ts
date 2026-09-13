@@ -12,20 +12,29 @@ export function formatBoundedEvidence(result: any): string {
   if (out.length > MAX_CONTENT_CHARS) out = out.slice(0, MAX_CONTENT_CHARS);
   return out;
 }
-export function boundedRetrievalMetadata(result: any): any {
-  const strip = (x: any) => { const y = { ...x }; delete y.passage; delete y.text; return y; };
-  return { retrievalId: result.retrievalId, citations: (result.citations ?? []).slice(0, 20).map(strip), relations: (result.relations ?? []).slice(0, 20).map(strip), stats: result.stats };
+export function boundedRetrievalMetadata(result: any, options: { includePassage?: boolean } = {}): any {
+  const tidy = (x: any) => {
+    const y = { ...x };
+    if (options.includePassage) {
+      if (typeof y.passage === 'string') y.passage = y.passage.slice(0, MAX_EVIDENCE_CHARS);
+    } else {
+      delete y.passage;
+    }
+    delete y.text;
+    return y;
+  };
+  return { retrievalId: result.retrievalId, citations: (result.citations ?? []).slice(0, 20).map(tidy), relations: (result.relations ?? []).slice(0, 20), stats: result.stats };
 }
 export function createMcpHttpServer(opts: { tokenSecret: string; retriever: any; logger?: any }) {
   const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
   const makeSession = async () => {
     const server = new McpServer({ name: 'knowledge-service', version: '0.1.0' });
-    server.registerTool('graphrag_search', { description: 'Search authorized knowledge bases', inputSchema: { query: z.string().trim().min(1).max(10_000) } }, async ({ query }, extra) => {
+    server.registerTool('graphrag_search', { description: 'Search authorized knowledge bases', inputSchema: { query: z.string().trim().min(1).max(10_000), topK: z.number().int().min(1).max(50).optional(), includePassage: z.boolean().optional() } }, async ({ query, topK, includePassage }, extra) => {
       const headers: any = extra.requestInfo?.headers;
       const authorization = headers && typeof headers.get === 'function' ? headers.get('authorization') : headers?.authorization;
       const claims = await verifyRunToken(authorization, opts.tokenSecret);
-      const result = await opts.retriever.retrieve({ tenantId: claims.tenantId, knowledgeBaseIds: claims.kbIds, query, userId: claims.userId, sessionId: claims.sessionId, runId: claims.runId });
-      return { content: [{ type: 'text', text: formatBoundedEvidence(result) }], structuredContent: boundedRetrievalMetadata(result) };
+      const result = await opts.retriever.retrieve({ tenantId: claims.tenantId, knowledgeBaseIds: claims.kbIds, query, topK, userId: claims.userId, sessionId: claims.sessionId, runId: claims.runId });
+      return { content: [{ type: 'text', text: formatBoundedEvidence(result) }], structuredContent: boundedRetrievalMetadata(result, { includePassage: Boolean(includePassage) }) };
     });
     let transport!: StreamableHTTPServerTransport;
     transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), onsessioninitialized: (id: string): void => { sessions.set(id, { server, transport }); } });

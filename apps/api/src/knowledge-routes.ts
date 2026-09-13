@@ -4,6 +4,7 @@ import { ArtifactVerificationError } from '@repo/artifacts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { answerWithCitations, searchKnowledge } from './knowledge-assistant.js';
 import type { ApiConfig } from './config.js';
 import type { KnowledgeRepositoryApi } from './types.js';
 
@@ -11,15 +12,25 @@ const id = z.uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/i);
 const mime = z.enum(['text/markdown', 'text/plain']);
 
+type RouteConfig = {
+  KNOWLEDGE_DOCUMENT_MAX_BYTES: number;
+  KNOWLEDGE_MCP?: ApiConfig['KNOWLEDGE_MCP'];
+  KNOWLEDGE_QA_MODEL?: ApiConfig['KNOWLEDGE_QA_MODEL'];
+};
+
 type Services = {
   repository: KnowledgeRepositoryApi;
   knowledgeQueue: { add: (name: string, data: unknown, options?: { jobId?: string }) => Promise<unknown> };
   artifacts: any;
-  config: ApiConfig | { KNOWLEDGE_DOCUMENT_MAX_BYTES: number };
+  config: RouteConfig;
 };
 
 function notFound(reply: any, error = 'not_found') {
   return reply.code(404).send({ error });
+}
+
+function serviceUnavailable(reply: any, error: string) {
+  return reply.code(503).send({ error });
 }
 
 export async function registerKnowledgeRoutes(app: FastifyInstance, services: Services) {
@@ -50,6 +61,17 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     return reply.code(204).send();
   });
 
+  app.patch('/api/knowledge-bases/:kbId', async (request, reply) => {
+    const kbId = id.parse((request.params as { kbId: string }).kbId);
+    const input = z.object({
+      name: z.string().trim().min(1).max(200).optional(),
+      description: z.string().max(2_000).nullable().optional(),
+      visibility: z.enum(['private', 'tenant']).optional(),
+    }).parse(request.body ?? {});
+    const result = await services.repository.updateKnowledgeBase(request.auth, kbId, input);
+    return result ?? notFound(reply, 'knowledge_base_not_found');
+  });
+
   app.get('/api/knowledge-bases/:kbId/documents', async (request, reply) => {
     const kbId = id.parse((request.params as { kbId: string }).kbId);
     const result = await services.repository.listKnowledgeDocuments(request.auth, kbId);
@@ -67,6 +89,37 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     const result = await services.repository.deleteKnowledgeDocument(request.auth, id.parse(params.kbId), id.parse(params.documentId));
     if (!result) return notFound(reply, 'document_not_found');
     return reply.code(204).send();
+  });
+
+  app.patch('/api/knowledge-bases/:kbId/documents/:documentId', async (request, reply) => {
+    const params = request.params as { kbId: string; documentId: string };
+    const input = z.object({ name: z.string().trim().min(1).max(255) }).parse(request.body ?? {});
+    const result = await services.repository.renameKnowledgeDocument(
+      request.auth,
+      id.parse(params.kbId),
+      id.parse(params.documentId),
+      input.name,
+    );
+    return result ?? notFound(reply, 'document_not_found');
+  });
+
+  app.get('/api/knowledge-bases/:kbId/documents/:documentId/chunks', async (request, reply) => {
+    const params = request.params as { kbId: string; documentId: string };
+    const query = z.object({
+      q: z.string().trim().max(500).optional(),
+      limit: z.coerce.number().int().min(1).max(200).optional(),
+      offset: z.coerce.number().int().min(0).optional(),
+    }).parse(request.query ?? {});
+    const kbId = id.parse(params.kbId);
+    const documentId = id.parse(params.documentId);
+    const document = await services.repository.getKnowledgeDocument(request.auth, kbId, documentId);
+    if (!document) return notFound(reply, 'document_not_found');
+    const result = await services.repository.listDocumentChunks(request.auth, kbId, documentId, {
+      search: query.q,
+      limit: query.limit,
+      offset: query.offset,
+    });
+    return { data: result.rows, total: result.total };
   });
 
   app.post('/api/knowledge-bases/:kbId/documents/uploads', async (request, reply) => {
@@ -96,5 +149,59 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     if (!result) return notFound(reply, 'document_not_found');
     if (result.created !== false && result.job?.id) await services.knowledgeQueue.add('index', { ...result.job }, { jobId: result.job.id });
     return reply.send(result.document ?? result);
+  });
+
+  const retrievalInputSchema = z.object({
+    query: z.string().trim().min(1).max(2_000),
+    topK: z.coerce.number().int().min(1).max(50).optional(),
+    minScore: z.coerce.number().min(-1).max(1).optional(),
+  });
+
+  async function runRetrieval(
+    request: { auth: { tenantId: string; userId: string } },
+    reply: any,
+    kbId: string,
+    body: unknown,
+  ) {
+    const mcp = services.config.KNOWLEDGE_MCP;
+    if (!mcp) return serviceUnavailable(reply, 'knowledge_service_unavailable');
+    const kb = await services.repository.getKnowledgeBase(request.auth as any, kbId);
+    if (!kb) return notFound(reply, 'knowledge_base_not_found');
+    const input = retrievalInputSchema.parse(body ?? {});
+    const result = await searchKnowledge(
+      mcp,
+      { tenantId: request.auth.tenantId, userId: request.auth.userId, kbIds: [kbId] },
+      { query: input.query, topK: input.topK },
+    );
+    const minScore = input.minScore ?? 0;
+    const citations = result.citations.filter((citation) => citation.score >= minScore);
+    return { ...result, citations };
+  }
+
+  app.post('/api/knowledge-bases/:kbId/retrieval', async (request, reply) => {
+    const kbId = id.parse((request.params as { kbId: string }).kbId);
+    return runRetrieval(request, reply, kbId, request.body);
+  });
+
+  app.post('/api/knowledge-bases/:kbId/ask', async (request, reply) => {
+    const kbId = id.parse((request.params as { kbId: string }).kbId);
+    if (!services.config.KNOWLEDGE_QA_MODEL) return serviceUnavailable(reply, 'knowledge_qa_unavailable');
+    const body = z.object({
+      question: z.string().trim().min(1).max(2_000),
+      topK: z.coerce.number().int().min(1).max(50).optional(),
+      minScore: z.coerce.number().min(-1).max(1).optional(),
+    }).parse(request.body ?? {});
+    const retrieved = await runRetrieval(request, reply, kbId, {
+      query: body.question,
+      topK: body.topK,
+      minScore: body.minScore,
+    });
+    // runRetrieval 在服务未配置/库不可见时已经写回错误响应。
+    if (reply.sent) return reply;
+    const answer = await answerWithCitations(services.config.KNOWLEDGE_QA_MODEL, {
+      question: body.question,
+      citations: (retrieved as { citations: any[] }).citations,
+    });
+    return reply.send({ answer, retrieval: retrieved });
   });
 }

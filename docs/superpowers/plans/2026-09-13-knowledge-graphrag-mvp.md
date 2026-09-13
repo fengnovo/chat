@@ -135,7 +135,7 @@ git commit -m "feat: add knowledge graphrag contracts and run snapshots"
 
 - [ ] **Step 1: 写失败测试**
 
-覆盖非法 UTF-8/二进制拒绝、Markdown 标题保留、chunk overlap 边界、稳定 chunk ID、demo 三跳关系、重复关系来源合并、fan-out/hop/relation 上限，以及向量和 graph 证据按 chunkId 去重并正确计算 via。
+覆盖非法 UTF-8/二进制拒绝、Markdown 标题保留、chunk overlap 边界、稳定 chunk ID、示例三跳关系、重复关系来源合并、fan-out/hop/relation 上限，以及向量和 graph 证据按 chunkId 去重并正确计算 via。
 
 - [ ] **Step 2: 运行失败测试**
 
@@ -145,7 +145,7 @@ git commit -m "feat: add knowledge graphrag contracts and run snapshots"
 
 - [ ] **Step 3: 创建包和最小实现**
 
-复用 demo graph.ts 的 key 规范化、关系 ID、局部抽取合并和双向 BFS 语义，但把 Map 访问封装到 GraphStore；生产 Postgres store 不在本任务实现。
+复用参考实现 graph.ts 的 key 规范化、关系 ID、局部抽取合并和双向 BFS 语义，但把 Map 访问封装到 GraphStore；生产 Postgres store 不在本任务实现。
 
 parser 只接受 UTF-8 Markdown/TXT；chunker 保留标题路径，默认使用 schema 的 size/overlap；stable ID 以 SHA-256 的前 16 字节生成，并设置 UUID version/variant 位后格式化。候选合并只保留向量命中和最终选中关系的来源 chunk，不能把所有 visited entity 来源加入结果。
 

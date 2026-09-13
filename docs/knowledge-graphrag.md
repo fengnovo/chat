@@ -1,6 +1,6 @@
 # GraphRAG 知识库最小接入方案（MVP）
 
-本文说明如何把 `demo19-LlamaIndex-GraphRAG` 的 GraphRAG 能力，以小范围、可回退的方式接入
+本文说明如何把外部 LlamaIndex GraphRAG 参考实现的 GraphRAG 能力，以小范围、可回退的方式接入
 本项目。目标不是把现有聊天系统改造成知识库平台，而是在保留现有 Agent、沙箱、事件流和任务派发
 机制的前提下，增加“上传文档 → 构建索引 → 对话检索 → 展示引用”这条闭环。
 
@@ -15,7 +15,7 @@
 - Agent 通过只读工具检索知识库，基于返回的证据回答。
 - 当前回答和历史记录都能展示结构化引用。
 - 知识库、文档、检索和引用全程按 `tenant_id` 隔离。
-- demo19 只作为算法来源，其目录保持不变，不参与本项目运行时。
+- 外部参考实现只作为算法来源，其目录保持不变，不参与本项目运行时。
 
 ### 1.2 首期明确支持
 
@@ -39,11 +39,11 @@
 
 这些限制用于控制首期改动量，不封死后续扩展接口。
 
-## 2. 与 demo19 的关系
+## 2. 与外部参考实现的关系
 
-demo19 是脚本式演示，不能直接作为生产运行时引用：
+外部参考实现是脚本式原型，不能直接作为生产运行时引用：
 
-| 维度 | demo19 现状 | 本项目 MVP |
+| 维度 | 外部参考实现现状 | 本项目 MVP |
 |---|---|---|
 | 入口 | `index.ts` 无 export，`main()` 有脚本副作用 | 稳定导出构建索引和检索 API |
 | 内容 | 三个固定 Markdown 文件 | 用户上传的 Markdown/TXT |
@@ -66,7 +66,7 @@ demo19 是脚本式演示，不能直接作为生产运行时引用：
 图谱加载进内存，而是通过 `PropertyGraphStore` 按层查询 Postgres，并限制种子数、每层 fan-out、
 最大边数和最大跳数。
 
-不迁移 demo 的示例文档、`main()`、固定问题、固定 topK、多跳次数、`slice(0, 8)` 以及全局
+不迁移参考实现的示例文档、`main()`、固定问题、固定 topK、多跳次数、`slice(0, 8)` 以及全局
 `Settings` 写入。
 
 ## 3. 最小接入架构
@@ -343,7 +343,7 @@ flowchart LR
 3. 只用向量命中 chunk 反查实体种子。
 4. 按层查询图关系，限制 `maxSeeds`、`maxHops`、`maxFanoutPerNode` 和 `maxRelations`。
 5. 向量命中保留原始相似度；graph-only 证据按种子分数和 hop 衰减，稳定排序并去重。
-6. 只收集向量命中和最终选中关系的来源 chunk；不能像 demo 一样把所有访问实体的 chunk 都加入证据。
+6. 只收集向量命中和最终选中关系的来源 chunk；不能像参考实现一样把所有访问实体的 chunk 都加入证据。
 7. 取最终 topN，截断单条文本和总工具输出。
 
 首期 `rerank_status` 固定为 `not_requested`。保留 `Reranker` 接口，但不实现额外 provider；仓库当前
@@ -490,7 +490,7 @@ AND (
 packages/knowledge-graphrag/
 ├── src/
 │   ├── index.ts
-│   ├── graph/          # demo 语义 + PropertyGraphStore 接口
+│   ├── graph/          # GraphRAG 语义 + PropertyGraphStore 接口
 │   ├── parser/         # 仅 markdown / text
 │   ├── chunker/
 │   ├── embedder/       # 实例注入
@@ -603,7 +603,7 @@ bootstrap，因此 `apps/knowledge-service` 不提供 standalone `start` 脚本�
    - create/start/resume job 的 kbIds。
    - migration 009、run/session 字段和批量授权仓储。
 2. **纯算法包**
-   - 从 demo 迁移 graph 行为测试。
+   - 从参考实现迁移 graph 行为测试。
    - Markdown/TXT parser、chunker、确定性 ID。
    - 有界 traversal、合并去重和 citation provenance。
 3. **存储与索引任务**

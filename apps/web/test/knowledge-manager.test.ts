@@ -30,29 +30,54 @@ test('prevents a second upload from starting for the same knowledge base', () =>
   assert.equal(reserve?.(active, 'kb-2'), true);
 });
 
-test('knowledge base cards expose upload controls and document status', () => {
+test('knowledge base cards expose counts, update time and management actions', () => {
   const Card = (knowledgeManager as typeof knowledgeManager & {
     KnowledgeBaseCard?: (props: Record<string, unknown>) => React.ReactNode;
   }).KnowledgeBaseCard;
   assert.equal(typeof Card, 'function');
 
   const html = renderToStaticMarkup(createElement(Card as React.ElementType, {
-    base: { id: 'kb-1', name: '产品知识' },
+    base: {
+      id: 'kb-1',
+      name: '学生成绩知识库',
+      description: '考试成绩与销售记录',
+      graphEnabled: true,
+      documentCount: 1,
+      chunkCount: 10,
+      updatedAt: '2026-07-01T19:22:00.000Z',
+    },
     canWrite: true,
-    documents: [{ id: 'document-1', name: 'guide.md', status: 'ready' }],
-    uploadState: { kind: 'uploading', message: '正在上传 guide.md…' },
-    onFileSelected: () => undefined,
+    onOpen: () => undefined,
+    onEdit: () => undefined,
     onDelete: () => undefined,
-    onRefresh: () => undefined,
   }));
 
-  assert.match(html, /上传 Markdown \/ TXT/);
-  assert.match(html, /type="file"/);
-  assert.match(html, /accept="\.md,\.markdown,\.txt,text\/markdown,text\/plain"/);
-  assert.match(html, /guide\.md/);
-  assert.match(html, /可检索/);
-  assert.match(html, /正在上传 guide\.md/);
-  assert.match(html, /disabled/);
+  assert.match(html, /学生成绩知识库/);
+  assert.match(html, /考试成绩与销售记录/);
+  assert.match(html, /GraphRAG/);
+  assert.match(html, /文档数量/);
+  assert.match(html, /切片数量/);
+  assert.match(html, /更新于/);
+  assert.match(html, /编辑/);
+  assert.match(html, /删除/);
+});
+
+test('knowledge base cards without write permission hide management actions', () => {
+  const Card = (knowledgeManager as typeof knowledgeManager & {
+    KnowledgeBaseCard?: (props: Record<string, unknown>) => React.ReactNode;
+  }).KnowledgeBaseCard;
+
+  const html = renderToStaticMarkup(createElement(Card as React.ElementType, {
+    base: { id: 'kb-ro', name: '只读知识库', graphEnabled: false, documentCount: 0, chunkCount: 0 },
+    canWrite: false,
+    onOpen: () => undefined,
+    onEdit: () => undefined,
+    onDelete: () => undefined,
+  }));
+
+  assert.match(html, /只读知识库/);
+  assert.match(html, /向量检索/);
+  assert.doesNotMatch(html, /aria-label="编辑/);
 });
 
 test('keeps upload success when refreshing the document list fails', async () => {
@@ -101,25 +126,4 @@ test('loads each knowledge base document list independently', async () => {
     'kb-ok': [{ id: 'document-1', name: 'guide.md' }],
   });
   assert.deepEqual(Object.keys(result?.errors ?? {}), ['kb-failed']);
-});
-
-test('knowledge base cards keep upload and refresh controls when document loading fails', () => {
-  const Card = (knowledgeManager as typeof knowledgeManager & {
-    KnowledgeBaseCard?: (props: Record<string, unknown>) => React.ReactNode;
-  }).KnowledgeBaseCard;
-  assert.equal(typeof Card, 'function');
-
-  const html = renderToStaticMarkup(createElement(Card as React.ElementType, {
-    base: { id: 'kb-failed', name: '故障知识库' },
-    canWrite: true,
-    documentLoadError: '文档加载失败，请点击“刷新文档”重试。',
-    onFileSelected: () => undefined,
-    onDelete: () => undefined,
-    onRefresh: () => undefined,
-  }));
-
-  assert.match(html, /文档加载失败/);
-  assert.match(html, /刷新文档/);
-  assert.match(html, /type="file"/);
-  assert.doesNotMatch(html, /正在加载文档/);
 });

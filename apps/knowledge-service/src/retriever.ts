@@ -14,6 +14,7 @@ export interface RetrieveParams {
   tenantId: string;
   knowledgeBaseIds: string[];
   query: string;
+  topK?: number;
   userId?: string;
   sessionId?: string;
   runId?: string;
@@ -113,7 +114,8 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
       if (!kbs.length) {
         return { retrievalId, citations: [], relations: [], stats: { vectorHits: 0, graphHops: 0, searchedKbs: 0, durationMs: Date.now() - startedAt, truncated: false } };
       }
-      const topK = Math.min(50, Math.max(...kbs.map((kb) => kb.top_k)));
+      const kbDefaultTopK = Math.min(50, Math.max(...kbs.map((kb) => kb.top_k)));
+      const topK = params.topK ? Math.min(50, Math.max(1, Math.round(params.topK))) : kbDefaultTopK;
       const maxHops = Math.min(limits.maxHops, Math.max(...kbs.map((kb) => kb.max_hops)));
 
       collectionReady ??= deps.vectorStore.ensureCollection(deps.embedder.profile);

@@ -13,6 +13,8 @@ test('MCP evidence is tagged and bounded, metadata omits passage', () => {
   const metadata = boundedRetrievalMetadata(result) as any;
   assert.deepEqual(Object.keys(metadata).sort(), ['citations','relations','retrievalId','stats']);
   assert.equal('passage' in metadata.citations[0], false);
+  const fullMetadata = boundedRetrievalMetadata(result, { includePassage: true }) as any;
+  assert.equal(fullMetadata.citations[0].passage, 'secret');
 });
 
 test('MCP Streamable HTTP initializes, lists and calls authorized tool without caller KB expansion', async () => {

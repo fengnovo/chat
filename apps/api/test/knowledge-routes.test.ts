@@ -116,3 +116,93 @@ test('regular member cannot upload or confirm an existing tenant-visible KB', as
   assert.equal(createdDocuments + confirmedDocuments + queue.adds.length, 0);
   await app.close();
 });
+
+test('updating a knowledge base forwards editable fields and 404s without write access', async () => {
+  const calls: unknown[][] = [];
+  const app = await makeApp({
+    updateKnowledgeBase: async (...args: unknown[]) => {
+      calls.push(args);
+      return { id: kbId, name: '改名后的知识库' };
+    },
+  });
+  const response = await app.inject({
+    method: 'PATCH',
+    url: `/api/knowledge-bases/${kbId}`,
+    payload: { name: '改名后的知识库', description: '新描述' },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().name, '改名后的知识库');
+  assert.equal((calls[0]?.[2] as { name: string }).name, '改名后的知识库');
+
+  const missingApp = await makeApp({
+    updateKnowledgeBase: async () => null,
+  });
+  const missing = await missingApp.inject({
+    method: 'PATCH',
+    url: `/api/knowledge-bases/${kbId}`,
+    payload: { name: 'x' },
+  });
+  assert.equal(missing.statusCode, 404);
+  await app.close();
+  await missingApp.close();
+});
+
+test('chunk listing requires read access on the parent document', async () => {
+  const app = await makeApp({
+    getKnowledgeDocument: async () => ({ id: documentId, kbId }),
+    listDocumentChunks: async () => ({ rows: [{ id: 'chunk-1', ordinal: 0 }], total: 1 }),
+  });
+  const response = await app.inject({
+    method: 'GET',
+    url: `/api/knowledge-bases/${kbId}/documents/${documentId}/chunks?q=小米`,
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().total, 1);
+  assert.deepEqual(response.json().data, [{ id: 'chunk-1', ordinal: 0 }]);
+  await app.close();
+});
+
+test('retrieval and ask report 503 when the knowledge service is not configured', async () => {
+  const app = await makeApp({
+    getKnowledgeBase: async () => ({ id: kbId }),
+  });
+  const retrieval = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/retrieval`,
+    payload: { query: '小王卖什么手机' },
+  });
+  assert.equal(retrieval.statusCode, 503);
+  assert.equal(retrieval.json().error, 'knowledge_service_unavailable');
+
+  const ask = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/ask`,
+    payload: { question: '小王卖什么手机' },
+  });
+  assert.equal(ask.statusCode, 503);
+  assert.equal(ask.json().error, 'knowledge_qa_unavailable');
+  await app.close();
+});
+
+test('document rename returns the updated row or 404', async () => {
+  const app = await makeApp({
+    renameKnowledgeDocument: async () => ({ id: documentId, name: 'renamed.md' }),
+  });
+  const response = await app.inject({
+    method: 'PATCH',
+    url: `/api/knowledge-bases/${kbId}/documents/${documentId}`,
+    payload: { name: 'renamed.md' },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().name, 'renamed.md');
+
+  const missingApp = await makeApp({ renameKnowledgeDocument: async () => null });
+  const missing = await missingApp.inject({
+    method: 'PATCH',
+    url: `/api/knowledge-bases/${kbId}/documents/${documentId}`,
+    payload: { name: 'renamed.md' },
+  });
+  assert.equal(missing.statusCode, 404);
+  await app.close();
+  await missingApp.close();
+});
