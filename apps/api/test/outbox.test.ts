@@ -15,6 +15,7 @@ const job: RunJob = {
   runId: '00000000-0000-4000-8000-000000000004',
   message: 'test',
   workspacePath: '/tmp/workspace',
+  knowledgeBaseIds: [],
 };
 
 const dispatch: DispatchOutboxRecord = {

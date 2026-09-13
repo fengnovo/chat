@@ -191,6 +191,11 @@ export const knowledgeChunks = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    uniqueIndex('knowledge_chunks_document_ordinal_idx').on(
+      table.documentId,
+      table.ordinal,
+    ),
+    uniqueIndex('knowledge_chunks_vector_point_idx').on(table.vectorPointId),
     index('knowledge_chunks_tenant_kb_document_idx').on(
       table.tenantId,
       table.kbId,
@@ -297,7 +302,11 @@ export const knowledgeRetrievalLogs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index('knowledge_retrieval_logs_tenant_run_idx').on(table.tenantId, table.runId, table.createdAt),
+    index('knowledge_retrieval_logs_tenant_run_idx').on(
+      table.tenantId,
+      table.runId,
+      table.createdAt.desc(),
+    ),
   ],
 );
 
