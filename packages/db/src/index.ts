@@ -81,3 +81,4 @@ export async function migrateDatabase(pool: Pool): Promise<void> {
 
 export * from './repository.js';
 export * from './schema.js';
+export * from './knowledge-repository.js';
