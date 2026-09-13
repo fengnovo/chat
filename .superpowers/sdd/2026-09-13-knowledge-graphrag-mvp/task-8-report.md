@@ -19,3 +19,10 @@
 - `pnpm test`: passed; knowledge-service smoke explicitly skipped without the guard variable.
 - `pnpm build`: blocked by pre-existing `apps/web/app/components/resilient-chat/icon.tsx` missing a default export (Turbopack route entry); no GraphRAG/canvas attribution.
 - Guarded E2E currently blocked because API/worker/Postgres/Redis/S3/Qdrant services are not running/configured in this workspace.
+
+## Review follow-up
+
+- Worker environment names now match `apps/worker/src/config.ts` exactly (`KNOWLEDGE_MCP_*`); the knowledge-service keeps its own `KNOWLEDGE_TOKEN_SECRET`.
+- After deleting Qdrant points, smoke calls the existing document `confirm` API to enqueue a new index job, waits for `ready`, then searches again and compares graph relations. No fake rebuild/pass is used.
+- `pnpm-lock.yaml` was regenerated for the knowledge-service importer and validated with frozen installation.
+- Frozen verification command: `pnpm install --frozen-lockfile --offline` passed.

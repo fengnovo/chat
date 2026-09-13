@@ -71,6 +71,14 @@ test('knowledge smoke indexes Markdown, searches citations, and rebuilds vectors
 
   const collection = process.env.QDRANT_COLLECTION_PREFIX ? `${process.env.QDRANT_COLLECTION_PREFIX}${kbId}` : kbId;
   await request(`${qdrantUrl}/collections/${encodeURIComponent(collection)}/points/delete?wait=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filter: { must: [{ key: 'tenant_id', match: { value: tenantId } }, { key: 'kb_id', match: { value: kbId } }] } }) });
+  const rebuild = await request(`${apiBase}/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sizeBytes: bytes.byteLength, sha256 }) });
+  assert.equal(rebuild.id, documentId, 'confirm should enqueue a real re-embedding job after vector deletion');
+  for (let attempt = 0; attempt < 30; attempt++) {
+    document = await request(`${apiBase}/api/knowledge-bases/${kbId}/documents/${documentId}`);
+    if (document.status === 'ready' || document.status === 'failed') break;
+    await delay(1_000);
+  }
+  assert.equal(document.status, 'ready', `re-embedding did not become ready: ${document.status}`);
   const rebuilt = await mcpCall(token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'graphrag_search', arguments: { query: 'Who works with Acme?' } } }, initialized.sessionId);
   const rebuiltResult = rebuilt.body.result ?? rebuilt.body;
   assert.ok(rebuiltResult.structuredContent?.citations?.length, 'rebuild search returned no citations');
