@@ -12,7 +12,7 @@ export async function startKnowledgeService(config: KnowledgeServiceConfig = loa
     await new Promise<void>((resolve, reject) => { server.once?.('error', reject); server.listen(config.port, resolve); });
   } catch (error) {
     const closeServer = () => new Promise<void>((resolve) => { if (!server.close) return resolve(); server.close(() => resolve()); });
-    await Promise.allSettled([worker.close?.(), closeServer()]); throw error;
+    await Promise.allSettled([worker.close?.(), closeServer(), deps.queue?.close?.(), deps.connection?.quit?.()]); throw error;
   }
   const timer = deps.repository && deps.queue ? setInterval(() => reconcileQueuedJobs(deps.repository, deps.queue).catch((e) => deps.logger?.error?.(e)), 30_000) : undefined;
   return { close: async () => {
