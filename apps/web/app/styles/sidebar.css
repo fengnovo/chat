@@ -51,10 +51,10 @@
   border-radius: 7px;
   color: var(--ink-muted);
   display: none;
-  height: 34px;
+  height: 38px;
   justify-content: center;
   padding: 0;
-  width: 34px;
+  width: 38px;
 }
 
 .sidebar-collapse {
@@ -85,10 +85,10 @@
   border-radius: 7px;
   color: var(--ink-muted);
   display: none;
-  height: 30px;
+  height: 38px;
   justify-content: center;
   padding: 0;
-  width: 30px;
+  width: 38px;
 }
 
 .sidebar-expand:hover {

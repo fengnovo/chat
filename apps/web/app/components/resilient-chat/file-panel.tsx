@@ -287,7 +287,7 @@ function FilePanel({
           type="button"
           onClick={onClose}
         >
-          <Icon name="x" size={17} />
+          <Icon name="x" size={16} />
         </button>
       </header>
 

@@ -85,7 +85,7 @@ function Sidebar({
           type="button"
           onClick={onToggleCollapse}
         >
-          <Icon name="chevron" size={20} />
+          <Icon name="chevron" size={24} />
         </button>
         {collapsed && (
           <button
@@ -94,7 +94,7 @@ function Sidebar({
             type="button"
             onClick={onToggleCollapse}
           >
-            <Icon name="chevron" size={20} />
+            <Icon name="chevron" size={24} />
           </button>
         )}
         <button

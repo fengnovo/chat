@@ -1183,7 +1183,7 @@ function ChatRuntime() {
               aria-expanded={filesOpen}
               onClick={() => setFilesOpen((current) => !current)}
             >
-              <Icon name="folder" size={18} />
+              <Icon name="folder" size={16} />
             </button>
             <button
               className="icon-button"
@@ -1192,7 +1192,7 @@ function ChatRuntime() {
               aria-expanded={traceOpen}
               onClick={() => setTraceOpen((current) => !current)}
             >
-              <Icon name="panel" size={18} />
+              <Icon name="panel" size={16} />
             </button>
           </div>
         </header>
