@@ -45,8 +45,8 @@ export class KnowledgeRepository {
   }
 
   async createDocumentUpload(auth: AuthContext, input: any): Promise<any | null> {
-    const kb = await this.getKnowledgeBase(auth, input.kbId);
-    if (!kb) return null;
+    const kb = await this.pool.query(`SELECT id FROM knowledge_bases WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL AND (owner_user_id=$3 OR $4::text[] && ARRAY['owner','admin']::text[])`, [auth.tenantId, input.kbId, auth.userId, auth.roles]);
+    if (!kb.rows[0]) return null;
     const result = await this.pool.query(`INSERT INTO knowledge_documents (id,kb_id,tenant_id,name,mime,size_bytes,content_hash,object_key,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending') RETURNING *`, [input.documentId ?? randomUUID(), input.kbId, auth.tenantId, input.name, input.mime, input.sizeBytes, input.sha256, input.objectKey]);
     return result.rows[0];
   }
@@ -55,7 +55,7 @@ export class KnowledgeRepository {
     const client: any = 'connect' in this.pool ? await (this.pool as any).connect() : this.pool;
     try {
       await client.query('BEGIN');
-      const doc = await client.query(`SELECT d.* FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.kb_id WHERE d.tenant_id=$1 AND d.kb_id=$2 AND d.id=$3 AND d.deleted_at IS NULL AND (k.visibility='tenant' OR k.owner_user_id=$4 OR $5::text[] && ARRAY['owner','admin']::text[]) FOR UPDATE`, [auth.tenantId, kbId, id, auth.userId, auth.roles]);
+      const doc = await client.query(`SELECT d.* FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.kb_id WHERE d.tenant_id=$1 AND d.kb_id=$2 AND d.id=$3 AND d.deleted_at IS NULL AND k.deleted_at IS NULL AND (k.owner_user_id=$4 OR $5::text[] && ARRAY['owner','admin']::text[]) FOR UPDATE`, [auth.tenantId, kbId, id, auth.userId, auth.roles]);
       if (!doc.rows[0]) { await client.query('ROLLBACK'); return null; }
       const existing = await client.query(`SELECT * FROM knowledge_index_jobs WHERE tenant_id=$1 AND document_id=$2 AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, [auth.tenantId, id]);
       if (existing.rows[0]) { await client.query('COMMIT'); return { document: doc.rows[0], job: existing.rows[0], created: false }; }

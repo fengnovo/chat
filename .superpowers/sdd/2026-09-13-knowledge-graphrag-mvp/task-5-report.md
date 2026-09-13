@@ -20,3 +20,9 @@ Initial commit: `c1ef356` — `feat: add knowledge base api and indexing queue`
 - RED: added a DB repository contract test; it failed because the knowledge API methods were absent.
 - GREEN: `KnowledgeRepository` now implements mandatory tenant/user/role-authorized KB/document CRUD, upload creation, and atomic confirm (queued document plus deduplicated active index job). `server.ts` constructs and injects it from the real database pool; unsafe optional-method fallback was removed.
 - Verification: API tests 15 passed; DB tests 10 passed with 1 pre-existing integration skip; API and DB typechecks passed; `git diff --check` passed.
+
+## Fix round 2 (write authorization)
+
+- RED: added a regression for a regular tenant member writing to another owner's `visibility='tenant'` KB; it failed before the authorization predicate was tightened.
+- GREEN: upload creation and confirm now require the KB owner or `owner`/`admin` role, while reads retain tenant visibility. The confirm lock query also excludes soft-deleted KBs.
+- Verification: API tests 15 passed; DB tests 11 passed with 1 pre-existing integration skip; API and DB typechecks passed; `git diff --check` passed.

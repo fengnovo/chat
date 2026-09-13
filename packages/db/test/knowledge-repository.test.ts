@@ -4,7 +4,7 @@ import { KnowledgeRepository } from '../src/knowledge-repository.js';
 
 test('repository methods include tenant predicates and bound retrieval citations', async () => {
   const queries: string[] = [];
-  const pool: any = { query: async (text: string) => { queries.push(text); return { rows: [], rowCount: 0 }; } };
+  const pool: any = { query: async (text: string) => { queries.push(text); if (/knowledge_bases/i.test(text)) return { rows: [], rowCount: 0 }; if (/knowledge_documents/i.test(text) && /SELECT/i.test(text)) return { rows: [], rowCount: 0 }; return { rows: [{ id: 'job' }], rowCount: 1 }; } };
   const repo = new KnowledgeRepository(pool);
   await repo.claimIndexJob('t', 'job', 1000);
   await repo.appendRetrievalLog({ tenantId: 't', userId: 'u', sessionId: 's', runId: 'r', retrievalId: 'x', kbIds: [], query: 'q', topK: 1, maxHops: 0, resultCount: 0, rerankStatus: 'none', citations: Array.from({ length: 100 }, (_, i) => ({ id: i })), latencyMs: 1, status: 'ok' });
@@ -54,4 +54,16 @@ test('knowledge API repository exposes authorized CRUD and atomic upload confirm
   await repo.confirmDocumentUpload(auth, 'kb', 'doc', { sizeBytes: 1, sha256: 'a'.repeat(64) });
   assert.ok(queries.some((q) => /knowledge_bases/i.test(q) && /tenant_id/i.test(q)));
   assert.ok(queries.some((q) => /knowledge_index_jobs/i.test(q) && /BEGIN|COMMIT|INSERT/i.test(q)));
+});
+
+test('regular tenant members cannot upload or confirm in another owner tenant-visible KB', async () => {
+  const queries: string[] = [];
+  const pool: any = { query: async (text: string) => { queries.push(text); return { rows: [], rowCount: 0 }; } };
+  const repo = new KnowledgeRepository(pool);
+  const auth = { tenantId: 'tenant', userId: 'member', roles: [] };
+  assert.equal(await repo.createDocumentUpload(auth, { kbId: 'kb', documentId: 'doc', name: 'x.md', mime: 'text/markdown', sizeBytes: 1, sha256: 'a'.repeat(64), objectKey: 'x' }), null);
+  assert.equal(await repo.confirmDocumentUpload(auth, 'kb', 'doc', { sizeBytes: 1, sha256: 'a'.repeat(64) }), null);
+  assert.equal(queries.some((q) => /INSERT INTO knowledge_documents|INSERT INTO knowledge_index_jobs/i.test(q)), false);
+  assert.ok(queries.every((q) => !/visibility = 'tenant'/i.test(q) || /owner_user_id|ARRAY\['owner','admin'\]/i.test(q)));
+  assert.ok(queries.some((q) => /knowledge_bases/i.test(q) && /owner_user_id/i.test(q) && !/visibility = 'tenant'/i.test(q)));
 });
