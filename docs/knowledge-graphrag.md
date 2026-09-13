@@ -1,6 +1,6 @@
 # GraphRAG 知识库最小接入方案（MVP）
 
-本文说明如何把外部 LlamaIndex GraphRAG 参考实现的 GraphRAG 能力，以小范围、可回退的方式接入
+本文说明如何把外部 GraphRAG 参考实现的 GraphRAG 能力，以小范围、可回退的方式接入
 本项目。目标不是把现有聊天系统改造成知识库平台，而是在保留现有 Agent、沙箱、事件流和任务派发
 机制的前提下，增加“上传文档 → 构建索引 → 对话检索 → 展示引用”这条闭环。
 
@@ -49,7 +49,7 @@
 | 内容 | 三个固定 Markdown 文件 | 用户上传的 Markdown/TXT |
 | 存储 | 全内存 Map | Postgres 图谱/原文 + Qdrant 向量 |
 | 租户 | 无 | 强制 `tenant_id` 和授权知识库集合 |
-| 配置 | 修改 LlamaIndex 全局 `Settings` | 模型、维度和客户端由实例注入 |
+| 配置 | 修改框架全局 `Settings` | 模型、维度和客户端由实例注入 |
 | 输出 | 检索后直接合成最终答案 | 只返回证据，由现有主 Agent 作答 |
 | 引用 | 只有简单 trace | 可持久化的 citations 和检索统计 |
 | 增量 | 无 | 按内容哈希去重，失败可重试 |
@@ -134,7 +134,7 @@ flowchart TB
 
 ### 3.2 为什么保留独立服务
 
-把索引和检索直接塞进 `apps/worker` 虽然少一个进程，却会把 LlamaIndex、Qdrant、文档处理、
+把索引和检索直接塞进 `apps/worker` 虽然少一个进程，却会把图谱检索、Qdrant、文档处理、
 索引并发和模型密钥耦合进现有 Agent 运行时。独立服务多一个部署单元，但现有 Worker 只增加一个
 可选 MCP 工具入口；服务不可用时也更容易隔离和降级。
 
@@ -513,10 +513,9 @@ apps/knowledge-service/
 ```
 
 - `apps/worker` 不依赖 `@repo/knowledge-graphrag`，只通过 MCP 调用。
-- GraphRAG 运行时新增的 LlamaIndex 和 Qdrant client 依赖只进入新增 package/app，不进入 Agent Core
+- GraphRAG 运行时新增的 Qdrant client 依赖只进入新增 package/app，不进入 Agent Core
   或 Worker。
-- `packages/ai-cli` 当前已经声明部分 LlamaIndex 依赖，实施时先确认是否真的被引用；首期不为“整理依赖”
-  顺手修改无关代码。只有确认未使用且迁移不会影响 CLI 时，才在独立任务中清理。
+- `packages/ai-cli` 曾声明的 LlamaIndex 相关依赖已确认未被引用并清理。
 - 新包遵循现有 ESM、workspace export 和 tsconfig 约定；`turbo.json` 无需为包发现机制额外修改。
 
 ## 10. 配置、基础设施与可观察性

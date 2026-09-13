@@ -21,9 +21,7 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@llamaindex/openai": "0.4.22",
     "@qdrant/js-client-rest": "^1.19.0",
-    "llamaindex": "^0.10.6",
     "pg": "^8.23.0",
     "zod": "^4.6.1"
   }

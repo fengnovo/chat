@@ -6,7 +6,7 @@
 
 **Architecture:** 新增 @repo/knowledge-graphrag 纯算法/存储包和 apps/knowledge-service 单进程。API 负责资源鉴权、上传和 run 快照；Worker 通过独立 MCP HTTP client 调用检索，知识服务负责 BullMQ 索引消费和 MCP 检索。Postgres 是权威元数据/图谱来源，Qdrant 只保存可重建向量。
 
-**Tech Stack:** TypeScript ESM、pnpm workspace、Node test runner、Zod、Drizzle schema、Postgres、BullMQ/Redis、S3 兼容对象存储、Qdrant、LlamaIndex、Model Context Protocol Streamable HTTP、现有 LangGraph/DeepAgent 与 Next.js AI UI。
+**Tech Stack:** TypeScript ESM、pnpm workspace、Node test runner、Zod、Drizzle schema、Postgres、BullMQ/Redis、S3 兼容对象存储、Qdrant、Model Context Protocol Streamable HTTP、现有 LangGraph/DeepAgent 与 Next.js AI UI。
 
 **Spec:** docs/knowledge-graphrag.md
 
@@ -216,7 +216,7 @@ git commit -m "feat: add bounded graphrag core algorithms"
 
 - [ ] **Step 3: 写最小实现**
 
-新增 @qdrant/js-client-rest、@llamaindex/openai、llamaindex、zod、pg 等运行依赖。Qdrant adapter 创建 Cosine collection 和 payload index，tenant index 开启 is_tenant: true；Postgres adapter 所有方法显式接收 tenantId。
+新增 @qdrant/js-client-rest、zod、pg 等运行依赖。Qdrant adapter 创建 Cosine collection 和 payload index，tenant index 开启 is_tenant: true；Postgres adapter 所有方法显式接收 tenantId。
 
 pipeline 对下载 bytes 重新计算 SHA-256，校验声明哈希、大小、UTF-8 和 MIME；先把 document 标记 parsing/chunking，再以稳定 chunk ID upsert。图谱按 document_id 写入 Postgres，全部完成后才标记 ready。重建在 MVP 中先清理旧 document 索引，失败则保持 failed；Qdrant 丢失只从 chunks 重新 embedding，不重新抽取图谱。
 
