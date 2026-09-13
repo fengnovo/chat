@@ -26,3 +26,8 @@
 - After deleting Qdrant points, smoke calls the existing document `confirm` API to enqueue a new index job, waits for `ready`, then searches again and compares graph relations. No fake rebuild/pass is used.
 - `pnpm-lock.yaml` was regenerated for the knowledge-service importer and validated with frozen installation.
 - Frozen verification command: `pnpm install --frozen-lockfile --offline` passed.
+
+## Post-verification web build fix
+
+- Added the required default export to the existing `icon.tsx` metadata route while preserving the named `Icon`/`IconName` API and UI behavior.
+- `pnpm --filter web build`, `pnpm --filter web typecheck`, and `git diff --check` now pass; the prior missing-default-export build blocker is resolved.
