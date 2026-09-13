@@ -110,6 +110,7 @@ function ChatRuntime() {
   );
   const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
@@ -701,6 +702,10 @@ function ChatRuntime() {
     setInput('');
     setSuggestions([]);
     setRunFailure(null);
+    // 新消息开始时清掉上一轮残留的过程记录/任务计划，避免"你好"也先冒出上轮的工具执行。
+    setActivity(emptyActivity);
+    setAgentTodos([]);
+    setGeneratedTokens(0);
     sessionRef.current.addUserMessage(trimmed);
     setTrace([
       localEvent('request', 'running', '正在提交新消息', 'useChat 已锁定输入并创建请求'),
@@ -982,40 +987,24 @@ function ChatRuntime() {
 
   return (
     <main
-      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''}`}
+      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}
     >
       <Sidebar
         activeChatId={conversation.chatId}
         busy={isBusy || creatingSession}
+        collapsed={sidebarCollapsed}
         creating={creatingSession}
         error={sessionsError}
         loaded={sessionsLoaded}
         hasMore={Boolean(sessionsNextCursor)}
         loadingMore={loadingMoreSessions}
-        menuSessionId={sessionMenuId}
         inactive={Boolean(sessionDialog)}
-        onDelete={(session) => {
-          dialogReturnFocusRef.current = document.activeElement
-            ?.closest('.session-item')
-            ?.querySelector<HTMLElement>('.session-more') ?? null;
-          setSessionMenuId(null);
-          setSessionDialogError(null);
-          setSessionDialog({ kind: 'delete', session });
-        }}
+        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
         onLoadMore={() => void loadMoreSessions()}
-        onMenu={setSessionMenuId}
         onClose={() => setSidebarOpen(false)}
         onNewChat={() => {
           setSidebarOpen(false);
           void handleNewChat();
-        }}
-        onRename={(session) => {
-          dialogReturnFocusRef.current = document.activeElement
-            ?.closest('.session-item')
-            ?.querySelector<HTMLElement>('.session-more') ?? null;
-          setSessionMenuId(null);
-          setSessionDialogError(null);
-          setSessionDialog({ kind: 'rename', session });
         }}
         onRefresh={() => void refreshSessions()}
         onSelect={(session) => {

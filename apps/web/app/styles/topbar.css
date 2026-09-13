@@ -1,7 +1,7 @@
 .chat-column {
   background: var(--surface);
   display: grid;
-  grid-template-rows: 74px minmax(0, 1fr) auto;
+  grid-template-rows: 56px minmax(0, 1fr) auto;
   min-height: 0;
   min-width: 0;
   overflow: hidden;

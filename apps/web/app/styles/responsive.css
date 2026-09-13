@@ -29,7 +29,12 @@
 
   .sidebar {
     align-items: center;
-    padding: 18px 12px;
+    padding: 16px 10px;
+  }
+
+  .sidebar-collapse,
+  .sidebar-expand {
+    display: none;
   }
 
   .brand {
@@ -236,7 +241,7 @@
   }
 
   .chat-column {
-    grid-template-rows: 68px minmax(0, 1fr) auto;
+    grid-template-rows: 56px minmax(0, 1fr) auto;
   }
 
   .topbar {

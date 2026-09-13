@@ -6,26 +6,30 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  padding: 22px 16px 18px;
+  padding: 16px 10px 12px;
 }
 
 .brand {
   align-items: center;
   display: flex;
   gap: 11px;
-  padding: 0 7px 24px;
+  padding: 0 4px 14px;
+  position: relative;
 }
 
 .brand-mark {
   align-items: center;
-  background: var(--violet);
-  border-radius: 10px;
-  box-shadow: 0 7px 18px rgb(109 74 255 / 28%);
-  color: white;
   display: flex;
-  height: 38px;
+  height: 34px;
   justify-content: center;
-  width: 38px;
+  width: 34px;
+}
+
+.brand-logo {
+  display: block;
+  height: 32px;
+  object-fit: contain;
+  width: 32px;
 }
 
 .brand > span:last-child {
@@ -35,13 +39,92 @@
 }
 
 .brand strong {
-  font-size: 18px;
+  font-size: 17px;
   letter-spacing: -0.02em;
 }
 
 .sidebar-close,
-.sidebar-scrim {
+.sidebar-collapse {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-muted);
   display: none;
+  height: 32px;
+  justify-content: center;
+  padding: 0;
+  width: 32px;
+}
+
+.sidebar-collapse {
+  display: flex;
+  margin-left: auto;
+}
+
+.sidebar-collapse:hover,
+.sidebar-close:hover {
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+
+/* 收起按钮箭头朝左（指向折叠方向） */
+.sidebar-collapse svg {
+  transform: rotate(180deg);
+  transition: transform 160ms ease;
+}
+
+.sidebar.is-collapsed .sidebar-collapse {
+  display: none;
+}
+
+.sidebar-expand {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-muted);
+  display: none;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  width: 30px;
+}
+
+.sidebar-expand:hover {
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+
+.sidebar.is-collapsed {
+  align-items: center;
+  padding: 18px 0;
+}
+
+.sidebar.is-collapsed .sidebar-expand {
+  display: flex;
+}
+
+.sidebar.is-collapsed .new-chat-button {
+  height: 40px;
+  padding: 0;
+  width: 40px;
+}
+
+.sidebar.is-collapsed .brand {
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 0 14px;
+}
+
+.sidebar.is-collapsed .brand-mark {
+  height: 38px;
+  width: 38px;
+}
+
+.sidebar.is-collapsed .brand-logo {
+  height: 36px;
+  width: 36px;
 }
 
 .brand small {
@@ -99,8 +182,8 @@
   border-radius: 9px;
   color: #625e6b;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
-  min-height: 54px;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 46px;
   position: relative;
   transition: background 180ms ease, border-color 180ms ease,
     color 180ms ease;
@@ -108,7 +191,7 @@
 }
 
 .session-item + .session-item {
-  margin-top: 5px;
+  margin-top: 4px;
 }
 
 .session-item:hover,
@@ -130,11 +213,11 @@
   background: transparent;
   border: 0;
   display: grid;
-  gap: 9px;
-  grid-template-columns: 30px minmax(0, 1fr);
-  min-height: 52px;
+  gap: 7px;
+  grid-template-columns: 26px minmax(0, 1fr);
+  min-height: 44px;
   min-width: 0;
-  padding: 7px 3px 7px 7px;
+  padding: 5px 8px 5px 6px;
   text-align: left;
 }
 
@@ -144,9 +227,9 @@
   border-radius: 7px;
   color: var(--violet);
   display: flex;
-  height: 30px;
+  height: 26px;
   justify-content: center;
-  width: 30px;
+  width: 26px;
 }
 
 .session-copy {
@@ -176,12 +259,12 @@
   border-radius: 7px;
   color: var(--ink-muted);
   display: flex;
-  height: 32px;
+  height: 28px;
   justify-content: center;
   opacity: 0;
   padding: 0;
   transition: opacity 150ms ease, background 150ms ease;
-  width: 32px;
+  width: 28px;
 }
 
 .session-item:hover .session-more,

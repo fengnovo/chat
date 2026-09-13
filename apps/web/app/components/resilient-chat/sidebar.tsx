@@ -1,3 +1,5 @@
+import Image from 'next/image';
+
 import { useEffect, useRef } from 'react';
 
 import { Icon } from './icon';
@@ -7,42 +9,38 @@ import type { WebSessionSummary } from './types';
 function Sidebar({
   activeChatId,
   busy,
+  collapsed,
   creating,
   error,
   hasMore,
   inactive,
   loaded,
   loadingMore,
-  menuSessionId,
-  onDelete,
   onClose,
   onLoadMore,
-  onMenu,
   onNewChat,
-  onRename,
   onRefresh,
   onSelect,
+  onToggleCollapse,
   open,
   sessions,
   switchingSessionId,
 }: {
   activeChatId: string;
   busy: boolean;
+  collapsed: boolean;
   creating: boolean;
   error: string | null;
   hasMore: boolean;
   inactive: boolean;
   loaded: boolean;
   loadingMore: boolean;
-  menuSessionId: string | null;
-  onDelete: (session: WebSessionSummary) => void;
   onClose: () => void;
   onLoadMore: () => void;
-  onMenu: (sessionId: string | null) => void;
   onNewChat: () => void;
-  onRename: (session: WebSessionSummary) => void;
   onRefresh: () => void;
   onSelect: (session: WebSessionSummary) => void;
+  onToggleCollapse: () => void;
   open: boolean;
   sessions: WebSessionSummary[];
   switchingSessionId: string | null;
@@ -54,14 +52,43 @@ function Sidebar({
   }, [open]);
 
   return (
-    <aside className="sidebar" inert={inactive || undefined}>
+    <aside
+      className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}
+      inert={inactive || undefined}
+    >
       <div className="brand">
         <span className="brand-mark">
-          <Icon name="layers" size={20} />
+          <Image
+            alt="Keen Agent"
+            className="brand-logo"
+            height={32}
+            src="/keen-ai-logo.png"
+            width={32}
+          />
         </span>
-        <span>
-          <strong>Keen Agent</strong>
-        </span>
+        {!collapsed && (
+          <span>
+            <strong>Keen Agent</strong>
+          </span>
+        )}
+        <button
+          aria-label="收起左侧栏"
+          className="sidebar-collapse"
+          type="button"
+          onClick={onToggleCollapse}
+        >
+          <Icon name="chevron" size={16} />
+        </button>
+        {collapsed && (
+          <button
+            aria-label="展开左侧栏"
+            className="sidebar-expand"
+            type="button"
+            onClick={onToggleCollapse}
+          >
+            <Icon name="chevron" size={16} />
+          </button>
+        )}
         <button
           aria-label="关闭历史对话"
           className="sidebar-close"
@@ -74,17 +101,18 @@ function Sidebar({
       </div>
 
       <button
-        aria-label="新建对话"
+        aria-label={creating ? '正在创建对话' : '新建对话'}
         className="new-chat-button"
         disabled={creating}
         type="button"
         onClick={onNewChat}
       >
         <Icon name="plus" size={17} />
-        <span>{creating ? '正在创建…' : '新建对话'}</span>
+        {!collapsed && <span>{creating ? '正在创建…' : '新建对话'}</span>}
       </button>
 
-      <nav aria-label="历史对话" className="session-nav">
+      {!collapsed && (
+        <nav aria-label="历史对话" className="session-nav">
         {!loaded && <p className="session-list-status">正在加载历史记录…</p>}
         {loaded && error && (
           <button className="session-list-retry" type="button" onClick={onRefresh}>
@@ -97,7 +125,6 @@ function Sidebar({
         {sessions.map((session) => {
           const active = session.externalKey === activeChatId;
           const switching = switchingSessionId === session.id;
-          const menuOpen = menuSessionId === session.id;
           return (
             <div
               className={active ? 'session-item is-active' : 'session-item'}
@@ -123,37 +150,6 @@ function Sidebar({
                   </small>
                 </span>
               </button>
-              <button
-                aria-expanded={menuOpen}
-                aria-haspopup="menu"
-                aria-label={`管理对话：${session.title}`}
-                className="session-more"
-                type="button"
-                onClick={() => onMenu(menuOpen ? null : session.id)}
-              >
-                <Icon name="more" size={17} />
-              </button>
-              {menuOpen && (
-                <div className="session-menu" role="menu">
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => onRename(session)}
-                  >
-                    <Icon name="edit" size={15} />
-                    重命名
-                  </button>
-                  <button
-                    className="is-danger"
-                    role="menuitem"
-                    type="button"
-                    onClick={() => onDelete(session)}
-                  >
-                    <Icon name="trash" size={15} />
-                    删除
-                  </button>
-                </div>
-              )}
             </div>
           );
         })}
@@ -168,6 +164,7 @@ function Sidebar({
           </button>
         )}
       </nav>
+      )}
     </aside>
   );
 }
