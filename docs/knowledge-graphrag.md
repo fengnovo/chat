@@ -508,7 +508,6 @@ apps/knowledge-service/
 │   ├── runtime.ts
 │   ├── reconciler.ts
 │   ├── index.ts
-│   ├── main.ts
 │   └── mcp/server.ts
 └── test/
 ```
@@ -563,12 +562,14 @@ OpenAI-compatible embedder 默认把输入切成最多 10 条一批，以符合�
 
 knowledge-service 的运行时装配入口是公开的 `createKnowledgeRuntime(config, deps)`。它从上述配置构造
 共享的 `EmbeddingProfile` 和 `OpenAICompatibleEmbedder`，并把同一个 embedder 注入
-`IndexPipeline`；profile 和 `QDRANT_COLLECTION_PREFIX` 使用同一 collection 派生规则。默认可执行入口
-`main.ts` 会调用 `startKnowledgeService(loadConfig())`，`startKnowledgeService` 再走该工厂。当前 MVP 尚未
-在入口内安全补齐 Postgres repository、Redis connection、对象下载、Qdrant store、extractor 与
-retriever 的真实客户端 bootstrap；部署层必须通过 `deps` 提供这些 adapter。缺少索引 adapter 时启动会
-列出 `connection`、`repository`、`download`、`vectorStore`、`extract` 中实际缺失的项；已有测试和宿主
-仍可显式注入 `pipeline` / `worker` / `retriever`，不会被默认工厂覆盖。
+`IndexPipeline`；profile 和 `QDRANT_COLLECTION_PREFIX` 使用同一 collection 派生规则。宿主调用
+`startKnowledgeService(config, deps)` 并显式注入 Postgres repository、Redis connection、对象下载、Qdrant
+store、extractor 与 retriever 等 adapter 时，服务会通过该工厂补齐配置驱动的 embedder 和 pipeline；宿主
+显式注入的 `pipeline` / `worker` / `retriever` 不会被覆盖。
+
+`EMBEDDING_*` 配置只负责切换和配置 embedding provider。当前 MVP 尚未实现其余 adapter 的安全进程级
+bootstrap，因此 `apps/knowledge-service` 不提供 standalone `start` 脚本或默认可执行入口；只调整环境变量
+不能启动完整服务。部署宿主必须先装配上述 adapter，再调用公开的运行时入口。
 
 ### 10.2 基础设施
 
