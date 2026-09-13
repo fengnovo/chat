@@ -18,7 +18,7 @@ function makeApp(repository: Record<string, unknown>, artifacts = {}) {
     request.auth = { tenantId, userId, roles: [] };
   });
   return registerKnowledgeRoutes(app, {
-    repository: repository as any,
+    repository: { canWriteKnowledgeBase: async () => true, ...repository } as any,
     artifacts,
     knowledgeQueue: { add: async () => ({}) },
     config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 10 },
@@ -78,6 +78,7 @@ test('confirm verifies object size and enqueues one active index job', async () 
   let confirms = 0;
   await registerKnowledgeRoutes(app, {
     repository: {
+      canWriteKnowledgeBase: async () => true,
       getKnowledgeDocument: async () => ({ id: documentId, kbId, objectKey: 'knowledge/x.md', sizeBytes: 3, sha256: 'b'.repeat(64), status: 'pending' }),
       confirmDocumentUpload: async () => ({ created: confirms++ === 0, document: { id: documentId }, job: { id: 'job-1' } }),
     } as any,
@@ -88,5 +89,23 @@ test('confirm verifies object size and enqueues one active index job', async () 
   assert.equal((await app.inject({ method: 'POST', url: `/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`, payload })).statusCode, 200);
   assert.equal((await app.inject({ method: 'POST', url: `/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`, payload })).statusCode, 200);
   assert.equal(adds, 1);
+  await app.close();
+});
+
+test('regular member cannot upload or confirm an existing tenant-visible KB', async () => {
+  let presigns = 0;
+  let verifies = 0;
+  let adds = 0;
+  const app = await makeApp({
+    canWriteKnowledgeBase: async () => false,
+    createDocumentUpload: async () => { throw new Error('must not create'); },
+    getKnowledgeDocument: async () => ({ id: documentId, kbId, objectKey: 'knowledge/x.md' }),
+    confirmDocumentUpload: async () => { throw new Error('must not confirm'); },
+  }, { createUpload: async () => { presigns += 1; }, verifyObject: async () => { verifies += 1; } });
+  const upload = await app.inject({ method: 'POST', url: `/api/knowledge-bases/${kbId}/documents/uploads`, payload: { name: 'x.md', mime: 'text/markdown', sizeBytes: 1, sha256: 'a'.repeat(64) } });
+  const confirm = await app.inject({ method: 'POST', url: `/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`, payload: { sizeBytes: 1, sha256: 'a'.repeat(64) } });
+  assert.equal(upload.statusCode, 404);
+  assert.equal(confirm.statusCode, 404);
+  assert.equal(presigns + verifies + adds, 0);
   await app.close();
 });

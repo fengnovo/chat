@@ -24,6 +24,11 @@ export class KnowledgeRepository {
     return result.rows[0] ?? null;
   }
 
+  async canWriteKnowledgeBase(auth: AuthContext, id: string): Promise<boolean> {
+    const result = await this.pool.query(`SELECT 1 FROM knowledge_bases WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL AND (owner_user_id=$3 OR $4::text[] && ARRAY['owner','admin']::text[])`, [auth.tenantId, id, auth.userId, auth.roles]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async createKnowledgeBase(auth: AuthContext, input: any): Promise<any> {
     const result = await this.pool.query(`INSERT INTO knowledge_bases (id, tenant_id, owner_user_id, name, description, visibility, embedding_profile_key, embedding_model, embedding_dim, collection_name, chunk_size, chunk_overlap, top_k, max_hops, graph_enabled, status) VALUES ($1,$2,$3,$4,$5,$6,'default','text-embedding-3-small',1536,$1,800,100,10,2,true,'ready') RETURNING *`, [input.id ?? randomUUID(), auth.tenantId, auth.userId, input.name, input.description ?? null, input.visibility ?? 'private']);
     return result.rows[0];

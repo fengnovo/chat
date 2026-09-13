@@ -11,6 +11,7 @@ import type { StreamSubscriptionHub } from './stream-subscriptions.js';
 export interface KnowledgeRepositoryApi {
   listKnowledgeBases: (auth: AuthContext) => Promise<unknown[]>;
   getKnowledgeBase: (auth: AuthContext, id: string) => Promise<unknown | null>;
+  canWriteKnowledgeBase: (auth: AuthContext, id: string) => Promise<boolean>;
   createKnowledgeBase: (auth: AuthContext, input: unknown) => Promise<unknown>;
   deleteKnowledgeBase: (auth: AuthContext, id: string) => Promise<boolean | 'not_found'>;
   listKnowledgeDocuments: (auth: AuthContext, kbId: string) => Promise<unknown[]>;

@@ -71,6 +71,7 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
 
   app.post('/api/knowledge-bases/:kbId/documents/uploads', async (request, reply) => {
     const kbId = id.parse((request.params as { kbId: string }).kbId);
+    if (!(await services.repository.canWriteKnowledgeBase(request.auth, kbId))) return notFound(reply, 'knowledge_base_not_found');
     const input = z.object({ name: z.string().trim().min(1).max(255), mime, sizeBytes: z.number().int().positive(), sha256: hash }).parse(request.body ?? {});
     if (input.sizeBytes > services.config.KNOWLEDGE_DOCUMENT_MAX_BYTES) return reply.code(400).send({ error: 'knowledge_document_too_large' });
     const documentId = randomUUID();
@@ -82,6 +83,7 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
 
   app.post('/api/knowledge-bases/:kbId/documents/:documentId/confirm', async (request, reply) => {
     const params = request.params as { kbId: string; documentId: string };
+    if (!(await services.repository.canWriteKnowledgeBase(request.auth, id.parse(params.kbId)))) return notFound(reply, 'document_not_found');
     const input = z.object({ sizeBytes: z.number().int().positive(), sha256: hash }).parse(request.body ?? {});
     const document = await services.repository.getKnowledgeDocument(request.auth, id.parse(params.kbId), id.parse(params.documentId));
     if (!document) return notFound(reply, 'document_not_found');
