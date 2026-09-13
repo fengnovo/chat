@@ -316,6 +316,7 @@ export async function createDeepAgentRuntime(
     systemPrompt: [
       `你运行在一个隔离的容器沙箱中，工作目录是：${options.workspacePath}。Host/Worker 宿主机路径不可访问。`,
       '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。启动网络服务时必须监听 0.0.0.0，并用后台命令启动。',
+      '当你决定调用工具时，直接发起工具调用，不要在同一轮里先输出解释或旁白；面向用户的说明文字只放在所有工具执行完后的最终回复里。',
       options.autoApproveTools
         ? '用户已允许本会话自动执行工具。不要读取工作区之外的路径。'
         : '文件写入、删除和命令执行必须经过人工审批。不要读取工作区之外的路径。',
@@ -374,11 +375,15 @@ export async function createDeepAgentRuntime(
     let lastTodos = '';
     try {
       const stream = await runnable.stream(input, config);
-      // 按「模型调用」为单位缓冲文本：模型在带工具调用的轮次里输出的其实是过程旁白
-      // （deepseek 会把它写进 content），只有不带工具调用的那一轮才是最终答复。
-      // 必须等这一轮结束（usage 到达）才能判定，所以先缓冲、再分流。
+      // 按「模型调用」为单位区分正文与旁白：带工具调用的轮次里模型吐出的文字是过程旁白
+      // （应进过程区），不带工具调用的那一轮才是最终答复（必须逐 token 实时流式输出）。
+      // 工具调用块可能晚于文字块到达，所以文字先按正文实时流出，一旦本轮出现工具调用，
+      // 后续文字转为缓冲，等 usage 到达后按旁白发往过程区。
       let turnText = '';
       let turnHasToolCalls = false;
+      // 本轮已经作为 assistant.delta 实时流出的字符数；用于在「先出正文、后出工具调用」
+      // 这种少见情况下补发旁白时去掉已流出的前缀，避免重复。
+      let turnEmittedLen = 0;
       for await (const [mode, payload] of stream) {
         while (pendingRouterEvents.length > 0) {
           const event = pendingRouterEvents.shift();
@@ -387,21 +392,36 @@ export async function createDeepAgentRuntime(
         if (mode === 'messages') {
           const message = payload[0];
           const text = assistantTextOf(message);
-          if (text) turnText += text;
           if (hasToolCallsOf(message)) turnHasToolCalls = true;
+          if (text) {
+            turnText += text;
+            if (!turnHasToolCalls) {
+              // 最终答复：逐 token 实时流出，前端才能看到打字机式流式效果。
+              turnEmittedLen += text.length;
+              yield {
+                runId: options.runId,
+                timestamp: timestamp(),
+                type: 'assistant.delta',
+                text,
+              };
+            }
+          }
           // 真实用量只在该次模型调用的最后一个 chunk 上出现；
           // 每次调用发一条增量，前端累加即为本轮总消耗。
           const usage = usageOf(message);
           if (usage) {
-            if (turnText) {
+            // 工具轮：正文是过程旁白。只补发「检测到工具调用之后」缓冲的部分；
+            // 此前已实时流出的极少数前缀不再重复（系统提示已要求工具轮不输出正文）。
+            if (turnHasToolCalls && turnText.length > turnEmittedLen) {
               yield {
                 runId: options.runId,
                 timestamp: timestamp(),
-                type: turnHasToolCalls ? 'assistant.narration' : 'assistant.delta',
-                text: turnText,
+                type: 'assistant.narration',
+                text: turnText.slice(turnEmittedLen),
               };
             }
             turnText = '';
+            turnEmittedLen = 0;
             turnHasToolCalls = false;
             yield {
               runId: options.runId,
@@ -480,13 +500,14 @@ export async function createDeepAgentRuntime(
         }
       }
 
-      // 收尾：若最后一个模型调用没有回报 usage，缓冲的文本仍要发出去，避免丢内容。
-      if (turnText) {
+      // 收尾：若最后一个模型调用没有回报 usage，最终答复已经逐 token 流出；
+      // 这里只需补发工具轮中「检测到工具调用之后」仍缓冲的旁白，避免丢内容。
+      if (turnHasToolCalls && turnText.length > turnEmittedLen) {
         yield {
           runId: options.runId,
           timestamp: timestamp(),
-          type: turnHasToolCalls ? 'assistant.narration' : 'assistant.delta',
-          text: turnText,
+          type: 'assistant.narration',
+          text: turnText.slice(turnEmittedLen),
         };
       }
 
