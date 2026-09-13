@@ -9,6 +9,7 @@ test('retrying an index job uses stable chunk ids and does not duplicate graph w
   const repo: any = {
     markIndexStage: async () => {}, completeIndexJob: async () => {}, failIndexJob: async () => {},
     replaceDocumentGraph: async () => { calls.graph++; },
+    replaceDocumentChunks: async (_t: string, _k: string, _d: string, rows: any[]) => { (calls as any).chunks = rows.length; },
   };
   const deps: any = {
     repository: repo, download: async () => bytes,
@@ -20,5 +21,13 @@ test('retrying an index job uses stable chunk ids and does not duplicate graph w
   const job = { id: 'j', tenantId: 't', kbId: 'k', documentId: 'd', objectKey: 'o', contentHash: sha256Hex(bytes), sizeBytes: bytes.length, mime: 'text/markdown', chunkSize: 100, chunkOverlap: 0 };
   await pipeline.run(job as any); await pipeline.run(job as any);
   assert.equal(calls.graph, 2); assert.equal(calls.upsert, 2);
+  assert.equal((calls as any).chunks, 1);
 });
 
+test('pipeline failure invokes failed lifecycle transition and never embeds invalid bytes', async () => {
+  const calls: string[] = [];
+  const repo: any = { markIndexStage: async () => {}, failIndexJob: async (...args: any[]) => calls.push(String(args[3]?.message ?? args[3])), completeIndexJob: async () => {} };
+  const deps: any = { repository: repo, download: async () => new TextEncoder().encode('bad'), embedder: { embedTexts: async () => { throw new Error('must not embed'); } }, vectorStore: {}, extract: async () => ({}) };
+  await assert.rejects(() => new IndexPipeline(deps).run({ id: 'j', tenantId: 't', contentHash: '0'.repeat(64), sizeBytes: 3, mime: 'text/plain', objectKey: 'o' }));
+  assert.deepEqual(calls, ['Document hash mismatch']);
+});

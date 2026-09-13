@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { QdrantChunkStore } from '../src/store/qdrant.js';
 
 function fakeClient() {
-  const points = new Map<string, any>();
+  const points = new Map<string, Map<string, any>>();
+  const requests: any[] = [];
   return {
-    points,
+    points, requests,
     async getCollections() { return { collections: [] }; },
     async createCollection() {},
     async createPayloadIndex() {},
-    async upsert(_collection: string, body: any) { for (const p of body.points) points.set(String(p.id), p); },
-    async search(_collection: string, body: any) { return [...points.values()].map((p) => ({ id: p.id, score: 1, payload: p.payload, vector: body.vector })); },
-    async delete(_collection: string, body: any) { for (const [id, p] of points) if (body.filter.must.every((x: any) => p.payload[x.key] === x.match.value)) points.delete(id); },
+    async upsert(collection: string, body: any) { const bucket = points.get(collection) ?? new Map(); points.set(collection, bucket); for (const p of body.points) bucket.set(String(p.id), p); },
+    async search(collection: string, body: any) { requests.push({ type: 'search', collection, body }); const bucket = points.get(collection) ?? new Map(); return [...bucket.values()].filter((p) => body.filter.must.every((x: any) => x.key === 'tenant_id' ? p.payload[x.key] === x.match.value : x.match.any.includes(p.payload[x.key]))).map((p) => ({ id: p.id, score: 1, payload: p.payload, vector: body.vector })); },
+    async delete(collection: string, body: any) { requests.push({ type: 'delete', collection, body }); const bucket = points.get(collection) ?? new Map(); for (const [id, p] of bucket) if (body.filter.must.every((x: any) => p.payload[x.key] === x.match.value)) bucket.delete(id); },
   };
 }
 
@@ -26,6 +27,7 @@ test('derives distinct collections, merges tenant/kb filters, and upserts idempo
   await a.upsert([{ id: 'x', vector: [1, 2, 3], payload: { tenant_id: 't1', kb_id: 'k1', document_id: 'd1' } }]);
   const hits = await a.search([1, 2, 3], 't1', ['k1'], 5);
   assert.equal(hits.length, 1);
+  assert.deepEqual(client.requests[0].body.filter.must, [{ key: 'tenant_id', match: { value: 't1' } }, { key: 'kb_id', match: { any: ['k1'] } }]);
 });
 
 test('deleteByDocument only removes matching tenant, kb, and document', async () => {
@@ -36,6 +38,7 @@ test('deleteByDocument only removes matching tenant, kb, and document', async ()
     { id: '2', vector: [1, 2, 3], payload: { tenant_id: 't', kb_id: 'k', document_id: 'other' } },
   ]);
   await store.deleteByDocument('t', 'k', 'd');
-  assert.equal(client.points.has('1'), false); assert.equal(client.points.has('2'), true);
+  const collection = [...client.points.values()][0]!;
+  assert.equal(collection.has('1'), false); assert.equal(collection.has('2'), true);
+  assert.deepEqual(client.requests[0].body.filter.must, [{ key: 'tenant_id', match: { value: 't' } }, { key: 'kb_id', match: { value: 'k' } }, { key: 'document_id', match: { value: 'd' } }]);
 });
-

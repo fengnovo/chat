@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { randomUUID } from 'node:crypto';
 
 const MAX_CITATIONS = 50;
 const boundedCitations = (value: unknown) => Array.isArray(value) ? value.slice(0, MAX_CITATIONS).map((x) => {
@@ -10,22 +11,36 @@ const boundedCitations = (value: unknown) => Array.isArray(value) ? value.slice(
 
 export class KnowledgeRepository {
   constructor(private readonly pool: Pick<Pool, 'query'>) {}
+  private readonly leases = new Map<string, string>();
 
-  async claimIndexJob(jobId: string, leaseMs: number): Promise<boolean> {
-    const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'running', attempts = attempts + 1, lease_expires_at = now() + ($2::bigint * interval '1 millisecond'), started_at = COALESCE(started_at, now()), updated_at = now() WHERE id = $1 AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now())) RETURNING id`, [jobId, leaseMs]);
+  async claimIndexJob(tenantId: string, jobId: string, leaseMs: number): Promise<{ jobId: string; leaseToken: string } | null> {
+    const leaseToken = randomUUID();
+    const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'running', error_code = $4, attempts = attempts + 1, lease_expires_at = now() + ($3::bigint * interval '1 millisecond'), started_at = COALESCE(started_at, now()), updated_at = now() WHERE tenant_id = $1 AND id = $2 AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now())) RETURNING id`, [tenantId, jobId, leaseMs, leaseToken]);
+    if (!(result.rowCount ?? 0)) return null;
+    this.leases.set(`${tenantId}:${jobId}`, leaseToken);
+    return { jobId, leaseToken };
+  }
+
+  private ownsLease(tenantId: string, jobId: string, token: string): boolean { return this.leases.get(`${tenantId}:${jobId}`) === token; }
+  async markIndexStage(tenantId: string, jobId: string, token: string, stage: string): Promise<boolean> {
+    if (!this.ownsLease(tenantId, jobId, token)) return false;
+    const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = $4, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND error_code = $3 AND lease_expires_at > now()`, [jobId, tenantId, token, stage]);
     return (result.rowCount ?? 0) > 0;
   }
-
-  async markIndexStage(tenantId: string, jobId: string, stage: string): Promise<void> {
-    await this.pool.query(`UPDATE knowledge_index_jobs SET status = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2`, [jobId, tenantId, stage]);
+  async completeIndexJob(tenantId: string, jobId: string, token: string, chunkCount = 0): Promise<boolean> {
+    if (!this.ownsLease(tenantId, jobId, token)) return false;
+    const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'completed', progress = 100, finished_at = now(), lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND error_code = $3 AND lease_expires_at > now()`, [jobId, tenantId, token]);
+    if (!(result.rowCount ?? 0)) return false;
+    await this.pool.query(`UPDATE knowledge_documents d SET status = 'ready', chunk_count = $3, indexed_at = now(), updated_at = now() FROM knowledge_index_jobs j WHERE j.id = $1 AND j.tenant_id = $2 AND d.id = j.document_id AND d.tenant_id = j.tenant_id`, [jobId, tenantId, chunkCount]);
+    return true;
   }
-  async completeIndexJob(tenantId: string, jobId: string, chunkCount = 0): Promise<void> {
-    await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'completed', progress = 100, finished_at = now(), lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2`, [jobId, tenantId]);
-    if (chunkCount >= 0) await this.pool.query(`UPDATE knowledge_documents d SET status = 'ready', chunk_count = $3, indexed_at = now(), updated_at = now() FROM knowledge_index_jobs j WHERE j.id = $1 AND j.tenant_id = $2 AND d.id = j.document_id AND d.tenant_id = j.tenant_id`, [jobId, tenantId, chunkCount]);
-  }
-  async failIndexJob(tenantId: string, jobId: string, error: unknown): Promise<void> {
+  async failIndexJob(tenantId: string, jobId: string, token: string, error: unknown): Promise<boolean> {
+    if (!this.ownsLease(tenantId, jobId, token)) return false;
     const message = error instanceof Error ? error.message : String(error);
-    await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'failed', error_message = $3, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2`, [jobId, tenantId, message]);
+    const result = await this.pool.query(`UPDATE knowledge_index_jobs SET status = 'failed', error_code = 'index_failed', error_message = $4, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND error_code = $3 AND lease_expires_at > now()`, [jobId, tenantId, token, message]);
+    if (!(result.rowCount ?? 0)) return false;
+    await this.pool.query(`UPDATE knowledge_documents d SET status = 'failed', error_code = 'index_failed', error_message = $3, updated_at = now() FROM knowledge_index_jobs j WHERE j.id = $1 AND j.tenant_id = $2 AND d.id = j.document_id AND d.tenant_id = j.tenant_id`, [jobId, tenantId, message]);
+    return true;
   }
   async getDocumentForIndex(tenantId: string, kbId: string, documentId: string): Promise<any> {
     const result = await this.pool.query(`SELECT * FROM knowledge_documents WHERE tenant_id = $1 AND kb_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, kbId, documentId]);
@@ -43,6 +58,10 @@ export class KnowledgeRepository {
         await client.query('COMMIT');
       }
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { if (client.release) client.release(); }
+  }
+  async replaceDocumentChunks(tenantId: string, kbId: string, documentId: string, chunks: any[]): Promise<void> {
+    await this.pool.query(`DELETE FROM knowledge_chunks WHERE tenant_id = $1 AND kb_id = $2 AND document_id = $3`, [tenantId, kbId, documentId]);
+    for (const chunk of chunks) await this.pool.query(`INSERT INTO knowledge_chunks (id, tenant_id, kb_id, document_id, ordinal, text, token_count, heading, metadata, vector_point_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (document_id, ordinal) DO UPDATE SET text = EXCLUDED.text, token_count = EXCLUDED.token_count, metadata = EXCLUDED.metadata, vector_point_id = EXCLUDED.vector_point_id`, [chunk.id, tenantId, kbId, documentId, chunk.ordinal, chunk.text, chunk.tokenCount ?? chunk.text.length, chunk.heading ?? null, JSON.stringify(chunk.metadata ?? {}), chunk.vectorPointId ?? chunk.id]);
   }
   async appendRetrievalLog(input: any): Promise<void> {
     const citations = boundedCitations(input.citations);
