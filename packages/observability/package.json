@@ -3,11 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": { "node": ">=22" },
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "development": "./src/index.ts",
-      "default": "./dist/index.js"
+      "browser": null,
+      "node": {
+        "development": "./src/index.ts",
+        "default": "./dist/index.js"
+      },
+      "default": null
     }
   },
   "scripts": {

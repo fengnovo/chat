@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import { context, trace } from '@opentelemetry/api';
 import { ExportResultCode } from '@opentelemetry/core';
-import { InMemorySpanExporter, type SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { BasicTracerProvider, InMemorySpanExporter, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { InMemoryMetricExporter, AggregationTemporality, type PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import { loadObservabilityConfig } from '../src/config.js';
 import { startObservability } from '../src/sdk.js';
@@ -111,3 +112,44 @@ test('metric exporter throws, callback failures, and hangs stay bounded and sani
     warning.mock.restore();
   }
 });
+
+for (const operation of ['forceFlush', 'shutdown'] as const) {
+  for (const explicitBudget of [undefined, 60000]) {
+    test(`${operation} caps ${explicitBudget === undefined ? 'direct config' : 'caller'} deadlines at five seconds`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+      let elapsed = 0;
+      t.mock.method(performance, 'now', () => elapsed);
+      t.mock.method(console, 'warn', () => {});
+      // Isolate the outer lifecycle budget from the independent 1s exporter timeout.
+      // A stalled provider can otherwise be hidden by the bounded exporter adapter.
+      t.mock.method(BasicTracerProvider.prototype, 'forceFlush', () => new Promise<void>(() => {}));
+      const runtime = await startObservability({ ...config, shutdownTimeoutMs: 60000 }, {
+        spanExporter: { export() {}, shutdown: () => new Promise<void>(() => {}) },
+        metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+      });
+      let completed = false;
+      const pending = runtime[operation](explicitBudget).then(() => { completed = true; });
+      await setImmediate();
+      elapsed = 4999;
+      t.mock.timers.tick(4999);
+      await setImmediate();
+      assert.equal(completed, false, 'a stalled lifecycle remains pending before its deadline');
+      elapsed = 5000;
+      t.mock.timers.tick(1);
+      await setImmediate();
+      try {
+        assert.equal(completed, true, 'the public lifecycle must settle by 5000ms');
+        await pending;
+      } finally {
+        // Complete cleanup under the virtual clock, including on regression failure.
+        const cleanup = runtime.shutdown(1);
+        for (let step = 0; step < 3; step++) {
+          elapsed += 60000;
+          t.mock.timers.tick(60000);
+          await setImmediate();
+        }
+        await cleanup;
+      }
+    });
+  }
+}

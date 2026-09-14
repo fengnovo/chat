@@ -1,3 +1,5 @@
+export const MAX_LIFECYCLE_TIMEOUT_MS = 5000;
+
 export type ObservabilityConfig = {
   enabled: boolean;
   serviceName: string;
@@ -50,6 +52,6 @@ export function loadObservabilityConfig(
     metricExportIntervalMs: number('OTEL_METRIC_EXPORT_INTERVAL', 60000, 1, 2147483647, true),
     captureContent: boolean('OBSERVABILITY_CAPTURE_CONTENT', false),
     logLevel: value('OBSERVABILITY_LOG_LEVEL') ?? 'info',
-    shutdownTimeoutMs: number('OBSERVABILITY_SHUTDOWN_TIMEOUT_MS', 5000, 1, 2147483647, true),
+    shutdownTimeoutMs: number('OBSERVABILITY_SHUTDOWN_TIMEOUT_MS', MAX_LIFECYCLE_TIMEOUT_MS, 1, MAX_LIFECYCLE_TIMEOUT_MS, true),
   };
 }

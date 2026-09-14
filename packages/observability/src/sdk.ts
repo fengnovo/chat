@@ -5,7 +5,7 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { BasicTracerProvider, BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { MeterProvider, PeriodicExportingMetricReader, type PushMetricExporter } from '@opentelemetry/sdk-metrics';
-import type { ObservabilityConfig } from './config.js';
+import { MAX_LIFECYCLE_TIMEOUT_MS, type ObservabilityConfig } from './config.js';
 import { createObservabilityResource } from './resource.js';
 
 export type ObservabilityRuntime = {
@@ -32,6 +32,10 @@ function noopRuntime(): ObservabilityRuntime {
 
 function timeout(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value) || 1, 2147483647) : fallback;
+}
+
+function lifecycleTimeout(value: number | undefined, fallback = MAX_LIFECYCLE_TIMEOUT_MS): number {
+  return Math.min(timeout(value, fallback), MAX_LIFECYCLE_TIMEOUT_MS);
 }
 
 /** Swallows synchronous throws, rejections, and hung promises without exposing errors. */
@@ -71,7 +75,7 @@ export async function startObservability(config: ObservabilityConfig, options: O
     // No exception, URL, payload, or authorization headers enter this message.
     try { console.warn('[observability] Telemetry export failed or exceeded its deadline; telemetry may be dropped.'); } catch {}
   };
-  const shutdownTimeoutMs = timeout(config.shutdownTimeoutMs, 5000);
+  const shutdownTimeoutMs = lifecycleTimeout(config.shutdownTimeoutMs);
   const exportTimeoutMs = Math.min(1000, shutdownTimeoutMs, timeout(config.metricExportIntervalMs, 60000));
   let tracerProvider: BasicTracerProvider | undefined;
   let meterProvider: MeterProvider | undefined;
@@ -139,17 +143,25 @@ export async function startObservability(config: ObservabilityConfig, options: O
       meter: meters.getMeter('@repo/observability', config.serviceVersion),
       forceFlush(timeoutMs) {
         if (shutdownPromise) return shutdownPromise;
-        return bounded(flush, timeout(timeoutMs, shutdownTimeoutMs), warn);
+        return bounded(flush, lifecycleTimeout(timeoutMs, shutdownTimeoutMs), warn);
       },
       shutdown(timeoutMs) {
         if (shutdownPromise) return shutdownPromise;
-        const budget = timeout(timeoutMs, shutdownTimeoutMs);
+        const budget = lifecycleTimeout(timeoutMs, shutdownTimeoutMs);
         const deadline = performance.now() + budget;
         shutdownPromise = (async () => {
           await bounded(flush, budget, warn);
           // Always initiate cleanup, even if flush used the whole deadline.
           unregister();
-          await bounded(() => Promise.all([spans.shutdown(), meters.shutdown()]), Math.max(1, deadline - performance.now()), warn);
+          const cleanup = () => Promise.all([spans.shutdown(), meters.shutdown()]);
+          const remaining = deadline - performance.now();
+          if (remaining <= 0) {
+            // No extra caller wait after its deadline. Exporter adapters still bound
+            // cleanup separately and all late rejections are consumed.
+            void Promise.resolve().then(cleanup).catch(warn);
+            return;
+          }
+          await bounded(cleanup, remaining, warn);
         })();
         return shutdownPromise;
       },

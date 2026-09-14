@@ -39,7 +39,7 @@ test('invalid settings fail with key-only messages, never credentials or headers
   for (const [key, values] of Object.entries({
     OTEL_TRACES_SAMPLER_ARG: ['-0.1', '1.1', 'NaN', 'Infinity', '0.5junk'],
     OTEL_METRIC_EXPORT_INTERVAL: ['0', '-1', '1.5', '2147483648'],
-    OBSERVABILITY_SHUTDOWN_TIMEOUT_MS: ['0', 'NaN'],
+    OBSERVABILITY_SHUTDOWN_TIMEOUT_MS: ['0', 'NaN', '5001', '60000'],
     OTEL_ENABLED: ['yes'], OBSERVABILITY_CAPTURE_CONTENT: ['sometimes'],
     OTEL_EXPORTER_OTLP_ENDPOINT: ['not-a-url', 'ftp://collector', 'https://secret:token@collector'],
   })) {
