@@ -1,4 +1,4 @@
-import { parseTextDocument } from '../parser/text.js';
+import { parseDocument, isSupportedMime } from '../parser/index.js';
 import { splitIntoChunks, stableChunkId } from '../chunker/split.js';
 import { assertDocumentBytes } from './hash.js';
 
@@ -11,7 +11,8 @@ export class IndexPipeline {
       await guard('parsing');
       const bytes = await d.download(job.objectKey);
       assertDocumentBytes(bytes, job.contentHash, job.sizeBytes, job.mime);
-      const parsed = parseTextDocument(bytes, job.mime);
+      if (!isSupportedMime(job.mime)) throw new Error(`Unsupported MIME type: ${job.mime}`);
+      const parsed = await parseDocument(bytes, job.mime);
       await guard('chunking');
       const chunks = splitIntoChunks(parsed, { size: job.chunkSize, overlap: job.chunkOverlap });
       const vectors = await d.embedder.embedTexts(chunks.map((c: any) => c.text));

@@ -1,5 +1,12 @@
+export type DocumentMime =
+  | 'text/plain'
+  | 'text/markdown'
+  | 'application/pdf'
+  | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 export interface ParsedSection { level: number; title: string }
-export interface ParsedDocument { text: string; mime: 'text/plain' | 'text/markdown'; sections: ParsedSection[] }
+export interface ParsedDocument { text: string; mime: DocumentMime; sections: ParsedSection[] }
 export interface TextChunk { ordinal: number; text: string; headingPath: string[] }
 export interface GraphEntity { name: string; key?: string }
 export interface GraphRelationship { source: string; target: string; type: string }

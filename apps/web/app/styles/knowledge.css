@@ -15,7 +15,7 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
-  padding: 18px 28px 18px 92px;
+  padding: 6px 28px 6px 92px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
@@ -50,9 +50,9 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  gap: 2px;
   width: 100%;
-  padding: 4px 8px;
+  padding: 2px 8px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -60,6 +60,12 @@
 
 .kc-step-clickable .kc-step-button {
   cursor: pointer;
+}
+
+.kc-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .kc-step-index {
@@ -76,7 +82,7 @@
 .kc-step-desc {
   color: var(--ink-muted);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .kc-step-button:disabled {
@@ -90,7 +96,8 @@
 .kc-steps-user {
   position: absolute;
   right: 20px;
-  top: 14px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /* ---- 主体两栏 ---- */
@@ -122,9 +129,14 @@
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: 9px;
-  color: var(--violet);
-  background: var(--violet-soft);
+  flex: none;
+}
+
+.kc-brand-icon img {
+  display: block;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
 }
 
 .kc-brand strong {

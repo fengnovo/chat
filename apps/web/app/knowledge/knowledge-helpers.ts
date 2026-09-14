@@ -1,6 +1,26 @@
 import type { KnowledgeDocument } from './knowledge-api';
 
-export const DOCUMENT_ACCEPT = '.md,.markdown,.txt,text/markdown,text/plain';
+export const DOCUMENT_ACCEPT = '.md,.markdown,.txt,.pdf,.docx,.xlsx,text/markdown,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/** 按扩展名把文件名映射到后端接受的 MIME 类型。旧版 .doc/.xls 不支持。 */
+export function detectDocumentMime(name: string, fallbackType = ''): string {
+  const ext = name.toLowerCase().split('.').pop();
+  switch (ext) {
+    case 'md':
+    case 'markdown':
+      return 'text/markdown';
+    case 'txt':
+      return 'text/plain';
+    case 'pdf':
+      return 'application/pdf';
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    default:
+      return fallbackType || 'application/octet-stream';
+  }
+}
 
 export type UploadState = {
   kind: 'uploading' | 'success' | 'error';
@@ -10,7 +30,7 @@ export type UploadState = {
 export const DOCUMENT_LOAD_ERROR = '文档加载失败，请点击“刷新文档”重试。';
 
 export function isAcceptedKnowledgeFile(name: string) {
-  return /\.(?:md|markdown|txt)$/i.test(name);
+  return /\.(?:md|markdown|txt|pdf|docx|xlsx)$/i.test(name);
 }
 
 /** 同一知识库同一时刻只允许一个上传任务。 */

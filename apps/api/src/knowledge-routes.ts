@@ -10,7 +10,13 @@ import type { KnowledgeRepositoryApi } from './types.js';
 
 const id = z.uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/i);
-const mime = z.enum(['text/markdown', 'text/plain']);
+const mime = z.enum([
+  'text/markdown',
+  'text/plain',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
 
 type RouteConfig = {
   KNOWLEDGE_DOCUMENT_MAX_BYTES: number;

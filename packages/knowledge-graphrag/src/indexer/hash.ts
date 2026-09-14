@@ -5,9 +5,7 @@ export function sha256Hex(bytes: Uint8Array): string {
 }
 
 export function assertDocumentBytes(bytes: Uint8Array, expectedHash: string, expectedSize: number, mime: string): void {
-  if (mime !== 'text/plain' && mime !== 'text/markdown') throw new Error('Unsupported MIME type');
   if (bytes.byteLength !== expectedSize) throw new Error('Document size mismatch');
   if (sha256Hex(bytes).toLowerCase() !== expectedHash.toLowerCase()) throw new Error('Document hash mismatch');
-  try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { throw new Error('Invalid UTF-8 document'); }
 }
 

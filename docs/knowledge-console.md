@@ -26,7 +26,8 @@
 
 ### 2.2 文档管理
 
-- 「上传文档」按钮，支持多文件，仅 `.md`/`.markdown`/`.txt`（MIME `text/markdown` / `text/plain`）。
+- 「上传文档」按钮，支持多文件，支持 `.md`/`.markdown`/`.txt`/`.pdf`/`.docx`/`.xlsx`。
+- 旧版 `.doc`/`.xls` 不支持（纯 JS 解析不可靠），建议另存为 `.docx`/`.xlsx` 后上传。
 - 每知识库同时只允许一个上传任务。
 - 表格列：文档名称/ID、状态 badge、处理策略、切片数、导入方式、更新时间、操作。
 - 状态轮询：pending / queued / indexing / processing 时每 4 秒刷新，ready/failed 后停止。

@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
@@ -133,8 +134,10 @@ export function KnowledgeConsole() {
               disabled={!step.view}
               onClick={() => { if (step.view) goView(step.view); }}
             >
-              <span className="kc-step-index">第 {step.index} 步</span>
-              <strong>{step.title}</strong>
+              <span className="kc-step-head">
+                <span className="kc-step-index">第 {step.index} 步</span>
+                <strong>{step.title}</strong>
+              </span>
               <span className="kc-step-desc">{step.desc}</span>
             </button>
           </div>
@@ -145,7 +148,9 @@ export function KnowledgeConsole() {
       <div className="kc-body">
         <aside className="kc-sidebar">
           <div className="kc-brand">
-            <span className="kc-brand-icon"><DatabaseIcon /></span>
+            <span className="kc-brand-icon">
+              <Image alt="Keen Agent" height={34} src="/keen-ai-logo.png" width={34} />
+            </span>
             <strong>知识库平台</strong>
           </div>
 

@@ -1,4 +1,5 @@
 import { apiFetch } from '../components/resilient-chat/api';
+import { detectDocumentMime } from './knowledge-helpers';
 
 export type KnowledgeVisibility = 'private' | 'tenant';
 
@@ -199,7 +200,7 @@ export async function uploadKnowledgeDocument(kbId: string, file: File): Promise
   const sha256 = [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
-  const mime = file.type === 'text/plain' || /\.txt$/i.test(file.name) ? 'text/plain' : 'text/markdown';
+  const mime = detectDocumentMime(file.name, file.type);
 
   const presign = await requestJson<{
     document: Record<string, unknown>;

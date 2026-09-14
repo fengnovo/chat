@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import * as knowledgeManager from '../app/knowledge/knowledge-manager';
 
-test('accepts only Markdown and text document filenames', () => {
+test('accepts supported document filenames', () => {
   const accepts = (knowledgeManager as typeof knowledgeManager & {
     isAcceptedKnowledgeFile?: (name: string) => boolean;
   }).isAcceptedKnowledgeFile;
@@ -14,8 +14,12 @@ test('accepts only Markdown and text document filenames', () => {
   assert.equal(accepts?.('guide.md'), true);
   assert.equal(accepts?.('guide.MARKDOWN'), true);
   assert.equal(accepts?.('notes.txt'), true);
+  assert.equal(accepts?.('report.pdf'), true);
+  assert.equal(accepts?.('report.docx'), true);
+  assert.equal(accepts?.('sheet.xlsx'), true);
   assert.equal(accepts?.('archive.md.zip'), false);
-  assert.equal(accepts?.('report.pdf'), false);
+  assert.equal(accepts?.('legacy.doc'), false);
+  assert.equal(accepts?.('legacy.xls'), false);
 });
 
 test('prevents a second upload from starting for the same knowledge base', () => {

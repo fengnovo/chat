@@ -1,5 +1,25 @@
 import type { SessionPage, SessionSummary, WebSessionSummary } from './types';
 
+/** 按扩展名映射到后端接受的 MIME 类型；旧版 .doc/.xls 不支持。 */
+function detectMime(name: string, fallbackType = ''): string {
+  const ext = name.toLowerCase().split('.').pop();
+  switch (ext) {
+    case 'md':
+    case 'markdown':
+      return 'text/markdown';
+    case 'txt':
+      return 'text/plain';
+    case 'pdf':
+      return 'application/pdf';
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    default:
+      return fallbackType || 'application/octet-stream';
+  }
+}
+
 // 统一 fetch 入口：未登录（401）时跳转登录页；/login 页面内不跳转防止循环。
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
@@ -92,9 +112,7 @@ async function uploadKnowledgeDocument(kbId: string, file: File) {
   const sha256 = [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
-  const mime = file.type === 'text/plain' || /\.txt$/i.test(file.name)
-    ? 'text/plain'
-    : 'text/markdown';
+  const mime = detectMime(file.name, file.type);
   const response = await apiFetch(`/api/knowledge-bases/${kbId}/documents/uploads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
