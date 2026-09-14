@@ -2,28 +2,30 @@
 
 ## 目标
 
-为现有 monorepo 增加一个独立、轻量的 Electron 客户端。客户端加载已部署的 Web 站点，复用现有登录、聊天、知识库和文件上传能力，同时不修改 `apps/web` 的页面、路由、样式或构建配置。
+为现有 monorepo 增加一个独立、轻量的 Electron 客户端。开发启动时客户端自动拉起本地 Web/API/Worker，加载本地 Web 页面并复用现有登录、聊天、知识库和文件上传能力；也可通过环境变量加载已部署 Web。整个过程不修改 `apps/web` 的页面、路由、样式或构建配置。
 
 ## 范围
 
 - 新增独立 workspace：`apps/desktop`。
 - Electron 主进程负责窗口生命周期、远程站点加载、导航限制和外部链接处理。
 - 使用 electron-builder 生成 macOS 与 Windows 安装产物。
-- 开发时通过环境变量配置 Web 地址；未配置时默认加载 `http://localhost:3000`。
+- `pnpm desktop:dev` 自动启动本地基础设施、数据库迁移和现有 `pnpm dev`；未配置远程地址时按 `.env` 的 `PORT` 加载本地 Web，默认 `http://localhost:3000`。
+- 通过 `ELECTRON_WEB_URL` 可跳过本地服务并加载已部署 Web；`DESKTOP_SKIP_LOCAL_SERVICES=1` 可跳过本地基础设施编排。
 - 复用 `apps/web/public/keen-ai-logo.png` 生成桌面端图标资源，产品名使用 `Keen AI`。
 - 根目录增加显式的桌面端开发、检查和打包命令；现有 Web 命令及页面行为保持不变。
 
-以下内容不在本次范围内：离线运行 Next.js、内置 API/Worker/数据库、桌面专属页面、自动更新、系统托盘、原生菜单扩展、深链接和代码签名/公证。
+以下内容不在本次范围内：将 API/Worker/数据库打进最终安装包、离线运行 Next.js、桌面专属页面、自动更新、系统托盘、原生菜单扩展、深链接和代码签名/公证。
 
 ## 架构
 
-`apps/desktop` 是只包含 Electron 主进程的 workspace，不维护第二套 React 页面。渲染进程直接访问 `ELECTRON_WEB_URL` 指定的站点，因此浏览器与桌面端共享同一套 Web 发布物和后端 API。
+`apps/desktop` 是只包含 Electron 主进程的 workspace，不维护第二套 React 页面。`pnpm desktop:dev` 通过根目录编排脚本启动基础设施、迁移和现有 Web/API/Worker，再由 Electron 访问本地 Web；设置 `ELECTRON_WEB_URL` 时则跳过本地编排，直接访问远程站点。
 
 ```text
-Electron main process
-        │ 创建安全 BrowserWindow
-        ▼
-已部署的 Next.js Web ── HTTP/SSE ──> Agent API
+Electron launcher ──启动──> Docker / migrate / pnpm dev
+        │                              │
+        │ 创建安全 BrowserWindow         ├── Next.js Web
+        ▼                              ├── Fastify API
+本地或远程 Web ── HTTP/SSE ────────────┴── Agent Worker
 ```
 
 桌面包不作为 `apps/web` 的依赖，`apps/web` 也不感知 Electron。隔离边界使 Web 端可以继续独立开发、构建和部署。
@@ -36,8 +38,8 @@ Electron main process
 
 ### URL 配置
 
-- `ELECTRON_WEB_URL`：要加载的完整 `http` 或 `https` 地址。
-- 开发环境未设置时回退到 `http://localhost:3000`。
+- `ELECTRON_WEB_URL`：要加载的完整 `http` 或 `https` 地址；设置后不启动本地服务。
+- 未设置时使用 `.env` 的 `PORT`，没有时回退到 `http://localhost:3000`。
 - 非法协议、缺少主机或包含用户名/密码的 URL 会在创建窗口前被拒绝，并给出可读错误。
 
 配置解析放在无 Electron 依赖的纯函数模块中，以便单元测试覆盖。
@@ -56,7 +58,7 @@ BrowserWindow 使用以下默认值：
 
 ### 会话与数据流
 
-登录 Cookie、localStorage 和 sessionStorage 由 Electron 的默认持久化 session 管理，因此现有 Web 登录与会话恢复逻辑无需修改。文件选择继续使用 Chromium 原生文件选择器；聊天 SSE 与普通 API 请求仍由远程站点现有的同源 `/api/*` 路由处理。
+登录 Cookie、localStorage 和 sessionStorage 由 Electron 的默认持久化 session 管理，因此现有 Web 登录与会话恢复逻辑无需修改。文件选择继续使用 Chromium 原生文件选择器；聊天 SSE 与普通 API 请求仍由本地或远程 Web 现有的同源 `/api/*` 路由处理。
 
 ## 错误处理
 
@@ -71,7 +73,7 @@ BrowserWindow 使用以下默认值：
 
 计划提供以下命令：
 
-- `pnpm desktop:dev`：启动 Electron，默认连接本地 `http://localhost:3000`；开发者可另行运行现有 `pnpm dev`。
+- `pnpm desktop:dev`：启动 Docker 基础设施、迁移、Web/API/Worker，等待本地 Web 就绪后启动 Electron。
 - `pnpm desktop:typecheck`：检查桌面端 TypeScript。
 - `pnpm desktop:test`：运行桌面端纯逻辑测试。
 - `pnpm desktop:dist`：编译主进程并生成当前平台的安装产物。
@@ -89,7 +91,7 @@ Electron 的普通 `build` 任务只编译主进程，不在根目录 `pnpm buil
 
 ### 手动验收
 
-- 本地启动 Web 后，Electron 能打开相同登录页并完成登录。
+- 单次执行 `pnpm desktop:dev` 后，Docker、Web、API、Worker 均就绪，Electron 打开本地登录页。
 - 聊天、SSE、知识库、上传与剪贴板复制行为与浏览器一致。
 - 站外链接在默认浏览器打开，不能获得 Electron/Node 权限。
 - 关闭与重新打开客户端后，登录状态按站点 Cookie 策略保持。
@@ -97,4 +99,4 @@ Electron 的普通 `build` 任务只编译主进程，不在根目录 `pnpm buil
 
 ## 交付边界
 
-本次生成未签名的本地构建产物。面向最终用户分发前，macOS 仍需要 Developer ID 签名与 notarization，Windows 建议配置代码签名证书；这些凭据和发布流水线在后续任务中处理。
+本地编排只用于源码开发，不会把 API/Worker/数据库打入安装包。最终安装包仍需要通过 `ELECTRON_WEB_URL` 连接部署地址。本次生成未签名的本地构建产物；面向最终用户分发前，macOS 仍需要 Developer ID 签名与 notarization，Windows 建议配置代码签名证书。

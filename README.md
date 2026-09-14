@@ -70,6 +70,14 @@ pnpm dev
 - API 就绪检查：<http://127.0.0.1:8000/health/ready>
 - MinIO Console：<http://127.0.0.1:59001>
 
+### Electron 本地客户端
+
+```bash
+pnpm desktop:dev
+```
+
+该命令会自动启动本地基础设施、执行数据库迁移、拉起 Web/API/Worker，并在 Web 就绪后打开 Electron。关闭 Electron 后自动启动的开发服务会停止。远程 Web 或已自行启动基础设施时，可参考 [apps/desktop/README.md](apps/desktop/README.md) 中的覆盖配置。
+
 启动 Worker 前需在 `.env` 配置真实模型密钥和 Sandbox 凭据：
 
 monorepo 只读取并维护根目录这一份 `.env`，`packages/ai-cli` 不再保存独立环境文件；同名变量以根目录配置为准。

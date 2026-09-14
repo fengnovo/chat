@@ -7,7 +7,7 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "pnpm build && electron .",
+    "dev": "pnpm build && node --env-file-if-exists=../../.env ../../scripts/start-desktop.mjs",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts",

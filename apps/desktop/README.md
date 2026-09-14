@@ -4,19 +4,21 @@
 
 ## 开发
 
-先启动现有 Web 和 API 服务：
-
-```bash
-pnpm dev
-```
-
-另开终端启动 Electron。未设置环境变量时会加载 `http://localhost:3000`：
+桌面开发命令会自动启动本地 Docker 基础设施、执行数据库迁移、拉起 Web/API/Worker，并在 Web 就绪后打开 Electron：
 
 ```bash
 pnpm desktop:dev
 ```
 
-加载远程部署：
+默认使用 `.env` 中的 `PORT`（没有时使用 3000），所以当前项目通常会打开 `http://localhost:3020`。关闭 Electron 后，自动启动的本地 Web/API/Worker 也会停止。
+
+如果基础设施已经由其他进程管理，可以跳过 Docker 和迁移：
+
+```bash
+DESKTOP_SKIP_LOCAL_SERVICES=1 pnpm desktop:dev
+```
+
+加载远程部署（此模式不会启动本地服务）：
 
 ```bash
 ELECTRON_WEB_URL=https://chat.example.com pnpm desktop:dev
