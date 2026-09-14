@@ -30,6 +30,8 @@ test/
 
 .DS_Store
 
+apps/desktop/release/
+
 # ---- 敏感文件：证书、私钥、日志 ----
 *.pem
 *.key

@@ -1,0 +1,151 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { app, BrowserWindow, dialog, shell } from 'electron';
+import { resolveWebUrl } from './config.js';
+import { classifyNavigation } from './navigation.js';
+import { createWindowOptions } from './window-options.js';
+
+const RETRY_URL = 'keen-ai-retry:';
+
+let configuredUrl: URL | undefined;
+let mainWindow: BrowserWindow | undefined;
+
+function openExternal(target: URL): void {
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+    return;
+  }
+
+  void shell.openExternal(target.href).catch((error: unknown) => {
+    console.error('Unable to open external URL', error);
+  });
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+async function showLoadError(window: BrowserWindow, reason: string): Promise<void> {
+  const templatePath = join(app.getAppPath(), 'assets', 'load-error.html');
+  const target = configuredUrl?.href ?? 'unknown URL';
+  const template = await readFile(templatePath, 'utf8');
+  const html = template
+    .replaceAll('{{TARGET_URL}}', escapeHtml(target))
+    .replaceAll('{{ERROR_REASON}}', escapeHtml(reason));
+
+  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
+async function loadConfiguredPage(window: BrowserWindow): Promise<void> {
+  if (!configuredUrl) {
+    return;
+  }
+
+  try {
+    await window.loadURL(configuredUrl.href);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await showLoadError(window, reason);
+  }
+}
+
+function installNavigationPolicy(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      openExternal(new URL(url));
+    } catch {
+      // Ignore malformed window.open URLs and keep them out of Electron.
+    }
+    return { action: 'deny' };
+  });
+
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url === RETRY_URL) {
+      event.preventDefault();
+      void loadConfiguredPage(window);
+      return;
+    }
+
+    if (!configuredUrl) {
+      event.preventDefault();
+      return;
+    }
+
+    let target: URL;
+    try {
+      target = new URL(url);
+    } catch {
+      event.preventDefault();
+      return;
+    }
+
+    const decision = classifyNavigation(target, configuredUrl.origin);
+    if (decision === 'allow') {
+      return;
+    }
+
+    event.preventDefault();
+    if (decision === 'external') {
+      openExternal(target);
+    }
+  });
+}
+
+function createMainWindow(): BrowserWindow {
+  const window = new BrowserWindow(createWindowOptions());
+  installNavigationPolicy(window);
+
+  window.once('ready-to-show', () => {
+    window.show();
+  });
+
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) {
+      return;
+    }
+
+    void showLoadError(window, `${errorDescription} (${errorCode})`).catch((error: unknown) => {
+      console.error('Unable to show load error page', error);
+    });
+  });
+
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = undefined;
+    }
+  });
+
+  void loadConfiguredPage(window);
+  return window;
+}
+
+async function startApplication(): Promise<void> {
+  try {
+    configuredUrl = resolveWebUrl(process.env.ELECTRON_WEB_URL, app.isPackaged);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    dialog.showErrorBox('Keen AI could not start', message);
+    app.quit();
+    return;
+  }
+
+  mainWindow = createMainWindow();
+}
+
+void app.whenReady().then(startApplication);
+
+app.on('activate', () => {
+  if (!mainWindow) {
+    mainWindow = createMainWindow();
+  }
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
