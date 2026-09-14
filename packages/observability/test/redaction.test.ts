@@ -71,6 +71,23 @@ test('sanitizes Error stacks and exposes only stable error metadata', () => {
   assert.equal(serialized.includes('request failed'), false);
 });
 
+test('redacts content markers from unstructured strings and Error stacks', () => {
+  const secrets = ['AUTH_LEAK', 'COOKIE_LEAK', 'TOKEN_LEAK', 'PROMPT_LEAK', 'COMPLETION_LEAK', 'TOOL_LEAK', 'DOCUMENT_LEAK'];
+  const text = 'Authorization=AUTH_LEAK cookie=COOKIE_LEAK token=TOKEN_LEAK prompt="PROMPT_LEAK" completion="COMPLETION_LEAK" tool args={"input":"TOOL_LEAK"} document contents=DOCUMENT_LEAK';
+  const redactedText = String(redactTelemetryValue(text));
+  const error = Object.assign(new Error('content failure'), { code: 'CONTENT_REJECTED' });
+  error.stack = 'Error: prompt=PROMPT_LEAK completion=COMPLETION_LEAK\n  at toolArgs=TOOL_LEAK documentContent=DOCUMENT_LEAK';
+  const redactedError = redactTelemetryValue(error) as { code?: string; stack?: string };
+
+  assert.match(redactedText, /\[REDACTED\]/);
+  assert.equal(redactedError.code, 'CONTENT_REJECTED');
+  assert.match(redactedError.stack ?? '', /\[REDACTED\]/);
+  for (const secret of secrets) {
+    assert.equal(redactedText.includes(secret), false, `free-form text leaked ${secret}`);
+    assert.equal(redactedError.stack?.includes(secret), false, `Error stack leaked ${secret}`);
+  }
+});
+
 test('exports composable Pino redact paths without mutating the shared defaults', () => {
   assert.deepEqual(PINO_REDACT_PATHS, [
     'req.headers.authorization', 'req.headers.cookie', 'password', 'token', 'secret',

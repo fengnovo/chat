@@ -1,4 +1,5 @@
 import { context, trace } from '@opentelemetry/api';
+import { redactTelemetryValue } from './redaction.js';
 import type { ObservabilityRuntime } from './sdk.js';
 
 export type ObservabilityLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
@@ -106,7 +107,8 @@ export function createObservabilityLogger(
       }
       const error = stableError(bindings.error ?? bindings.err);
       if (error !== undefined) record.error = error;
-      const message = safeString(typeof first === 'string' ? first : second, 1_024);
+      const rawMessage = typeof first === 'string' ? first : second;
+      const message = safeString(redactTelemetryValue(rawMessage, { maxStringLength: 1_024 }), 1_024);
       if (message !== undefined) record.msg = message;
       try { destination.write(`${JSON.stringify(record)}\n`); } catch {}
     };

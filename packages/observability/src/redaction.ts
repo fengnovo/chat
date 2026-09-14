@@ -37,6 +37,12 @@ const SENSITIVE_KEYS = new Set([
   'prompt', 'completion', 'toolargs', 'documentcontent',
 ]);
 
+const SENSITIVE_TEXT_LABEL = String.raw`(?:authorization|cookie|set[-_ ]?cookie|password|token|secret|api[-_ ]?key|prompt|completion|tool[-_ ]?(?:args?|arguments?)|document[-_ ]?contents?)`;
+const SENSITIVE_TEXT_VALUE = new RegExp(
+  String.raw`\b(${SENSITIVE_TEXT_LABEL})\b\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\{[^\r\n]*?\}|\[[^\r\n]*?\]|.*?)(?=\s+\b${SENSITIVE_TEXT_LABEL}\b\s*[:=]|\r?$|\n)`,
+  'gim',
+);
+
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
   return value !== undefined && Number.isFinite(value) && value >= 0
     ? Math.min(Math.floor(value), maximum)
@@ -46,7 +52,7 @@ function boundedInteger(value: number | undefined, fallback: number, maximum: nu
 function sanitizeString(input: string, replacement: string, maxLength: number): string {
   return input
     .replace(/\bBearer\s+[^\s,;]+/gi, `Bearer ${replacement}`)
-    .replace(/\b(authorization|cookie|password|token|secret|api[_-]?key)\b\s*[:=]\s*[^\s,;]+/gi, `$1=${replacement}`)
+    .replace(SENSITIVE_TEXT_VALUE, `$1=${replacement}`)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, `$1${replacement}@`)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, replacement)
     .slice(0, maxLength);
@@ -121,7 +127,7 @@ export type NormalizedRoute = string & { readonly [normalizedRouteBrand]: true }
 
 const IDENTIFIER_PARENT_SEGMENTS = new Set([
   'users', 'user', 'tenants', 'tenant', 'sessions', 'session', 'runs', 'run',
-  'jobs', 'job', 'documents', 'document', 'files', 'file', 'messages', 'message',
+  'requests', 'request', 'jobs', 'job', 'documents', 'document', 'files', 'file', 'messages', 'message',
   'invocations', 'invocation', 'knowledge-bases', 'knowledge-base',
 ]);
 

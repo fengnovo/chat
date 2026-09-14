@@ -104,3 +104,33 @@ test('discarded log bindings are not evaluated', async () => {
   assert.doesNotThrow(() => logger.info(bindings, 'visible'));
   assert.equal(JSON.parse(lines[0] ?? '{}').operation, 'safe');
 });
+
+test('free-form messages redact content fields while retaining stable error metadata', async () => {
+  const runtime = await startObservability(
+    loadObservabilityConfig({}, { serviceName: 'test-service', serviceVersion: '1' }),
+  );
+  const lines: string[] = [];
+  const logger = createObservabilityLogger(runtime, {
+    service: 'worker', environment: 'test', destination: { write(chunk) { lines.push(chunk); } },
+  });
+  const error = Object.assign(new Error('prompt=ERROR_PROMPT_LEAK document contents=ERROR_DOCUMENT_LEAK'), {
+    name: 'ModelError', code: 'MODEL_FAILED',
+  });
+  error.stack = 'ModelError: completion=ERROR_COMPLETION_LEAK toolArgs=ERROR_TOOL_LEAK';
+
+  logger.error(
+    error,
+    'Authorization=MSG_AUTH_LEAK cookie=MSG_COOKIE_LEAK token=MSG_TOKEN_LEAK prompt="MSG_PROMPT_LEAK" completion="MSG_COMPLETION_LEAK" tool args={"value":"MSG_TOOL_LEAK"} document contents=MSG_DOCUMENT_LEAK',
+  );
+
+  const record = JSON.parse(lines[0] ?? '{}') as { msg?: string; error?: unknown };
+  assert.deepEqual(record.error, { type: 'ModelError', code: 'MODEL_FAILED' });
+  assert.match(record.msg ?? '', /\[REDACTED\]/);
+  for (const secret of [
+    'MSG_AUTH_LEAK', 'MSG_COOKIE_LEAK', 'MSG_TOKEN_LEAK',
+    'MSG_PROMPT_LEAK', 'MSG_COMPLETION_LEAK', 'MSG_TOOL_LEAK', 'MSG_DOCUMENT_LEAK',
+    'ERROR_PROMPT_LEAK', 'ERROR_COMPLETION_LEAK', 'ERROR_TOOL_LEAK', 'ERROR_DOCUMENT_LEAK',
+  ]) {
+    assert.equal(lines[0]?.includes(secret), false, `log output leaked ${secret}`);
+  }
+});

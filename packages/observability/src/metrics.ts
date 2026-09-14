@@ -51,6 +51,14 @@ function positiveInteger(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+function safeAdd(instrument: { add(value: number, attributes?: Attributes): void }, value: number, attributes?: Attributes): void {
+  try { instrument.add(value, attributes); } catch {}
+}
+
+function safeRecord(instrument: { record(value: number, attributes?: Attributes): void }, value: number, attributes?: Attributes): void {
+  try { instrument.record(value, attributes); } catch {}
+}
+
 const HTTP_METHODS: readonly HttpMethod[] = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'OTHER'];
 const STATUS_CLASSES: readonly HttpStatusClass[] = ['1xx', '2xx', '3xx', '4xx', '5xx', 'other'];
 const OUTCOMES: readonly MetricOutcome[] = ['success', 'failure', 'cancelled', 'timeout', 'other'];
@@ -93,17 +101,17 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
         'http.response.status_class': enumerated(measurement.status, STATUS_CLASSES, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       };
-      httpDuration.record(nonNegative(measurement.durationMs), labels);
-      httpRequests.add(1, labels);
+      safeRecord(httpDuration, nonNegative(measurement.durationMs), labels);
+      safeAdd(httpRequests, 1, labels);
     },
     sseConnection(measurement) {
-      sseActive.add(measurement.delta === -1 ? -1 : 1, {
+      safeAdd(sseActive, measurement.delta === -1 ? -1 : 1, {
         operation: enumerated(measurement.operation, SSE_OPERATIONS, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       });
     },
     sseDisconnect(measurement) {
-      sseDisconnects.add(1, {
+      safeAdd(sseDisconnects, 1, {
         operation: enumerated(measurement.operation, SSE_OPERATIONS, 'other'),
         reason: enumerated(measurement.reason, SSE_REASONS, 'other'),
       });
@@ -113,10 +121,10 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
         queue: enumerated(measurement.queue, QUEUES, 'other'),
         'job.kind': enumerated(measurement.job, JOBS, 'other'),
       };
-      if (measurement.outcome === 'started') queueStarted.add(1, labels);
-      if (measurement.outcome === 'completed') queueCompleted.add(1, labels);
-      if (measurement.outcome === 'failed') queueFailed.add(1, labels);
-      if (measurement.outcome !== 'started') queueDuration.record(nonNegative(measurement.durationMs), {
+      if (measurement.outcome === 'started') safeAdd(queueStarted, 1, labels);
+      if (measurement.outcome === 'completed') safeAdd(queueCompleted, 1, labels);
+      if (measurement.outcome === 'failed') safeAdd(queueFailed, 1, labels);
+      if (measurement.outcome !== 'started') safeRecord(queueDuration, nonNegative(measurement.durationMs), {
         ...labels, outcome: measurement.outcome === 'completed' ? 'success' : 'failure',
       });
     },
@@ -127,32 +135,32 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
         operation: enumerated(measurement.operation, MODEL_OPERATIONS, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       };
-      modelCalls.add(1, labels);
-      modelDuration.record(nonNegative(measurement.durationMs), labels);
+      safeAdd(modelCalls, 1, labels);
+      safeRecord(modelDuration, nonNegative(measurement.durationMs), labels);
       const inputTokens = positiveInteger(measurement.inputTokens);
       const outputTokens = positiveInteger(measurement.outputTokens);
       const retries = positiveInteger(measurement.retries);
       const fallbacks = positiveInteger(measurement.fallbacks);
-      if (inputTokens) modelInputTokens.add(inputTokens, labels);
-      if (outputTokens) modelOutputTokens.add(outputTokens, labels);
-      if (retries) modelRetries.add(retries, labels);
-      if (fallbacks) modelFallbacks.add(fallbacks, labels);
+      if (inputTokens) safeAdd(modelInputTokens, inputTokens, labels);
+      if (outputTokens) safeAdd(modelOutputTokens, outputTokens, labels);
+      if (retries) safeAdd(modelRetries, retries, labels);
+      if (fallbacks) safeAdd(modelFallbacks, fallbacks, labels);
     },
     toolCall(measurement) {
-      toolCalls.add(1, {
+      safeAdd(toolCalls, 1, {
         tool: enumerated(measurement.tool, TOOLS, 'other'),
         operation: enumerated(measurement.operation, TOOL_OPERATIONS, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       });
     },
     knowledgeRetrieval(measurement) {
-      retrievalDuration.record(nonNegative(measurement.durationMs), {
+      safeRecord(retrievalDuration, nonNegative(measurement.durationMs), {
         operation: enumerated(measurement.operation, KNOWLEDGE_OPERATIONS, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       });
     },
     telemetryExportFailure(labels) {
-      exportFailures.add(1, { signal: enumerated(labels.signal, SIGNALS, 'metrics') });
+      safeAdd(exportFailures, 1, { signal: enumerated(labels.signal, SIGNALS, 'metrics') });
     },
   };
 }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { Meter } from '@opentelemetry/api';
 import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { createCoreMetrics } from '../src/metrics.js';
 import { normalizeRoute } from '../src/redaction.js';
@@ -97,4 +98,56 @@ test('runtime callers cannot bypass route normalization to create ID series', as
   assert.equal(httpRequests?.dataPoints.length, 1);
   assert.equal(httpRequests?.dataPoints[0]?.attributes['http.route'], '/users/:id');
   await provider.shutdown();
+});
+
+test('alphabetic request IDs collapse to a fixed request route series', async () => {
+  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+  const metrics = createCoreMetrics(provider.getMeter('request-route-cardinality'));
+
+  for (let index = 0; index < 100; index++) {
+    const suffix = `${String.fromCharCode(97 + Math.floor(index / 26))}${String.fromCharCode(97 + (index % 26))}`;
+    metrics.httpServer({
+      method: 'GET',
+      route: normalizeRoute(`/requests/requesta-${suffix}`),
+      status: '2xx',
+      outcome: 'success',
+      durationMs: 1,
+    });
+  }
+  await provider.forceFlush();
+  const httpRequests = exporter.getMetrics().flatMap(resource => resource.scopeMetrics.flatMap(scope => scope.metrics))
+    .find(metric => metric.descriptor.name === 'http.server.requests');
+  assert.equal(httpRequests?.dataPoints.length, 1);
+  assert.equal(httpRequests?.dataPoints[0]?.attributes['http.route'], '/requests/:id');
+  assert.equal(JSON.stringify(httpRequests?.dataPoints).includes('requesta-'), false);
+  await provider.shutdown();
+});
+
+test('throwing instruments cannot make any metric helper fail business execution', () => {
+  const throwingInstrument = {
+    add() { throw new Error('instrument add failed'); },
+    record() { throw new Error('instrument record failed'); },
+  };
+  const meter = {
+    createCounter: () => throwingInstrument,
+    createHistogram: () => throwingInstrument,
+    createUpDownCounter: () => throwingInstrument,
+  } as unknown as Meter;
+  const metrics = createCoreMetrics(meter);
+
+  for (const invoke of [
+    () => metrics.httpServer({ method: 'GET', route: normalizeRoute('/health/live'), status: '2xx', outcome: 'success', durationMs: 1 }),
+    () => metrics.sseConnection({ operation: 'chat', outcome: 'success', delta: 1 }),
+    () => metrics.sseDisconnect({ operation: 'chat', reason: 'client' }),
+    () => metrics.queueJob({ queue: 'agent-runs', job: 'run', outcome: 'started' }),
+    () => metrics.queueJob({ queue: 'agent-runs', job: 'run', outcome: 'completed', durationMs: 1 }),
+    () => metrics.queueJob({ queue: 'agent-runs', job: 'run', outcome: 'failed', durationMs: 1 }),
+    () => metrics.modelCall({ provider: 'openai', model: 'gpt', operation: 'chat', outcome: 'success', durationMs: 1, inputTokens: 1, outputTokens: 1, retries: 1, fallbacks: 1 }),
+    () => metrics.toolCall({ tool: 'sandbox', operation: 'execute', outcome: 'success' }),
+    () => metrics.knowledgeRetrieval({ operation: 'retrieve', outcome: 'success', durationMs: 1 }),
+    () => metrics.telemetryExportFailure({ signal: 'metrics' }),
+  ]) {
+    assert.doesNotThrow(invoke);
+  }
 });
