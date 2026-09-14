@@ -1270,9 +1270,6 @@ function ChatRuntime() {
             </button>
           </div>
           <div className="topbar-actions">
-            <Link className="knowledge-manage-link" href="/knowledge">
-              管理知识库
-            </Link>
             <button
               className="icon-button"
               type="button"

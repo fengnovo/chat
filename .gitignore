@@ -3,6 +3,8 @@ dist/
 node_modules/
 .env
 .env.local
+deploy/env.*
+!deploy/env.*.example
 .turbo/
 .worktrees/
 coverage/
@@ -27,3 +29,17 @@ test/
 !packages/db/test/**
 
 .DS_Store
+
+# ---- 敏感文件：证书、私钥、日志 ----
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.log

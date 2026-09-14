@@ -5,6 +5,7 @@ const embeddingProviderSchema = z.enum(['openai', 'bailian', 'openai-compatible'
 });
 
 const configSchema = z.object({
+  host: z.string().default('127.0.0.1'),
   port: z.coerce.number().int().positive().default(8090),
   redisUrl: z.string().url().default('redis://127.0.0.1:6379'),
   postgresUrl: z.string().min(1),
@@ -46,6 +47,7 @@ function normalizeExtractionModel(value: string | undefined): string {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): KnowledgeServiceConfig {
   const embeddingProvider = embeddingProviderSchema.parse(env.EMBEDDING_PROVIDER ?? 'openai');
   return configSchema.parse({
+    host: env.KNOWLEDGE_SERVICE_HOST,
     port: env.KNOWLEDGE_SERVICE_PORT,
     redisUrl: env.REDIS_URL,
     postgresUrl: env.DATABASE_URL,

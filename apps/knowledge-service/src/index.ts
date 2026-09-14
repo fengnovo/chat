@@ -22,7 +22,7 @@ export async function startKnowledgeService(config: KnowledgeServiceConfig = loa
   const worker = runtime.worker ?? startConsumer('knowledge-index', runtime.connection, runtime, config.concurrency);
   const server = runtime.server ?? createMcpHttpServer({ tokenSecret: config.tokenSecret, retriever: runtime.retriever, logger: runtime.logger });
   try {
-    await new Promise<void>((resolve, reject) => { server.once?.('error', reject); server.listen(config.port, resolve); });
+    await new Promise<void>((resolve, reject) => { server.once?.('error', reject); server.listen(config.port, config.host, resolve); });
   } catch (error) {
     const closeServer = () => new Promise<void>((resolve) => { if (!server.close) return resolve(); server.close(() => resolve()); });
     await Promise.allSettled([worker.close?.(), closeServer(), runtime.queue?.close?.(), runtime.connection?.quit?.()]); throw error;

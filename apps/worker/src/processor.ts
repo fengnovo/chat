@@ -291,6 +291,9 @@ export function createRunProcessor(services: ProcessorServices) {
           job.kind === 'start',
         );
         runtime = await createRuntime(services, job, remotePath, sandbox, controller.signal);
+        console.log(
+          `[processor] run=${job.runId} kbIds=${JSON.stringify(job.knowledgeBaseIds)} mcp=${runtime.mcpStatus}`,
+        );
         const events =
           job.kind === 'start'
             ? runtime.run(

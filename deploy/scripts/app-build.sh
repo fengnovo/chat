@@ -40,18 +40,19 @@ if [ "$SKIP_SANDBOX_IMAGE" != "1" ]; then
 fi
 
 log "安装 systemd unit"
-sudo cp deploy/systemd/chat-api.service deploy/systemd/chat-worker.service deploy/systemd/chat-web.service /etc/systemd/system/
+sudo cp deploy/systemd/chat-api.service deploy/systemd/chat-worker.service deploy/systemd/chat-web.service deploy/systemd/chat-knowledge.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable chat-api chat-worker chat-web >/dev/null
+sudo systemctl enable chat-api chat-worker chat-web chat-knowledge >/dev/null
 
 log "重启服务"
 sudo systemctl restart chat-api
 sudo systemctl restart chat-worker
 sudo systemctl restart chat-web
+sudo systemctl restart chat-knowledge
 
 sleep 3
 log "服务状态"
-systemctl --no-pager --lines=0 status chat-api chat-worker chat-web || true
+systemctl --no-pager --lines=0 status chat-api chat-worker chat-web chat-knowledge || true
 
 log "自检"
 for i in $(seq 1 20); do
@@ -63,3 +64,4 @@ for i in $(seq 1 20); do
   sleep 2
 done
 curl -fsS -o /dev/null -w "Web: HTTP %{http_code}\n" "http://127.0.0.1:${PORT:-3020}/" || true
+curl -fsS -o /dev/null -w "Knowledge: HTTP %{http_code}\n" "http://127.0.0.1:${KNOWLEDGE_SERVICE_PORT:-8090}/healthz" || true

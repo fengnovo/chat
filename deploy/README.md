@@ -1,4 +1,4 @@
-# 部署手册 · 阿里云单机（2 人验证）
+# 部署手册
 
 面向：**1 台 8 核 16G / 40G 系统盘 / 3Mbps 的 ECS（Debian 12）**，先跑通聊天 + Agent + 沙箱。
 
@@ -9,7 +9,7 @@
 | Postgres / Redis / MinIO | ✅ Docker Compose | `deploy/compose.infra.yaml` |
 | Web / API / Worker | ✅ systemd 宿主机进程 | Worker 需要宿主 Docker，见 §1.3 |
 | Docker 沙箱 | ✅ 宿主 Docker | 需预先构建 `chat-agent-sandbox` 镜像 |
-| **knowledge-service** | ❌ **不部署** | 代码缺口未补，详见 §11 |
+| **knowledge-service** | ✅ systemd 宿主机进程 | |
 
 > 本目录下**全部是新增文件**，仓库里任何现有文件都没有被修改。
 
@@ -268,27 +268,7 @@ watch -n2 'ls -la /opt/chat/data/sandboxes'
 
 ---
 
-## 11. 已知限制
-
-**知识库（GraphRAG）本次不可用**，原因是代码缺口而不是配置问题：
-
-- `apps/knowledge-service` 没有可执行入口（commit `959716d` 删除了 `src/main.ts` 并移除 `start` 脚本），
-  `startKnowledgeService(config, deps)` 需要宿主注入 `connection / repository / download / vectorStore / extract / retriever`；
-- 其中 `extract`（LLM 图谱抽取）和 `retriever`（向量召回 + 图谱多跳 + 引用组装）**全仓没有实现**；
-- `@repo/db` 也缺少检索侧的读查询（按 chunk 取原文、按 chunk 反查实体、按 entity_key 查关系）。
-
-当前状态下的行为（不会崩，只是没用）：
-- 知识库页面已被 Nginx 挡掉（`/knowledge` → 404）；
-- 即使通过 API 建了知识库、传了文档，索引任务也永远停在 `queued`（没有消费者）；
-- `KNOWLEDGE_MCP_ENABLED=false`，Agent 不会加载 `graphrag_search` 工具。
-
-**以后要接知识库，需要补的正是上面三块**（外加把 knowledge-service 的
-`build`/`start` 脚本和宿主 bootstrap 写好）。补齐后再：起 Qdrant、打开
-`KNOWLEDGE_MCP_ENABLED=true`、删掉 Nginx 里的 `/knowledge` 拦截。
-
----
-
-## 12. 日常运维
+## 11. 日常运维
 
 ```bash
 # 日志
@@ -322,7 +302,7 @@ sudo crontab -e
 
 ---
 
-## 13. 故障排查
+## 12. 故障排查
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
@@ -357,3 +337,238 @@ deploy/
     ├── app-build.sh                 # 构建 + 发布
     └── cleanup-sandboxes.sh         # 会话目录清理（cron）
 ```
+
+
+
+基础设施全上 Docker。这和我生成的配置一致——Postgres/Redis/MinIO/Qdrant 走 Docker Compose，应用走 systemd。让我确认一下 infra compose 的端口映射是否和 .env 对应。
+用户补充说整个项目包括数据库、Docker 都会部署到 xxx.xxx.xxx.xxx 上，所有数据库相关的都部署到 Docker 上。
+
+这和现有的部署架构是一致的——基础设施（Postgres、Redis、MinIO、Qdrant）都用 Docker Compose 部署，应用（Web、API、Worker、Knowledge-service）用 systemd 部署在宿主机上。
+
+我刚才生成的配置已经是这个架构了。让我确认一下 compose.infra.yaml 看看数据库配置是否正确。
+
+端口映射完全对应。让我确认构建脚本是否包含 knowledge-service。
+compose.infra.yaml 的端口映射和我的 .env 配置完全对应：
+- Postgres: 127.0.0.1:55432 → DATABASE_URL 用 55432 ✓
+- Redis: 127.0.0.1:56379 → REDIS_URL 用 56379 ✓
+- MinIO: 127.0.0.1:59000 → S3_ENDPOINT 用 59000 ✓
+- Qdrant: 127.0.0.1:56333 (compose.qdrant.yaml) → QDRANT_URL 用 56333 ✓
+
+所有数据库/中间件都在 Docker 里，只绑定 127.0.0.1，不暴露公网。应用通过 systemd 跑在宿主机上，通过 127.0.0.1 访问这些服务。
+
+现在让我更新 todo list 并给用户一个完整的总结。
+
+我还需要提醒用户：
+1. 密钥需要替换（REPLACE_* 的部分）
+2. knowledge-service 需要构建（pnpm build 会构建所有包）
+3. 启动 Qdrant 需要叠加 compose.qdrant.yaml
+4. systemd 配置需要安装并启动
+
+让我检查 app-build.sh 是否会构建 knowledge-service。
+
+构建脚本会 `pnpm build` 全部包，但只装了 3 个 systemd unit，漏了 knowledge-service。我来补上。
+`app-build.sh` 会执行 `pnpm build`，这会构建所有 workspace 包，包括 knowledge-service。但它只安装了 chat-api、chat-worker、chat-web 三个 systemd unit，没有 chat-knowledge。我需要更新这个脚本，把 chat-knowledge.service 也加进去。
+
+让我更新 app-build.sh。
+
+配置全部生成完毕。以下是完整方案：
+
+## 生成的文件
+
+| 文件 | 用途 |
+|------|------|
+| [deploy/env.keen-tech.top](file:///Users/keen/Desktop/code/projects/chat/deploy/env.keen-tech.top) | 线上 .env 配置 |
+| [deploy/nginx/chat.keen-tech.top.conf](file:///Users/keen/Desktop/code/projects/chat/deploy/nginx/chat.keen-tech.top.conf) | Nginx 配置 |
+| [deploy/systemd/chat-knowledge.service](file:///Users/keen/Desktop/code/projects/chat/deploy/systemd/chat-knowledge.service) | knowledge-service systemd |
+
+## 架构总览
+
+```
+公网用户
+  │
+  ▼
+chat.keen-tech.top:443 (Nginx)
+  ├─ /          → Next.js Web (3020)
+  ├─ /api/*     → API 直连 (8002)        ← SSE 流式少一跳
+  └─ /knowledge → Next.js Web (3020)
+  │
+chat.keen-tech.top:9443 (Nginx)
+  └─ /*         → MinIO (59000)          ← 预签名直传/下载
+  │
+  ──────────── 127.0.0.1 内网 ────────────
+  │
+  ├─ Postgres (55432)    ┐
+  ├─ Redis (56379)       │  Docker Compose
+  ├─ MinIO (59000)       │
+  └─ Qdrant (56333)      ┘
+  │
+  ├─ chat-web.service      (systemd)
+  ├─ chat-api.service      (systemd)
+  ├─ chat-worker.service   (systemd, 需 docker.sock)
+  └─ chat-knowledge.service (systemd)
+```
+
+## 部署步骤
+
+### 1. 上传代码到服务器
+
+```bash
+rsync -av --delete \
+  --exclude node_modules --exclude .next --exclude dist --exclude .turbo \
+  --exclude .git --exclude data \
+  ./ chatapp@xxx.xxx.xxx.xxx:/opt/chat/
+```
+
+### 2. 复制并填写 .env
+
+```bash
+cd /opt/chat
+cp deploy/env.keen-tech.top .env
+chmod 600 .env
+```
+
+**必须替换的密钥**（在服务器上生成）：
+```bash
+openssl rand -hex 32   # → AUTH_JWT_SECRET
+openssl rand -hex 16   # → POSTGRES_PASSWORD（同时填 DATABASE_URL 和 POSTGRES_PASSWORD）
+openssl rand -hex 16   # → MINIO_ROOT_PASSWORD
+openssl rand -hex 32   # → KNOWLEDGE_MCP_SECRET 和 KNOWLEDGE_TOKEN_SECRET（两个必须相同）
+```
+
+### 3. 启动基础设施（含 Qdrant）
+
+```bash
+docker compose -f deploy/compose.infra.yaml -f deploy/compose.qdrant.yaml --env-file .env up -d --wait
+```
+
+### 4. 初始化数据库
+
+```bash
+pnpm install --frozen-lockfile
+pnpm db:migrate
+pnpm db:seed    # 建 admin/owner/user 三个默认账号
+```
+
+### 5. 构建并启动应用
+
+```bash
+bash deploy/scripts/app-build.sh
+```
+
+### 6. 配置 Nginx + HTTPS
+
+```bash
+sudo cp /opt/chat/deploy/nginx/chat.keen-tech.top.conf /etc/nginx/conf.d/chat.conf
+sudo certbot --nginx -d chat.keen-tech.top
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+## 安全组放行
+
+| 端口 | 用途 | 来源 |
+|------|------|------|
+| 22 | SSH | 你的 IP |
+| 80 | HTTP→HTTPS 跳转 | 0.0.0.0/0 |
+| 443 | Web + API | 0.0.0.0/0 |
+| 9443 | MinIO 预签名 | 0.0.0.0/0 |
+
+**不要**开放 3020/8002/55432/56379/59000/56333/8090，这些都绑在 127.0.0.1。
+
+## 验证
+
+```bash
+# 服务状态
+systemctl status chat-api chat-worker chat-web chat-knowledge --no-pager
+
+# 健康检查
+curl -s http://127.0.0.1:8002/health/ready
+curl -s http://127.0.0.1:8090/healthz
+
+# 外网
+curl -I https://chat.keen-tech.top/
+```
+
+
+需要区分几个 `.env` 文件，它们的用途不同：
+
+## 三个 .env 文件的区别
+
+| 文件 | 用途 | 需要改吗 |
+|------|------|---------|
+| 根目录 `.env` | **本地开发**用（端口 8002/3020、本地数据库等） | ❌ 不用改，本地开发继续用 |
+| `.env.example` | **模板**，提交到 git 给别人参考 | ❌ 不用改（除非加新变量） |
+| `deploy/env.keen-tech.top` | **线上配置模板**，我刚生成的 | ✅ 复制到服务器后替换密钥 |
+
+## 关键点：rsync 时要排除本地 .env
+
+你本地的 `.env` 是开发配置，如果直接 rsync 到服务器会覆盖线上配置。让我确认一下排除规则。
+用户问的是：部署上线时，根目录的 `.env` 文件需要管吗？需要改吗？
+
+这里有几个 `.env` 文件需要区分：
+1. 本地开发用的 `.env`（在项目根目录，当前用户正在用的）
+2. 线上用的 `.env`（部署到服务器 `/opt/chat/.env`）
+3. `.env.example`（模板，提交到 git）
+
+用户当前打开的是 `.env.example`。
+
+关键问题是：根目录的 `.env`（本地开发用的）会不会被 rsync 传到线上？或者线上的 `.env` 是怎么来的？
+
+从之前的部署步骤看：
+- rsync 上传代码时，应该排除 `.env`（因为本地的 `.env` 是开发配置，端口、密钥等都不一样）
+- 线上应该用 `deploy/env.keen-tech.top` 复制成 `/opt/chat/.env`
+
+所以答案是：
+1. **本地根目录的 `.env`**：不需要改，它是本地开发用的。rsync 时要排除它。
+2. **线上 `/opt/chat/.env`**：需要用 `deploy/env.keen-tech.top` 复制过去，然后替换密钥。
+3. **`.env.example`**：是模板，不需要改（除非有新的变量要加）。
+
+让我检查一下 rsync 命令是否排除了 .env。从之前给的部署步骤看，rsync 排除了 node_modules, .next, dist, .turbo, .git, data，但没有排除 .env。这是个问题——本地的 .env 会被传到线上，覆盖线上的配置。
+
+我需要提醒用户在 rsync 时排除 .env，或者在部署步骤中明确说明。
+
+让我检查一下 .gitignore 是否排除了 .env。
+
+`.env` 已经在 `.gitignore` 里了，不会被提交到 git。但 rsync 不会自动读 .gitignore，需要手动排除。
+
+我之前给的 rsync 命令没有排除 .env，这是个问题。我需要更新部署步骤，在 rsync 时加上 `--exclude .env`。
+
+让我给用户一个清晰的回答：
+1. 本地 `.env` 不用改
+2. 线上用 `deploy/env.keen-tech.top` 复制成 `/opt/chat/.env`
+3. rsync 时要排除 `.env`，避免本地配置覆盖线上
+
+我应该更新之前给的 rsync 命令。
+`.env` 已在 `.gitignore` 中，不会进 git。但 **rsync 不会读 .gitignore**，需要手动排除。
+
+## 回答你的问题
+
+**根目录的 `.env` 不用管、不用改**，它是你本地开发用的。线上用的是单独的 `/opt/chat/.env`。
+
+但有一个坑：之前给的 rsync 命令**没有排除 `.env`**，本地的开发配置会被传到服务器覆盖线上配置。需要加上 `--exclude .env`。
+
+## 修正后的上传命令
+
+```bash
+rsync -av --delete \
+  --exclude .env \
+  --exclude node_modules --exclude .next --exclude dist --exclude .turbo \
+  --exclude .git --exclude data \
+  ./ chatapp@xxx.xxx.xxx.xxx:/opt/chat/
+```
+
+## 线上 .env 的正确放置方式
+
+```bash
+# 在服务器上
+cd /opt/chat
+cp deploy/env.keen-tech.top .env   # 从模板复制
+chmod 600 .env
+# 然后替换里面的 REPLACE_* 密钥
+```
+
+**不要**把本地的 `.env` 直接传上去，因为：
+- 本地 `API_PORT=8002` 虽然端口一样，但 `WEB_ORIGIN=http://localhost:3020` 线上必须是 `https://chat.keen-tech.top`
+- 本地密钥（JWT、数据库密码、MinIO 密码）线上必须重新生成
+- 本地 `AUTH_SIGNUP_ENABLED=true` 线上应该是 `false`
+
+所以总结：**本地 `.env` 不动，线上用 `deploy/env.keen-tech.top` 复制后填密钥**。
