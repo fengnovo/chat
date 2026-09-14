@@ -6,6 +6,7 @@ allowBuilds:
   better-sqlite3: true
   canvas: true
   cbor-extract: true
+  electron-winstaller: true
   esbuild: false
   msgpackr-extract: true
   protobufjs: true
