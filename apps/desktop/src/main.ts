@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import { resolveWebUrl } from './config.js';
+import { createLoadErrorGate, type LoadErrorGate } from './load-error.js';
 import { classifyNavigation } from './navigation.js';
 import { createWindowOptions } from './window-options.js';
 
@@ -29,18 +30,26 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
-async function showLoadError(window: BrowserWindow, reason: string): Promise<void> {
-  const templatePath = join(app.getAppPath(), 'assets', 'load-error.html');
-  const target = configuredUrl?.href ?? 'unknown URL';
-  const template = await readFile(templatePath, 'utf8');
-  const html = template
-    .replaceAll('{{TARGET_URL}}', escapeHtml(target))
-    .replaceAll('{{ERROR_REASON}}', escapeHtml(reason));
+async function showLoadError(window: BrowserWindow, reason: string, gate: LoadErrorGate): Promise<void> {
+  if (!gate.tryStart()) {
+    return;
+  }
 
-  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  try {
+    const templatePath = join(app.getAppPath(), 'assets', 'load-error.html');
+    const target = configuredUrl?.href ?? 'unknown URL';
+    const template = await readFile(templatePath, 'utf8');
+    const html = template
+      .replaceAll('{{TARGET_URL}}', escapeHtml(target))
+      .replaceAll('{{ERROR_REASON}}', escapeHtml(reason));
+
+    await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  } finally {
+    gate.finish();
+  }
 }
 
-async function loadConfiguredPage(window: BrowserWindow): Promise<void> {
+async function loadConfiguredPage(window: BrowserWindow, gate: LoadErrorGate): Promise<void> {
   if (!configuredUrl) {
     return;
   }
@@ -49,11 +58,11 @@ async function loadConfiguredPage(window: BrowserWindow): Promise<void> {
     await window.loadURL(configuredUrl.href);
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : String(error);
-    await showLoadError(window, reason);
+    await showLoadError(window, reason, gate);
   }
 }
 
-function installNavigationPolicy(window: BrowserWindow): void {
+function installNavigationPolicy(window: BrowserWindow, gate: LoadErrorGate): void {
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       openExternal(new URL(url));
@@ -66,7 +75,7 @@ function installNavigationPolicy(window: BrowserWindow): void {
   window.webContents.on('will-navigate', (event, url) => {
     if (url === RETRY_URL) {
       event.preventDefault();
-      void loadConfiguredPage(window);
+      void loadConfiguredPage(window, gate);
       return;
     }
 
@@ -97,7 +106,8 @@ function installNavigationPolicy(window: BrowserWindow): void {
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow(createWindowOptions());
-  installNavigationPolicy(window);
+  const loadErrorGate = createLoadErrorGate();
+  installNavigationPolicy(window, loadErrorGate);
 
   window.once('ready-to-show', () => {
     window.show();
@@ -108,7 +118,7 @@ function createMainWindow(): BrowserWindow {
       return;
     }
 
-    void showLoadError(window, `${errorDescription} (${errorCode})`).catch((error: unknown) => {
+    void showLoadError(window, `${errorDescription} (${errorCode})`, loadErrorGate).catch((error: unknown) => {
       console.error('Unable to show load error page', error);
     });
   });
@@ -119,7 +129,7 @@ function createMainWindow(): BrowserWindow {
     }
   });
 
-  void loadConfiguredPage(window);
+  void loadConfiguredPage(window, loadErrorGate);
   return window;
 }
 
