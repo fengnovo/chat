@@ -134,3 +134,30 @@ test('free-form messages redact content fields while retaining stable error meta
     assert.equal(lines[0]?.includes(secret), false, `log output leaked ${secret}`);
   }
 });
+
+test('JSON-style and multiline content stays out of bounded logger messages', async () => {
+  const runtime = await startObservability(
+    loadObservabilityConfig({}, { serviceName: 'test-service', serviceVersion: '1' }),
+  );
+  const lines: string[] = [];
+  const logger = createObservabilityLogger(runtime, {
+    service: 'worker', environment: 'test', destination: { write(chunk) { lines.push(chunk); } },
+  });
+  const error = Object.assign(new Error('multiline content rejected'), {
+    name: 'ContentError', code: 'CONTENT_REJECTED',
+  });
+
+  logger.info('payload={"prompt":"JSON_PROMPT_LEAK","completion":"JSON_COMPLETION_LEAK"}');
+  logger.error(error, 'toolArgs=[\n  "MULTILINE_TOOL_LEAK"\n]\ndocumentContent={\n  "text":"MULTILINE_DOCUMENT_LEAK"\n}');
+
+  assert.equal(lines.length, 2);
+  const records = lines.map(line => JSON.parse(line) as { msg?: string; error?: unknown });
+  assert.deepEqual(records[1]?.error, { type: 'ContentError', code: 'CONTENT_REJECTED' });
+  for (const record of records) {
+    assert.match(record.msg ?? '', /\[REDACTED\]/);
+    assert.ok((record.msg?.length ?? Infinity) <= 1_024);
+  }
+  for (const secret of ['JSON_PROMPT_LEAK', 'JSON_COMPLETION_LEAK', 'MULTILINE_TOOL_LEAK', 'MULTILINE_DOCUMENT_LEAK']) {
+    assert.equal(lines.join('').includes(secret), false, `logger leaked ${secret}`);
+  }
+});

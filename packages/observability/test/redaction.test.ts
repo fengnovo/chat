@@ -88,6 +88,34 @@ test('redacts content markers from unstructured strings and Error stacks', () =>
   }
 });
 
+test('redacts JSON-quoted and multiline content values from Error stacks', () => {
+  const error = Object.assign(new Error('content rejected'), {
+    name: 'ContentError', code: 'CONTENT_REJECTED',
+  });
+  error.stack = [
+    'ContentError: payload={"prompt":"STACK_JSON_PROMPT_LEAK","completion":"STACK_JSON_COMPLETION_LEAK"}',
+    'toolArgs=[',
+    '  {"input":"STACK_MULTILINE_TOOL_LEAK"}',
+    ']',
+    'documentContent={',
+    '  "text":"STACK_MULTILINE_DOCUMENT_LEAK"',
+    '}',
+    '    at worker.ts:1:1',
+  ].join('\n');
+
+  const result = redactTelemetryValue(error) as { type?: string; code?: string; stack?: string };
+  assert.equal(result.type, 'ContentError');
+  assert.equal(result.code, 'CONTENT_REJECTED');
+  assert.match(result.stack ?? '', /\[REDACTED\]/);
+  assert.ok((result.stack?.length ?? Infinity) <= 1_024);
+  for (const secret of [
+    'STACK_JSON_PROMPT_LEAK', 'STACK_JSON_COMPLETION_LEAK',
+    'STACK_MULTILINE_TOOL_LEAK', 'STACK_MULTILINE_DOCUMENT_LEAK',
+  ]) {
+    assert.equal(result.stack?.includes(secret), false, `Error stack leaked ${secret}`);
+  }
+});
+
 test('exports composable Pino redact paths without mutating the shared defaults', () => {
   assert.deepEqual(PINO_REDACT_PATHS, [
     'req.headers.authorization', 'req.headers.cookie', 'password', 'token', 'secret',

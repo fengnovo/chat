@@ -38,10 +38,7 @@ const SENSITIVE_KEYS = new Set([
 ]);
 
 const SENSITIVE_TEXT_LABEL = String.raw`(?:authorization|cookie|set[-_ ]?cookie|password|token|secret|api[-_ ]?key|prompt|completion|tool[-_ ]?(?:args?|arguments?)|document[-_ ]?contents?)`;
-const SENSITIVE_TEXT_VALUE = new RegExp(
-  String.raw`\b(${SENSITIVE_TEXT_LABEL})\b\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\{[^\r\n]*?\}|\[[^\r\n]*?\]|.*?)(?=\s+\b${SENSITIVE_TEXT_LABEL}\b\s*[:=]|\r?$|\n)`,
-  'gim',
-);
+const SENSITIVE_TEXT_MARKER_SOURCE = String.raw`(["']?)\b(${SENSITIVE_TEXT_LABEL})\b\1\s*[:=]\s*`;
 
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
   return value !== undefined && Number.isFinite(value) && value >= 0
@@ -49,10 +46,78 @@ function boundedInteger(value: number | undefined, fallback: number, maximum: nu
     : fallback;
 }
 
+function quotedValueEnd(input: string, start: number, quote: string): number {
+  for (let index = start + 1; index < input.length; index++) {
+    if (input[index] === '\\') index++;
+    else if (input[index] === quote) return index + 1;
+  }
+  return input.length;
+}
+
+function structuredValueEnd(input: string, start: number): number {
+  const closing: string[] = [];
+  for (let index = start; index < input.length; index++) {
+    const character = input[index];
+    if (character === '"' || character === "'") {
+      index = quotedValueEnd(input, index, character) - 1;
+      continue;
+    }
+    if (character === '{') closing.push('}');
+    else if (character === '[') closing.push(']');
+    else if (character === closing.at(-1)) {
+      closing.pop();
+      if (closing.length === 0) return index + 1;
+    }
+  }
+  return input.length;
+}
+
+function unquotedValueEnd(input: string, start: number): number {
+  const candidates = [input.length];
+  const nextMarker = new RegExp(SENSITIVE_TEXT_MARKER_SOURCE, 'gi');
+  nextMarker.lastIndex = start;
+  const marker = nextMarker.exec(input);
+  if (marker) candidates.push(marker.index);
+  const stackBoundary = /\r?\n\s+(?:at\b|Caused by\b)/gi;
+  stackBoundary.lastIndex = start;
+  const stack = stackBoundary.exec(input);
+  if (stack) candidates.push(stack.index);
+  const jsonBoundary = /[,}\]]\s*(?=(?:["'][^"']+["']\s*:|[}\]]|$))/g;
+  jsonBoundary.lastIndex = start;
+  const json = jsonBoundary.exec(input);
+  if (json) candidates.push(json.index);
+  return Math.min(...candidates);
+}
+
+function redactSensitiveTextValues(input: string, replacement: string): string {
+  const marker = new RegExp(SENSITIVE_TEXT_MARKER_SOURCE, 'gi');
+  let cursor = 0;
+  let output = '';
+  for (let match = marker.exec(input); match; match = marker.exec(input)) {
+    if (match.index < cursor) continue;
+    const valueStart = marker.lastIndex;
+    const first = input[valueStart];
+    let valueEnd: number;
+    let redacted = replacement;
+    if (first === '"' || first === "'") {
+      valueEnd = quotedValueEnd(input, valueStart, first);
+      redacted = `${first}${replacement}${first}`;
+    } else if (first === '{' || first === '[') {
+      valueEnd = structuredValueEnd(input, valueStart);
+    } else {
+      valueEnd = unquotedValueEnd(input, valueStart);
+    }
+    output += input.slice(cursor, valueStart) + redacted;
+    cursor = valueEnd;
+    marker.lastIndex = valueEnd;
+  }
+  return output + input.slice(cursor);
+}
+
 function sanitizeString(input: string, replacement: string, maxLength: number): string {
-  return input
+  const boundedInput = input.slice(0, maxLength + 4_096);
+  return redactSensitiveTextValues(boundedInput, replacement)
     .replace(/\bBearer\s+[^\s,;]+/gi, `Bearer ${replacement}`)
-    .replace(SENSITIVE_TEXT_VALUE, `$1=${replacement}`)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, `$1${replacement}@`)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, replacement)
     .slice(0, maxLength);

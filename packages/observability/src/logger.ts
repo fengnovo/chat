@@ -47,6 +47,12 @@ function safeString(value: unknown, maximum = 128): string | undefined {
   return output;
 }
 
+function safeMessage(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const output = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 1_024);
+  return output || undefined;
+}
+
 function stableError(error: unknown): { type: string; code?: string } | undefined {
   if (error === null || typeof error !== 'object') return undefined;
   const type = safeString(ownValue(error, 'type') ?? ownValue(error, 'name') ?? (error instanceof Error ? 'Error' : undefined));
@@ -108,7 +114,7 @@ export function createObservabilityLogger(
       const error = stableError(bindings.error ?? bindings.err);
       if (error !== undefined) record.error = error;
       const rawMessage = typeof first === 'string' ? first : second;
-      const message = safeString(redactTelemetryValue(rawMessage, { maxStringLength: 1_024 }), 1_024);
+      const message = safeMessage(redactTelemetryValue(rawMessage, { maxStringLength: 1_024 }));
       if (message !== undefined) record.msg = message;
       try { destination.write(`${JSON.stringify(record)}\n`); } catch {}
     };
