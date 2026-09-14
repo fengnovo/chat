@@ -39,6 +39,10 @@ const SENSITIVE_KEYS = new Set([
 
 const SENSITIVE_TEXT_LABEL = String.raw`(?:authorization|cookie|set[-_ ]?cookie|password|token|secret|api[-_ ]?key|prompt|completion|tool[-_ ]?(?:args?|arguments?)|document[-_ ]?contents?)`;
 const SENSITIVE_TEXT_MARKER_SOURCE = String.raw`(["']?)\b(${SENSITIVE_TEXT_LABEL})\b\1\s*[:=]\s*`;
+const ESCAPED_SENSITIVE_TEXT_MARKER = new RegExp(
+  String.raw`\\+["']\s*\b${SENSITIVE_TEXT_LABEL}\b\s*\\+["']\s*[:=]`,
+  'i',
+);
 
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
   return value !== undefined && Number.isFinite(value) && value >= 0
@@ -116,6 +120,9 @@ function redactSensitiveTextValues(input: string, replacement: string): string {
 
 function sanitizeString(input: string, replacement: string, maxLength: number): string {
   const boundedInput = input.slice(0, maxLength + 4_096);
+  // Multiply serialized content has no reliable index mapping back to the source.
+  // Prefer dropping the bounded free-form value over risking partial disclosure.
+  if (ESCAPED_SENSITIVE_TEXT_MARKER.test(boundedInput)) return replacement.slice(0, maxLength);
   return redactSensitiveTextValues(boundedInput, replacement)
     .replace(/\bBearer\s+[^\s,;]+/gi, `Bearer ${replacement}`)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, `$1${replacement}@`)

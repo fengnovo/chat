@@ -116,6 +116,25 @@ test('redacts JSON-quoted and multiline content values from Error stacks', () =>
   }
 });
 
+test('escaped JSON content fails closed in Error stacks', () => {
+  const error = Object.assign(new Error('escaped content rejected'), {
+    name: 'ContentError', code: 'CONTENT_REJECTED',
+  });
+  error.stack = String.raw`ContentError: payload="{\"prompt\":\"STACK_ESCAPED_PROMPT_LEAK\",\"completion\":\"STACK_ESCAPED_COMPLETION_LEAK\",\"toolArgs\":{\"input\":\"STACK_ESCAPED_TOOL_LEAK\"},\"documentContent\":\"STACK_ESCAPED_DOCUMENT_LEAK\"}"`;
+
+  const result = redactTelemetryValue(error) as { type?: string; code?: string; stack?: string };
+  assert.equal(result.type, 'ContentError');
+  assert.equal(result.code, 'CONTENT_REJECTED');
+  assert.match(result.stack ?? '', /\[REDACTED\]/);
+  assert.ok((result.stack?.length ?? Infinity) <= 1_024);
+  for (const secret of [
+    'STACK_ESCAPED_PROMPT_LEAK', 'STACK_ESCAPED_COMPLETION_LEAK',
+    'STACK_ESCAPED_TOOL_LEAK', 'STACK_ESCAPED_DOCUMENT_LEAK',
+  ]) {
+    assert.equal(result.stack?.includes(secret), false, `Error stack leaked ${secret}`);
+  }
+});
+
 test('exports composable Pino redact paths without mutating the shared defaults', () => {
   assert.deepEqual(PINO_REDACT_PATHS, [
     'req.headers.authorization', 'req.headers.cookie', 'password', 'token', 'secret',

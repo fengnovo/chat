@@ -161,3 +161,30 @@ test('JSON-style and multiline content stays out of bounded logger messages', as
     assert.equal(lines.join('').includes(secret), false, `logger leaked ${secret}`);
   }
 });
+
+test('escaped JSON content fails closed in logger messages', async () => {
+  const runtime = await startObservability(
+    loadObservabilityConfig({}, { serviceName: 'test-service', serviceVersion: '1' }),
+  );
+  const lines: string[] = [];
+  const logger = createObservabilityLogger(runtime, {
+    service: 'worker', environment: 'test', destination: { write(chunk) { lines.push(chunk); } },
+  });
+  const error = Object.assign(new Error('escaped content rejected'), {
+    name: 'ContentError', code: 'CONTENT_REJECTED',
+  });
+  const message = String.raw`payload="{\"prompt\":\"ESCAPED_JSON_PROMPT_LEAK\",\"completion\":\"ESCAPED_JSON_COMPLETION_LEAK\",\"toolArgs\":{\"input\":\"ESCAPED_JSON_TOOL_LEAK\"},\"documentContent\":\"ESCAPED_JSON_DOCUMENT_LEAK\"}"`;
+
+  logger.error(error, message);
+
+  const record = JSON.parse(lines[0] ?? '{}') as { msg?: string; error?: unknown };
+  assert.deepEqual(record.error, { type: 'ContentError', code: 'CONTENT_REJECTED' });
+  assert.match(record.msg ?? '', /\[REDACTED\]/);
+  assert.ok((record.msg?.length ?? Infinity) <= 1_024);
+  for (const secret of [
+    'ESCAPED_JSON_PROMPT_LEAK', 'ESCAPED_JSON_COMPLETION_LEAK',
+    'ESCAPED_JSON_TOOL_LEAK', 'ESCAPED_JSON_DOCUMENT_LEAK',
+  ]) {
+    assert.equal(lines[0]?.includes(secret), false, `logger leaked ${secret}`);
+  }
+});
