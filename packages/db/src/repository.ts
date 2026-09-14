@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   AgentEvent,
   AuthContext,
+  ObservabilityContextPayload,
   PersistedAgentEvent,
   RunImageAttachment,
   RunJob,
@@ -518,6 +519,7 @@ export class AgentRepository {
       knowledgeBaseIds?: string[];
       attachments?: RunImageAttachment[];
       idempotencyKey?: string;
+      observabilityContext?: ObservabilityContextPayload;
     },
   ): Promise<{ run: RunRecord; created: boolean; outboxId?: string }> {
     return inTransaction(this.pool, async (client) => {

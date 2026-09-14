@@ -280,6 +280,17 @@ export const runImageAttachmentSchema = z.object({
 });
 export type RunImageAttachment = z.infer<typeof runImageAttachmentSchema>;
 
+/**
+ * 随 Outbox/BullMQ payload 持久化的最小观测上下文。
+ * 只携带 W3C Trace Context 和内部 request ID；不传播 baggage，
+ * 不包含 prompt、用户 token 或请求体，旧 payload 缺省该字段仍可消费。
+ */
+export const observabilityContextSchema = z.object({
+  traceparent: z.string().max(256).optional(),
+  tracestate: z.string().max(512).optional(),
+  requestId: z.string().max(128).optional(),
+});
+
 export const runJobSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('start'),
@@ -293,6 +304,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     approvalMode: z.enum(['manual', 'session']).optional(),
     knowledgeBaseIds: knowledgeBaseIdsSchema,
     attachments: z.array(runImageAttachmentSchema).max(5).default([]),
+    observability: observabilityContextSchema.optional(),
   }),
   z.object({
     kind: z.literal('resume-approval'),
@@ -304,6 +316,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     decision: approvalDecisionSchema,
     approvalMode: z.enum(['manual', 'session']).optional(),
     knowledgeBaseIds: knowledgeBaseIdsSchema,
+    observability: observabilityContextSchema.optional(),
   }),
   z.object({
     kind: z.literal('resume-question'),
@@ -315,10 +328,12 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     answer: questionAnswerSchema,
     approvalMode: z.enum(['manual', 'session']).optional(),
     knowledgeBaseIds: knowledgeBaseIdsSchema,
+    observability: observabilityContextSchema.optional(),
   }),
 ]);
 
 export type RunJob = z.infer<typeof runJobSchema>;
+export type ObservabilityContextPayload = z.infer<typeof observabilityContextSchema>;
 
 export interface AuthContext {
   userId: string;

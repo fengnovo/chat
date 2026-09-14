@@ -30,5 +30,9 @@ export function getRegisteredObservability(): Promise<ObservabilityRuntime> | un
     : undefined;
 }
 
-/** Importing this module with Node --import initializes telemetry before app code. */
-export const registeredObservability = await registerObservability();
+/**
+ * Importing this module with Node --import initializes telemetry before app code.
+ * The promise itself is exported so getRegisteredObservability() and this binding
+ * are the same reusable value; consumers await it.
+ */
+export const registeredObservability: Promise<ObservabilityRuntime> = registerObservability();
