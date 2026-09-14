@@ -91,6 +91,7 @@ async function main() {
     console.log('[desktop] starting local infrastructure');
     await runCommand(pnpmCommand, ['infra:up'], workspaceRoot);
     await runCommand(pnpmCommand, ['db:migrate'], workspaceRoot);
+    await runCommand(pnpmCommand, ['db:seed'], workspaceRoot);
     localServices = startLocalServices();
     console.log(`[desktop] waiting for Web at ${webUrl}`);
     await waitForWeb(webUrl, localServices);
