@@ -16,6 +16,7 @@ const job: RunJob = {
   message: 'test',
   workspacePath: '/tmp/workspace',
   knowledgeBaseIds: [],
+  attachments: [],
 };
 
 const dispatch: DispatchOutboxRecord = {

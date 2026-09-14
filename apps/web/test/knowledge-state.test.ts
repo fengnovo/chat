@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { KnowledgeBasePicker, toggleKnowledgeBase, knowledgeBaseIdsForChat } from '../app/components/resilient-chat/knowledge-base-picker';
+import { KnowledgeBaseMenu, toggleKnowledgeBase, knowledgeBaseIdsForChat, persistKnowledgeBaseIds } from '../app/components/resilient-chat/knowledge-base-picker';
 import { messagesFromHistory } from '../app/components/resilient-chat/utils';
 
 test('knowledge picker toggles one id without dropping other selections', () => {
@@ -11,19 +11,22 @@ test('knowledge picker toggles one id without dropping other selections', () => 
   assert.deepEqual(toggleKnowledgeBase(['a', 'b'], 'c'), ['a', 'b', 'c']);
 });
 
-test('knowledge picker persists selections by chat id', () => {
+test('knowledge picker distinguishes never-set (null) from explicitly empty', () => {
   const storage = new Map<string, string>();
-  assert.deepEqual(knowledgeBaseIdsForChat('chat-1', storage), []);
+  assert.equal(knowledgeBaseIdsForChat('chat-1', storage), null);
   storage.set('knowledge-bases:chat-1', JSON.stringify(['kb-1']));
   assert.deepEqual(knowledgeBaseIdsForChat('chat-1', storage), ['kb-1']);
+  assert.equal(knowledgeBaseIdsForChat('chat-2', storage), null);
+  persistKnowledgeBaseIds('chat-2', [], storage);
   assert.deepEqual(knowledgeBaseIdsForChat('chat-2', storage), []);
 });
 
-test('knowledge picker links to the knowledge management page', () => {
-  const html = renderToStaticMarkup(createElement(KnowledgeBasePicker, {
-    chatId: 'chat-1',
-    bases: [],
-    value: [],
+test('knowledge menu links to the knowledge management page', () => {
+  const html = renderToStaticMarkup(createElement(KnowledgeBaseMenu, {
+    bases: [{ id: 'kb-1', name: 'keen-test' }],
+    value: ['kb-1'],
+    onToggle: () => undefined,
+    onChangeAll: () => undefined,
   }));
 
   assert.match(html, /href="\/knowledge"/);

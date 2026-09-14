@@ -1,5 +1,7 @@
 import { useChat } from '@ai-sdk/react';
 import { WorkflowChatTransport } from '@ai-sdk/workflow';
+import type { FileUIPart } from 'ai';
+import Link from 'next/link';
 import {
   type CSSProperties,
   type FormEvent,
@@ -34,7 +36,11 @@ import {
 import type { TouchedFile } from './file-panel';
 import { Icon } from './icon';
 import { Message, ThinkingRow } from './message';
-import { KnowledgeBasePicker, knowledgeBaseIdsForChat } from './knowledge-base-picker';
+import {
+  knowledgeBaseIdsForChat,
+  persistKnowledgeBaseIds,
+  toggleKnowledgeBase,
+} from './knowledge-base-picker';
 import { UserMenu } from '../auth/user-menu';
 import { apiFetch } from './api';
 import { PendingInteraction } from './pending-interaction';
@@ -154,7 +160,7 @@ function ChatRuntime() {
   const [notice, setNotice] = useState<string | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<Array<{ id: string; name: string; status?: string }>>([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>(() =>
-    typeof window === 'undefined' ? [] : knowledgeBaseIdsForChat(conversation.chatId),
+    typeof window === 'undefined' ? [] : knowledgeBaseIdsForChat(conversation.chatId) ?? [],
   );
   const sessionRef = useRef(new ResilientSession());
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -200,8 +206,33 @@ function ChatRuntime() {
   }, []);
   useEffect(() => { void fetchKnowledgeBases().then(setKnowledgeBases).catch(() => undefined); }, []);
   useEffect(() => {
-    setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId));
+    setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId) ?? []);
   }, [conversation.chatId]);
+  // 知识库列表首次加载后，如果该会话从未做过选择，则默认全选并记住；
+  // 用户之后主动清空（保存为 []）不会再被覆盖。
+  useEffect(() => {
+    if (knowledgeBases.length === 0) return;
+    if (knowledgeBaseIdsForChat(conversation.chatId) !== null) return;
+    const allIds = knowledgeBases.map((base) => base.id);
+    persistKnowledgeBaseIds(conversation.chatId, allIds);
+    setKnowledgeBaseIds(allIds);
+  }, [knowledgeBases, conversation.chatId]);
+
+  const handleToggleKnowledgeBase = useCallback(
+    (id: string) => {
+      setKnowledgeBaseIds((current) => {
+        const next = toggleKnowledgeBase(current, id);
+        persistKnowledgeBaseIds(chatIdRef.current, next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleChangeKnowledgeBases = useCallback((ids: string[]) => {
+    persistKnowledgeBaseIds(chatIdRef.current, ids);
+    setKnowledgeBaseIds(ids);
+  }, []);
 
   // 当前会话的历史文件记录。运行结束后会重新拉取（refreshHistoryFiles），
   // 否则新一轮 run 一开始清空实时工具记录时，上一轮生成的文件会从面板里消失。
@@ -853,9 +884,9 @@ function ChatRuntime() {
     }
   }
 
-  async function submitText(value: string) {
+  async function submitText(value: string, files: FileUIPart[] = []) {
     const trimmed = value.trim();
-    if (!trimmed || isBusy || error) return;
+    if ((!trimmed && files.length === 0) || isBusy || error) return;
     stickToBottomRef.current = true;
     setInput('');
     setSuggestions([]);
@@ -868,12 +899,14 @@ function ChatRuntime() {
     setTrace([
       localEvent('request', 'running', '正在提交新消息', 'useChat 已锁定输入并创建请求'),
     ]);
-    await sendMessage({ text: trimmed });
+    await sendMessage(
+      files.length > 0 ? { text: trimmed, files } : { text: trimmed },
+    );
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>, files: FileUIPart[]) {
     event.preventDefault();
-    void submitText(input);
+    void submitText(input, files);
   }
 
   async function handleConnectionRecovery() {
@@ -1237,16 +1270,9 @@ function ChatRuntime() {
             </button>
           </div>
           <div className="topbar-actions">
-            <KnowledgeBasePicker chatId={conversation.chatId} bases={knowledgeBases} value={knowledgeBaseIds} onChange={setKnowledgeBaseIds} />
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={filesOpen ? '隐藏文件面板' : '显示文件面板'}
-              aria-expanded={filesOpen}
-              onClick={() => setFilesOpen((current) => !current)}
-            >
-              <Icon name="folder" size={16} />
-            </button>
+            <Link className="knowledge-manage-link" href="/knowledge">
+              管理知识库
+            </Link>
             <button
               className="icon-button"
               type="button"
@@ -1390,10 +1416,14 @@ function ChatRuntime() {
           }
           input={input}
           isBusy={isBusy}
+          knowledgeBases={knowledgeBases}
+          knowledgeBaseIds={knowledgeBaseIds}
           onChange={setInput}
+          onChangeKnowledgeBases={handleChangeKnowledgeBases}
           onStop={() => void handleStop()}
           onSubmit={handleSubmit}
           onSuggestion={submitText}
+          onToggleKnowledgeBase={handleToggleKnowledgeBase}
           suggestions={suggestions}
           todos={agentTodos}
         />

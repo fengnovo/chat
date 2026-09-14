@@ -137,3 +137,50 @@ test('requires knowledge base selections on every run job kind', () => {
     assert.equal(runJobSchema.safeParse(withoutSnapshot).success, false);
   }
 });
+
+test('start job accepts up to five inline image attachments and defaults to empty', () => {
+  const base = {
+    kind: 'start' as const,
+    tenantId: '00000000-0000-4000-8000-000000000010',
+    userId: '00000000-0000-4000-8000-000000000011',
+    sessionId: '00000000-0000-4000-8000-000000000012',
+    runId: '00000000-0000-4000-8000-000000000013',
+    workspacePath: '/workspace',
+    knowledgeBaseIds: [],
+    message: 'q',
+  };
+  const image = {
+    kind: 'image' as const,
+    mediaType: 'image/png' as const,
+    dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+  };
+
+  const withoutAttachments = runJobSchema.parse(base);
+  assert.deepEqual(withoutAttachments.kind === 'start' ? withoutAttachments.attachments : [], []);
+
+  assert.equal(
+    runJobSchema.safeParse({ ...base, attachments: [image, image, image, image, image] }).success,
+    true,
+  );
+  assert.equal(
+    runJobSchema.safeParse({
+      ...base,
+      attachments: Array.from({ length: 6 }, () => image),
+    }).success,
+    false,
+  );
+  assert.equal(
+    runJobSchema.safeParse({
+      ...base,
+      attachments: [{ ...image, dataUrl: 'https://example.com/a.png' }],
+    }).success,
+    false,
+  );
+  assert.equal(
+    runJobSchema.safeParse({
+      ...base,
+      attachments: [{ ...image, mediaType: 'image/bmp' }],
+    }).success,
+    false,
+  );
+});

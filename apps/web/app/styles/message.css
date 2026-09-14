@@ -91,6 +91,57 @@
   white-space: pre-wrap;
 }
 
+/* 用户随消息发送的图片/文件附件，右对齐排在文字气泡上方 */
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-bottom: 7px;
+  max-width: min(420px, 100%);
+}
+
+.message-attachment-image {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: block;
+  overflow: hidden;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.message-attachment-image:hover {
+  border-color: #b6aaf2;
+  box-shadow: 0 4px 14px rgb(109 74 255 / 16%);
+}
+
+.message-attachment-image img {
+  display: block;
+  height: 132px;
+  max-width: 100%;
+  object-fit: cover;
+  width: auto;
+}
+
+.message-attachment-file {
+  align-items: center;
+  background: #f1eff4;
+  border: 1px solid #e8e4eb;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 500;
+  gap: 6px;
+  max-width: 100%;
+  padding: 7px 13px;
+}
+
+.message-attachment-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .markdown-content {
   color: #24212b;
   min-width: 0;

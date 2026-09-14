@@ -19,6 +19,7 @@ import {
   updateSessionSchema,
   uploadProjectSchema,
   knowledgeBaseIdsSchema,
+  type RunImageAttachment,
 } from '@repo/contracts';
 import { RepositoryNotFoundError } from '@repo/db';
 import type { FastifyInstance } from 'fastify';
@@ -32,6 +33,88 @@ function idempotencyKey(value: string | string[] | undefined): string | undefine
   const resolved = Array.isArray(value) ? value[0] : value;
   const trimmed = resolved?.trim();
   return trimmed ? trimmed.slice(0, 200) : undefined;
+}
+
+const MAX_CHAT_ATTACHMENTS = 5;
+const MAX_TEXT_ATTACHMENT_BYTES = 200_000;
+const IMAGE_ATTACHMENT_RE = /^data:image\/(jpeg|png|gif|webp);base64,[a-z0-9+/=\r\n]+$/i;
+
+class AttachmentError extends Error {
+  constructor(readonly code: string) {
+    super(code);
+  }
+}
+
+/**
+ * 从用户消息的 file parts 中拆出：
+ * - 图片附件（image/* data URL）→ 交给视觉模型做多模态输入；
+ * - 文本附件（text/* data URL，≤200KB）→ 解码后以内联文本拼进消息正文。
+ * 其他类型直接拒绝，避免把模型读不了的二进制静默吞掉。
+ */
+function extractChatAttachments(
+  parts: unknown[],
+  text: string,
+): { message: string; images: RunImageAttachment[] } {
+  const fileParts = parts.filter(
+    (part): part is Record<string, unknown> =>
+      typeof part === 'object' &&
+      part !== null &&
+      (part as { type?: unknown }).type === 'file',
+  );
+  if (fileParts.length > MAX_CHAT_ATTACHMENTS) {
+    throw new AttachmentError('too_many_attachments');
+  }
+
+  const images: RunImageAttachment[] = [];
+  let appendedText = '';
+  for (const part of fileParts) {
+    const mediaType = String(part.mediaType ?? '');
+    const filename =
+      typeof part.filename === 'string' && part.filename.trim()
+        ? part.filename.trim().slice(0, 255)
+        : undefined;
+    const url = String(part.url ?? '');
+
+    if (mediaType.startsWith('image/')) {
+      if (!IMAGE_ATTACHMENT_RE.test(url) || url.length > 14_000_000) {
+        throw new AttachmentError('invalid_image_attachment');
+      }
+      images.push({
+        kind: 'image',
+        mediaType: `image/${mediaType.slice(6).toLowerCase()}` as RunImageAttachment['mediaType'],
+        ...(filename ? { filename } : {}),
+        dataUrl: url,
+      });
+      continue;
+    }
+
+    if (mediaType.startsWith('text/')) {
+      const comma = url.indexOf(',');
+      const meta = comma >= 0 ? url.slice(0, comma) : '';
+      const payload = comma >= 0 ? url.slice(comma + 1) : '';
+      let decoded: string;
+      try {
+        decoded = meta.includes(';base64')
+          ? Buffer.from(payload, 'base64').toString('utf8')
+          : decodeURIComponent(payload);
+      } catch {
+        throw new AttachmentError('invalid_text_attachment');
+      }
+      if (Buffer.byteLength(decoded, 'utf8') > MAX_TEXT_ATTACHMENT_BYTES) {
+        throw new AttachmentError('attachment_too_large');
+      }
+      appendedText += `\n\n[附件 ${filename ?? '文本文件'}]\n${decoded}`;
+      continue;
+    }
+
+    throw new AttachmentError('unsupported_attachment_type');
+  }
+
+  const merged = `${text}${appendedText}`.trim();
+  return {
+    message: merged || (images.length > 0 ? '（用户发送了图片，请结合图片内容回答）' : ''),
+    images,
+  };
 }
 
 const sessionListQuerySchema = z.object({
@@ -526,7 +609,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       .reverse()
       .find((message) => message.role === 'user');
     const parts = Array.isArray(lastUser?.parts) ? lastUser.parts : [];
-    const message =
+    const text =
       typeof lastUser?.content === 'string'
         ? lastUser.content
         : parts
@@ -536,6 +619,19 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
                 : '',
             )
             .join('');
+
+    let attachments: RunImageAttachment[];
+    let message: string;
+    try {
+      const extracted = extractChatAttachments(parts, text);
+      attachments = extracted.images;
+      message = extracted.message;
+    } catch (error) {
+      if (error instanceof AttachmentError) {
+        return reply.code(400).send({ error: error.code });
+      }
+      throw error;
+    }
     if (!message.trim()) return reply.code(400).send({ error: 'message_required' });
 
     const externalKey = input.chat_id ?? randomUUID();
@@ -558,6 +654,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
         sessionId: session.id,
         message: message.trim(),
         knowledgeBaseIds: input.knowledge_base_ids,
+        attachments,
       });
       if (result.created) services.outbox.wake();
       return streamWorkflowRun(request, reply, services, result.run.id);

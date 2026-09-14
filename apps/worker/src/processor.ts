@@ -293,7 +293,14 @@ export function createRunProcessor(services: ProcessorServices) {
         runtime = await createRuntime(services, job, remotePath, sandbox, controller.signal);
         const events =
           job.kind === 'start'
-            ? runtime.run(job.message)
+            ? runtime.run(
+                job.message,
+                job.attachments.map((attachment) => ({
+                  mediaType: attachment.mediaType,
+                  dataUrl: attachment.dataUrl,
+                  ...(attachment.filename ? { filename: attachment.filename } : {}),
+                })),
+              )
             : job.kind === 'resume-approval'
               ? runtime.resume({
                   kind: 'approval',

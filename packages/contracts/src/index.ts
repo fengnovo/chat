@@ -268,6 +268,18 @@ export const createArtifactUploadSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/i),
 });
 
+/**
+ * 聊天消息附带的图片（多模态视觉输入）。
+ * 以 data URL 内联在 run 派发任务中，模型按 OpenAI 兼容 image_url 结构消费。
+ */
+export const runImageAttachmentSchema = z.object({
+  kind: z.literal('image'),
+  mediaType: z.enum(['image/jpeg', 'image/png', 'image/gif', 'image/webp']),
+  filename: z.string().trim().min(1).max(255).optional(),
+  dataUrl: z.string().startsWith('data:').max(14_000_000),
+});
+export type RunImageAttachment = z.infer<typeof runImageAttachmentSchema>;
+
 export const runJobSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('start'),
@@ -280,6 +292,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     workspaceSource: workspaceSourceSchema.optional(),
     approvalMode: z.enum(['manual', 'session']).optional(),
     knowledgeBaseIds: knowledgeBaseIdsSchema,
+    attachments: z.array(runImageAttachmentSchema).max(5).default([]),
   }),
   z.object({
     kind: z.literal('resume-approval'),

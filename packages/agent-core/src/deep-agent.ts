@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { createResilientModelRouter } from './model-router.js';
 import type {
   AgentResumeInput,
+  ChatImageAttachment,
   HeadlessAgentOptions,
   HeadlessAgentRuntime,
   ModelRouterEvent,
@@ -626,9 +627,24 @@ export async function createDeepAgentRuntime(
     }
   }
 
-  async function* runInitial(message: string): AsyncIterable<AgentEvent> {
+  async function* runInitial(
+    message: string,
+    images: ChatImageAttachment[] = [],
+  ): AsyncIterable<AgentEvent> {
     yield { runId: options.runId, timestamp: timestamp(), type: 'run.started' };
-    yield* execute({ messages: [new HumanMessage(message)], todos: [] });
+    const firstMessage =
+      images.length === 0
+        ? new HumanMessage(message)
+        : new HumanMessage({
+            content: [
+              { type: 'text', text: message },
+              ...images.map((image) => ({
+                type: 'image_url' as const,
+                image_url: { url: image.dataUrl },
+              })),
+            ],
+          });
+    yield* execute({ messages: [firstMessage], todos: [] });
   }
 
   async function* resumeApproval(
@@ -664,8 +680,8 @@ export async function createDeepAgentRuntime(
     backendMode,
     workspacePath: options.workspacePath,
     mcpStatus: [baseMcp.status, knowledgeMcp.status].join('; '),
-    run(message: string) {
-      return runInitial(message);
+    run(message: string, images?: ChatImageAttachment[]) {
+      return runInitial(message, images);
     },
     resume(input: AgentResumeInput) {
       if (input.kind === 'question') {

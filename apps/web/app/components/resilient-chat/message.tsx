@@ -38,12 +38,15 @@ function Message({
   streaming: boolean;
 }) {
   const text = messageText(message);
+  const isUser = message.role === 'user';
   const cards = message.parts.filter((part) => part.type === 'data-card');
+  const fileParts = isUser
+    ? message.parts.filter((part) => part.type === 'file')
+    : [];
   const citations = message.parts.filter((part) => part.type === 'data-citations').flatMap((part) => {
     const data = part.data as { citations?: import('./types').Citation[] };
     return data.citations ?? [];
   });
-  const isUser = message.role === 'user';
 
   return (
     <article className={`message-row ${isUser ? 'is-user' : 'is-assistant'}`}>
@@ -57,6 +60,33 @@ function Message({
           </div>
         )}
         {header}
+        {isUser && fileParts.length > 0 && (
+          <div className="message-attachments">
+            {fileParts.map((part, index) =>
+              part.mediaType.startsWith('image/') ? (
+                <a
+                  className="message-attachment-image"
+                  href={part.url}
+                  key={`${message.id}-file-${index}`}
+                  rel="noreferrer"
+                  target="_blank"
+                  title={part.filename ? `查看大图：${part.filename}` : '查看大图'}
+                >
+                  <img alt={part.filename ?? '聊天图片'} src={part.url} />
+                </a>
+              ) : (
+                <span
+                  className="message-attachment-file"
+                  key={`${message.id}-file-${index}`}
+                  title={part.filename}
+                >
+                  <Icon name="paperclip" size={14} />
+                  {part.filename ?? '附件'}
+                </span>
+              ),
+            )}
+          </div>
+        )}
         <div className={`message-copy ${isUser ? '' : 'markdown-content'}`}>
           {text ? (
             isUser ? (

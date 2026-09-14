@@ -64,11 +64,19 @@ export type AgentResumeInput =
       };
     };
 
+/** 随用户消息一起提交的图片（data URL 内联），用于视觉模型的图文混合输入。 */
+export interface ChatImageAttachment {
+  mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+  /** 完整 data URL（data:image/...;base64,...）。 */
+  dataUrl: string;
+  filename?: string;
+}
+
 export interface HeadlessAgentRuntime {
   readonly backendMode: AgentBackendMode;
   readonly workspacePath: string;
   readonly mcpStatus: string;
-  run(message: string): AsyncIterable<AgentEvent>;
+  run(message: string, images?: ChatImageAttachment[]): AsyncIterable<AgentEvent>;
   resume(input: AgentResumeInput): AsyncIterable<AgentEvent>;
   dispose(): Promise<void>;
 }

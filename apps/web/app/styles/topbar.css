@@ -29,16 +29,22 @@
   align-items: center;
   display: flex;
 }
-.knowledge-picker { display: flex; gap: 8px; align-items: center; font-size: 12px; }
-.knowledge-picker label { display: flex; gap: 3px; align-items: center; }
+
+.topbar-title {
+  gap: 11px;
+  min-width: 0;
+}
+
 .knowledge-manage-link {
   align-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink-soft);
   display: inline-flex;
+  font-size: 13px;
+  font-weight: 500;
   min-height: 36px;
-  padding: 0 10px;
+  padding: 0 12px;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -49,11 +55,6 @@
 .knowledge-manage-link:focus-visible {
   outline: 3px solid rgb(109 74 255 / 24%);
   outline-offset: 2px;
-}
-
-.topbar-title {
-  gap: 11px;
-  min-width: 0;
 }
 
 .topbar-actions {

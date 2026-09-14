@@ -95,6 +95,7 @@ test('createRun persists the authorized knowledge-base snapshot into its dispatc
       approvalMode: 'manual',
       workspaceSource: { type: 'empty' },
       knowledgeBaseIds: [knowledgeBaseId],
+      attachments: [],
     },
   ]);
 });

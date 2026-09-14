@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   AuthContext,
   PersistedAgentEvent,
+  RunImageAttachment,
   RunJob,
   RunStatus,
   WorkspaceSource,
@@ -515,6 +516,7 @@ export class AgentRepository {
       sessionId: string;
       message: string;
       knowledgeBaseIds?: string[];
+      attachments?: RunImageAttachment[];
       idempotencyKey?: string;
     },
   ): Promise<{ run: RunRecord; created: boolean; outboxId?: string }> {
@@ -587,6 +589,7 @@ export class AgentRepository {
         workspacePath: String(session.rows[0].workspace_path),
         approvalMode: session.rows[0].approval_mode as 'manual' | 'session',
         knowledgeBaseIds,
+        attachments: input.attachments ?? [],
         ...(workspaceSource ? { workspaceSource } : {}),
       });
       return { run, created: true, outboxId };
