@@ -12,6 +12,8 @@ pnpm desktop:dev
 
 默认使用 `.env` 中的 `PORT`（没有时使用 3000），所以当前项目通常会打开 `http://localhost:3020`。关闭 Electron 后，自动启动的本地 Web/API/Worker 也会停止。
 
+本地 `AUTH_MODE=password` 时，启动流程会执行幂等 seed，可使用 `admin/admin123`、`owner/owner123` 或 `user/user123` 登录后聊天。
+
 如果基础设施已经由其他进程管理，可以跳过 Docker 和迁移：
 
 ```bash
