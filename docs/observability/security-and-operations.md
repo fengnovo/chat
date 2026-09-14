@@ -18,7 +18,11 @@ An older Git history revision of `.env.example` contained suspected Langfuse cre
 - Langfuse data: 30 days.
 - Production content capture: disabled.
 
-Deletion requests and access audits remain subject to the existing PostgreSQL governance process. Telemetry must use low-cardinality operational identifiers; do not put user IDs, prompts, completions, or secrets into labels.
+Deletion requests and access audits remain subject to the existing PostgreSQL governance process. Telemetry must use low-cardinality operational identifiers; do not put user IDs, prompts, completions, tool inputs or outputs, document contents or metadata, or secrets into labels or captured content.
+
+## Public health responses
+
+Public health responses expose only sanitized status, version, and component summaries. They must never expose secrets, DSNs, raw errors, stack traces, hostnames, or other internal connection details. This is a contract for the health endpoint implementation; observability tests cover the response boundary without requiring the endpoint to be implemented in this task.
 
 ## Operational guardrails
 

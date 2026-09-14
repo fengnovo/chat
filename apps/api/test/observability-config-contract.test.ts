@@ -26,13 +26,20 @@ function readEnvFile(path: URL): Record<string, string> {
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
     const [, key, value] = match ?? [];
-    if (key) values[key] = value ?? '';
+    if (key) {
+      assert.equal(values[key], undefined, `${key} must not be declared more than once`);
+      values[key] = value ?? '';
+    }
   }
   return values;
 }
 
 const local = readEnvFile(new URL('../../../.env.example', import.meta.url));
 const production = readEnvFile(new URL('../../../deploy/env.production.example', import.meta.url));
+const securityPolicy = readFileSync(
+  new URL('../../../docs/observability/security-and-operations.md', import.meta.url),
+  'utf8',
+);
 
 test('local and production examples expose the same observability contract', () => {
   assert.deepEqual(
@@ -61,5 +68,14 @@ test('examples use safe capture defaults and valid sampling rates', () => {
       const rate = Number(values[key]);
       assert.ok(Number.isFinite(rate) && rate >= 0 && rate <= 1, `${key} must be in [0,1]`);
     }
+  }
+});
+
+test('public health contract requires sanitized summaries without internal details', () => {
+  for (const phrase of [
+    'sanitized status, version, and component summaries',
+    'never expose secrets, DSNs, raw errors, stack traces, hostnames',
+  ]) {
+    assert.ok(securityPolicy.includes(phrase), `health policy must include: ${phrase}`);
   }
 });

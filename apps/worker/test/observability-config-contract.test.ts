@@ -15,7 +15,10 @@ function readEnvFile(path: URL): Record<string, string> {
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
     const [, key, value] = match ?? [];
-    if (key) values[key] = value ?? '';
+    if (key) {
+      assert.equal(values[key], undefined, `${key} must not be declared more than once`);
+      values[key] = value ?? '';
+    }
   }
   return values;
 }
