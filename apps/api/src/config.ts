@@ -1,15 +1,43 @@
 import path from 'node:path';
+import { isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 import { z } from 'zod';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const DEFAULT_TRUST_PROXY_CIDRS = [
+  '127.0.0.0/8',
+  '::1/128',
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+].join(',');
+
+function parseTrustedProxyCidrs(value: string): string[] {
+  const entries = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (entries.length === 0) {
+    throw new Error('TRUST_PROXY_CIDRS must contain at least one CIDR');
+  }
+  for (const entry of entries) {
+    const match = entry.match(/^(.+)\/(\d+)$/);
+    const address = match?.[1];
+    const prefix = Number(match?.[2]);
+    const family = address ? isIP(address) : 0;
+    const maximum = family === 4 ? 32 : family === 6 ? 128 : -1;
+    if (maximum < 0 || !Number.isInteger(prefix) || prefix < 0 || prefix > maximum) {
+      throw new Error(`Invalid TRUST_PROXY_CIDRS entry: ${entry}`);
+    }
+  }
+  return entries;
+}
 
 const schema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     API_HOST: z.string().default('127.0.0.1'),
     API_PORT: z.coerce.number().int().positive().default(8000),
+    API_VERSION: z.string().trim().min(1).max(64).default('0.1.0'),
+    TRUST_PROXY_CIDRS: z.string().default(DEFAULT_TRUST_PROXY_CIDRS),
     WEB_ORIGIN: z.string().url().default('http://localhost:3000'),
     DATABASE_URL: z
       .string()
@@ -113,6 +141,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     path.join(repositoryRoot, 'data/sandboxes');
   return {
     ...value,
+    TRUST_PROXY_CIDRS: parseTrustedProxyCidrs(value.TRUST_PROXY_CIDRS),
     DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: path.resolve(value.WORKSPACE_ROOT),
     SIGNUP_TENANT_ID: value.SIGNUP_TENANT_ID ?? value.DEV_TENANT_ID,

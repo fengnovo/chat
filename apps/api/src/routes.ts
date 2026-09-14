@@ -22,6 +22,7 @@ import {
   type RunImageAttachment,
 } from '@repo/contracts';
 import { RepositoryNotFoundError } from '@repo/db';
+import { redactTelemetryValue } from '@repo/observability';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -157,10 +158,6 @@ function projectUploadBytes(files: Array<{ contentBase64: string }>) {
 
 const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function publicHealthFailure(component: string) {
-  return { status: 'not_ready', component, error: 'dependency_unavailable' } as const;
-}
-
 /**
  * 删除会话时级联清理它独占的沙箱文件目录。
  * docker 模式下文件在宿主 SANDBOX_SESSIONS_ROOT/<workspaceId>；
@@ -191,24 +188,53 @@ async function removeSessionWorkspace(
 }
 
 export async function registerRoutes(app: FastifyInstance, services: ApiServices) {
-  app.get('/health/live', async () => ({ status: 'ok' }));
-  app.get('/health/ready', async (_request, reply) => {
-    try {
-      await services.repository.ping();
-    } catch {
-      return reply.code(503).send(publicHealthFailure('repository'));
+  const version = services.config?.API_VERSION ?? '0.1.0';
+  const observabilityHealth = services.observability?.health ?? {
+    enabled: false,
+    exporter: 'disabled' as const,
+  };
+  app.get('/health/live', async () => ({
+    status: 'ok',
+    version,
+    checks: { server: { status: 'ok' } },
+    observability: observabilityHealth,
+  }));
+  app.get('/health/ready', async (request, reply) => {
+    const dependencies = [
+      ['repository', () => services.repository.ping()],
+      ['publisher', () => services.publisher.ping()],
+      ['artifacts', () => services.artifacts.ping()],
+    ] as const;
+    const results = await Promise.allSettled(
+      dependencies.map(([, check]) => check()),
+    );
+    const checks: Record<string, { status: 'ok' | 'not_ready' }> = {};
+    let failedComponent: string | undefined;
+    results.forEach((result, index) => {
+      const component = dependencies[index]![0];
+      checks[component] = { status: result.status === 'fulfilled' ? 'ok' : 'not_ready' };
+      if (result.status === 'rejected') {
+        failedComponent ??= component;
+        request.log.error(
+          { component, error: redactTelemetryValue(result.reason) },
+          'readiness dependency failed',
+        );
+      }
+    });
+    const summary = {
+      version,
+      checks,
+      observability: observabilityHealth,
+    };
+    if (failedComponent) {
+      return reply.code(503).send({
+        status: 'not_ready',
+        ...summary,
+        component: failedComponent,
+        error: 'dependency_unavailable',
+      });
     }
-    try {
-      await services.publisher.ping();
-    } catch {
-      return reply.code(503).send(publicHealthFailure('publisher'));
-    }
-    try {
-      await services.artifacts.ping();
-    } catch {
-      return reply.code(503).send(publicHealthFailure('artifacts'));
-    }
-    return { status: 'ready' };
+    return { status: 'ready', ...summary };
   });
 
   app.post('/api/agent/sessions', async (request, reply) => {

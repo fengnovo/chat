@@ -1,5 +1,6 @@
 import type { PersistedAgentEvent } from '@repo/contracts';
 import { runEventsChannel } from '@repo/contracts';
+import { redactTelemetryValue } from '@repo/observability';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ApiServices } from './types.js';
@@ -109,8 +110,28 @@ export async function streamWorkflowRun(
   const initialChunks = chunksFrom(runId, initialEvents);
   let chunkCursor = requestedStart(request, initialChunks.length);
   let closed = false;
+  const telemetry = services.observability?.startSse('chat');
+  let unsubscribe: (() => void) | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const finish = (reason: 'client' | 'server' | 'error') => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe?.();
+    telemetry?.finish(reason);
+    if (reason !== 'client') reply.raw.end();
+  };
+  const fail = (error: unknown) => {
+    request.log.warn({ error: redactTelemetryValue(error) }, 'workflow SSE stream failed');
+    finish('error');
+  };
+  reply.raw.once('close', () => finish('client'));
+  reply.raw.once('error', fail);
 
   reply.hijack();
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(name, value);
+  }
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
@@ -119,8 +140,10 @@ export async function streamWorkflowRun(
     'x-workflow-run-id': runId,
     'x-workflow-stream-tail-index': String(Math.max(initialChunks.length - 1, 0)),
     'x-vercel-ai-ui-message-stream': 'v1',
+    'x-request-id': request.id,
   });
   reply.raw.flushHeaders();
+  telemetry?.firstByte();
 
   // flush 期间到达的通知必须排队重跑，不能直接丢弃：
   // 最后一次通知（通常是 run.completed）若被丢掉，finish 永远不会发出，
@@ -129,35 +152,34 @@ export async function streamWorkflowRun(
     // 已经收尾：后续通知直接视为完成，避免重复 end()。
     if (closed) return true;
     const events = await services.repository.listEvents(request.auth, runId, 0, 100_000);
+    if (closed) return true;
     const chunks = chunksFrom(runId, events);
     for (const chunk of chunks.slice(chunkCursor)) {
       reply.raw.write(frame(chunk));
       chunkCursor += 1;
     }
     if (chunks.some((chunk) => chunk.type === 'finish')) {
-      closed = true;
-      reply.raw.end();
+      finish('server');
       return true;
     }
     return false;
   });
 
-  const unsubscribe = await services.streamSubscriptions.subscribe(
-    runEventsChannel(runId),
-    () => void flush(),
-    (error: Error) =>
-      request.log.warn({ error }, 'workflow SSE subscriber error'),
-  );
-  await flush();
-
-  const heartbeat = setInterval(() => {
-    if (!closed) reply.raw.write(': heartbeat\n\n');
-  }, 15_000);
-  request.raw.on('close', () => {
-    closed = true;
-    clearInterval(heartbeat);
-    unsubscribe();
-  });
+  try {
+    unsubscribe = await services.streamSubscriptions.subscribe(
+      runEventsChannel(runId),
+      () => void flush().catch(fail),
+      fail,
+    );
+    if (closed) { unsubscribe(); return; }
+    await flush();
+    if (closed) return;
+    heartbeat = setInterval(() => {
+      if (!closed) reply.raw.write(': heartbeat\n\n');
+    }, 15_000);
+  } catch (error) {
+    fail(error);
+  }
 }
 
 export { chunksFrom, createCoalescedRunner };

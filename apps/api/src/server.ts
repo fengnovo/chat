@@ -3,8 +3,20 @@ import { buildEmbeddingProfile } from '@repo/knowledge-graphrag';
 
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
+import { loadObservabilityConfig, redactTelemetryValue } from '@repo/observability';
+import { registeredObservability } from '@repo/observability/register';
+import { createApiObservability } from './observability.js';
 
 const config = loadConfig();
+const telemetryConfig = loadObservabilityConfig(process.env, {
+  serviceName: 'agent-api', serviceVersion: config.API_VERSION,
+});
+const runtime = await registeredObservability;
+const observability = createApiObservability(runtime, {
+  enabled: telemetryConfig.enabled,
+  serviceVersion: telemetryConfig.serviceVersion,
+  exporter: telemetryConfig.enabled ? 'configured' : 'disabled',
+});
 const database = createDatabase(config.DATABASE_URL);
 
 if (!config.KNOWLEDGE_EMBEDDING_PROFILE) {
@@ -15,6 +27,7 @@ const embeddingProfile = buildEmbeddingProfile(config.KNOWLEDGE_EMBEDDING_PROFIL
 await migrateDatabase(database.pool);
 const app = await buildApp({
   config,
+  observability,
   repository: database.repository,
   knowledgeRepository: new KnowledgeRepository(database.pool, { embeddingProfile }),
 });
@@ -26,9 +39,11 @@ const shutdown = async () => {
   try {
     await app.close();
     await database.repository.close();
+    await runtime.shutdown();
     process.exit(0);
   } catch (error) {
-    app.log.error({ error }, 'API shutdown failed');
+    await runtime.shutdown();
+    app.log.error({ error: redactTelemetryValue(error) }, 'API shutdown failed');
     process.exit(1);
   }
 };

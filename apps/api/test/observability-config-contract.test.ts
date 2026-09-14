@@ -96,6 +96,9 @@ test('ready health responses redact dependency failure details', async () => {
   assert.equal(response.statusCode, 503);
   assert.deepEqual(response.json(), {
     status: 'not_ready',
+    version: '0.1.0',
+    checks: { repository: { status: 'not_ready' }, publisher: { status: 'ok' }, artifacts: { status: 'ok' } },
+    observability: { enabled: false, exporter: 'disabled' },
     component: 'repository',
     error: 'dependency_unavailable',
   });

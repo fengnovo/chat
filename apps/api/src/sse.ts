@@ -1,5 +1,6 @@
 import type { PersistedAgentEvent } from '@repo/contracts';
 import { runEventsChannel } from '@repo/contracts';
+import { redactTelemetryValue } from '@repo/observability';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ApiServices } from './types.js';
@@ -26,19 +27,40 @@ export async function streamAgentEvents(
   const run = await services.repository.getRun(request.auth, runId);
   if (!run) return reply.code(404).send({ error: 'run_not_found' });
 
+  const telemetry = services.observability?.startSse('events');
+  let cursor = parseCursor(request);
+  let flushing = false;
+  let closed = false;
+  let unsubscribe: (() => void) | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const finish = (reason: 'client' | 'server' | 'error') => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe?.();
+    telemetry?.finish(reason);
+    if (reason !== 'client') reply.raw.end();
+  };
+  const fail = (error: unknown) => {
+    request.log.warn({ error: redactTelemetryValue(error) }, 'SSE stream failed');
+    finish('error');
+  };
+  reply.raw.once('close', () => finish('client'));
+  reply.raw.once('error', fail);
   reply.hijack();
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(name, value);
+  }
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
     'x-agent-run-id': runId,
+    'x-request-id': request.id,
   });
   reply.raw.flushHeaders();
-
-  let cursor = parseCursor(request);
-  let flushing = false;
-  let closed = false;
+  telemetry?.firstByte();
 
   const flush = async () => {
     if (flushing || closed) return;
@@ -46,6 +68,7 @@ export async function streamAgentEvents(
     try {
       for (;;) {
         const events = await services.repository.listEvents(request.auth, runId, cursor);
+        if (closed) return;
         if (events.length === 0) break;
         for (const event of events) {
           if (event.seq <= cursor) continue;
@@ -56,28 +79,28 @@ export async function streamAgentEvents(
       }
       const latest = await services.repository.getRun(request.auth, runId);
       if (latest && ['completed', 'failed', 'cancelled'].includes(latest.status)) {
-        closed = true;
-        reply.raw.end();
+        finish('server');
       }
+    } catch (error) {
+      fail(error);
     } finally {
       flushing = false;
     }
   };
 
-  const unsubscribe = await services.streamSubscriptions.subscribe(
-    runEventsChannel(runId),
-    () => void flush(),
-    (error: Error) => request.log.warn({ error }, 'SSE subscriber error'),
-  );
-  await flush();
-
-  const heartbeat = setInterval(() => {
-    if (!closed) reply.raw.write(': heartbeat\n\n');
-  }, 15_000);
-
-  request.raw.on('close', () => {
-    closed = true;
-    clearInterval(heartbeat);
-    unsubscribe();
-  });
+  try {
+    unsubscribe = await services.streamSubscriptions.subscribe(
+      runEventsChannel(runId),
+      () => void flush(),
+      fail,
+    );
+    if (closed) { unsubscribe(); return; }
+    await flush();
+    if (closed) return;
+    heartbeat = setInterval(() => {
+      if (!closed) reply.raw.write(': heartbeat\n\n');
+    }, 15_000);
+  } catch (error) {
+    fail(error);
+  }
 }

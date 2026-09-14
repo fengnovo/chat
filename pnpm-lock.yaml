@@ -225,6 +225,9 @@ importers:
       '@fastify/cors':
         specifier: ^11.1.0
         version: 11.3.0
+      '@opentelemetry/api':
+        specifier: 1.9.1
+        version: 1.9.1
       '@repo/artifacts':
         specifier: workspace:*
         version: link:../../packages/artifacts
@@ -237,6 +240,9 @@ importers:
       '@repo/knowledge-graphrag':
         specifier: workspace:*
         version: link:../../packages/knowledge-graphrag
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       bullmq:
         specifier: ^5.58.5
         version: 5.81.4(supports-color@10.2.2)

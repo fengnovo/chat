@@ -17,6 +17,8 @@ import { RunOutboxDispatcher } from './outbox.js';
 import { registerRoutes } from './routes.js';
 import { registerKnowledgeRoutes } from './knowledge-routes.js';
 import { StreamSubscriptionHub } from './stream-subscriptions.js';
+import { loadObservabilityConfig, startObservability, redactTelemetryValue } from '@repo/observability';
+import { apiFastifyOptions, createApiObservability, registerApiObservabilityHooks, type ApiObservability } from './observability.js';
 
 interface BuildAppOptions {
   config: ApiConfig;
@@ -26,13 +28,23 @@ interface BuildAppOptions {
   knowledgeQueue?: Queue;
   knowledgeRepository: import('./types.js').KnowledgeRepositoryApi;
   artifacts?: S3ArtifactStore;
+  observability?: ApiObservability;
 }
 
 export async function buildApp(options: BuildAppOptions) {
+  const observability = options.observability ?? createApiObservability(
+    await startObservability(loadObservabilityConfig({ OTEL_ENABLED: 'false' }, {
+      serviceName: 'agent-api', serviceVersion: options.config.API_VERSION,
+    })),
+    { enabled: false, serviceVersion: options.config.API_VERSION, exporter: 'disabled' },
+  );
   const app = Fastify({
+    ...apiFastifyOptions(options.config),
     logger: true,
+    disableRequestLogging: true,
     bodyLimit: Math.max(1_048_576, options.config.PROJECT_UPLOAD_MAX_BYTES * 2),
   });
+  registerApiObservabilityHooks(app, observability);
   const authenticate = createAuthenticator(options.config, {
     loadMembership: (tenantId, userId) =>
       options.repository.getMembershipRole(tenantId, userId),
@@ -89,7 +101,7 @@ export async function buildApp(options: BuildAppOptions) {
     origin: options.config.WEB_ORIGIN,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposedHeaders: ['x-agent-run-id'],
+    exposedHeaders: ['x-agent-run-id', 'x-request-id'],
   });
   await app.register(cookie);
 
@@ -161,7 +173,7 @@ export async function buildApp(options: BuildAppOptions) {
     if (error instanceof RepositoryConflictError) {
       return reply.code(409).send({ error: error.code });
     }
-    request.log.error({ error }, 'request failed');
+    request.log.error({ error: redactTelemetryValue(error) }, 'request failed');
     return reply.code(500).send({ error: 'internal_error' });
   });
 
@@ -174,6 +186,7 @@ export async function buildApp(options: BuildAppOptions) {
     outbox,
     streamSubscriptions,
     knowledgeQueue,
+    observability,
   });
   await registerKnowledgeRoutes(app, {
     config: options.config,

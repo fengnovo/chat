@@ -13,6 +13,15 @@
         "default": "./dist/index.js"
       },
       "default": null
+    },
+    "./register": {
+      "types": "./src/register.ts",
+      "browser": null,
+      "node": {
+        "development": "./src/register.ts",
+        "default": "./dist/register.js"
+      },
+      "default": null
     }
   },
   "scripts": {

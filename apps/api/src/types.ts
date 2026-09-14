@@ -7,6 +7,7 @@ import type { Redis } from 'ioredis';
 import type { ApiConfig } from './config.js';
 import type { RunOutboxDispatcher } from './outbox.js';
 import type { StreamSubscriptionHub } from './stream-subscriptions.js';
+import type { ApiObservability } from './observability.js';
 
 export interface KnowledgeRepositoryApi {
   listKnowledgeBases: (auth: AuthContext) => Promise<unknown[]>;
@@ -43,6 +44,7 @@ export interface ApiServices {
   knowledgeQueue: Queue;
   outbox: RunOutboxDispatcher;
   streamSubscriptions: StreamSubscriptionHub;
+  observability?: ApiObservability;
 }
 
 declare module 'fastify' {
