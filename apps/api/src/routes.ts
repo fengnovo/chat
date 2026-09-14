@@ -157,6 +157,10 @@ function projectUploadBytes(files: Array<{ contentBase64: string }>) {
 
 const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function publicHealthFailure(component: string) {
+  return { status: 'not_ready', component, error: 'dependency_unavailable' } as const;
+}
+
 /**
  * 删除会话时级联清理它独占的沙箱文件目录。
  * docker 模式下文件在宿主 SANDBOX_SESSIONS_ROOT/<workspaceId>；
@@ -191,12 +195,20 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   app.get('/health/ready', async (_request, reply) => {
     try {
       await services.repository.ping();
-      await services.publisher.ping();
-      await services.artifacts.ping();
-      return { status: 'ready' };
-    } catch (error) {
-      return reply.code(503).send({ status: 'not_ready', error: String(error) });
+    } catch {
+      return reply.code(503).send(publicHealthFailure('repository'));
     }
+    try {
+      await services.publisher.ping();
+    } catch {
+      return reply.code(503).send(publicHealthFailure('publisher'));
+    }
+    try {
+      await services.artifacts.ping();
+    } catch {
+      return reply.code(503).send(publicHealthFailure('artifacts'));
+    }
+    return { status: 'ready' };
   });
 
   app.post('/api/agent/sessions', async (request, reply) => {

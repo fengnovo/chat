@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import Fastify from 'fastify';
+
+import { registerRoutes } from '../src/routes.js';
 
 const contractKeys = [
   'OTEL_ENABLED',
@@ -78,4 +81,24 @@ test('public health contract requires sanitized summaries without internal detai
   ]) {
     assert.ok(securityPolicy.includes(phrase), `health policy must include: ${phrase}`);
   }
+});
+
+test('ready health responses redact dependency failure details', async () => {
+  const secret = 'postgres://user:super-secret@db.internal:5432/app';
+  const app = Fastify();
+  await registerRoutes(app, {
+    repository: { ping: async () => { throw new Error(`connection failed: ${secret}`); } },
+    publisher: { ping: async () => undefined },
+    artifacts: { ping: async () => undefined },
+  } as never);
+
+  const response = await app.inject({ method: 'GET', url: '/health/ready' });
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(response.json(), {
+    status: 'not_ready',
+    component: 'repository',
+    error: 'dependency_unavailable',
+  });
+  assert.equal(response.body.includes(secret), false);
+  await app.close();
 });
