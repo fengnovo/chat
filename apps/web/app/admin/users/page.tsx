@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import {
   createAdminUser,
+  deleteAdminUser,
   fetchKnowledgeBases,
   fetchUserKbGrants,
   listAdminUsers,
@@ -28,6 +29,7 @@ function AdminUsersView() {
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [grantUser, setGrantUser] = useState<AdminUser | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -102,7 +104,18 @@ function AdminUsersView() {
               </td>
               <td>{item.grantedKbCount}</td>
               <td>
-                <button type="button" onClick={() => setGrantUser(item)}>分配知识库</button>
+                <div className="admin-user-actions">
+                  <button type="button" onClick={() => setGrantUser(item)}>分配知识库</button>
+                  <button
+                    type="button"
+                    className="admin-delete-btn"
+                    disabled={item.id === user?.id}
+                    title={item.id === user?.id ? '不能删除自己' : undefined}
+                    onClick={() => setDeleteTarget(item)}
+                  >
+                    删除
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
@@ -121,6 +134,16 @@ function AdminUsersView() {
         <GrantKbDialog
           target={grantUser}
           onClose={() => setGrantUser(null)}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteUserDialog
+          target={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => {
+            setDeleteTarget(null);
+            void refresh();
+          }}
         />
       )}
     </main>
@@ -304,6 +327,72 @@ function GrantKbDialog({
           <button type="button" onClick={onClose}>取消</button>
           <button type="button" onClick={() => void handleSave()} disabled={saving}>
             {saving ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteUserDialog({
+  target,
+  onClose,
+  onDeleted,
+}: {
+  target: AdminUser;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const handleConfirm = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAdminUser(target.id);
+      onDeleted();
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : '';
+      setError(
+        message === 'user_owns_knowledge_bases'
+          ? '该用户拥有知识库，需先转移或删除其知识库后再删除用户'
+          : message === 'cannot_delete_self'
+            ? '不能删除自己'
+            : '删除用户失败',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="admin-dialog-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="admin-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`删除用户 ${target.displayName}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2>删除用户</h2>
+        <p className="admin-delete-warning">
+          确定要删除用户 <strong>{target.displayName}</strong> 吗？
+        </p>
+        <p className="admin-delete-hint">
+          此操作将永久删除该用户的会话历史、运行记录及生成的文件，且不可恢复。
+        </p>
+        {error && <p role="alert" className="admin-dialog-error">{error}</p>}
+        <div className="admin-dialog-actions">
+          <button type="button" onClick={onClose} disabled={busy}>取消</button>
+          <button
+            type="button"
+            className="admin-delete-confirm"
+            onClick={() => void handleConfirm()}
+            disabled={busy}
+          >
+            {busy ? '删除中…' : '确认删除'}
           </button>
         </div>
       </div>

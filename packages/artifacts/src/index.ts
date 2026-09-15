@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
@@ -173,6 +174,15 @@ export class S3ArtifactStore {
       new GetObjectCommand({ Bucket: this.config.bucket, Key: objectKey }),
       { expiresIn: expiresInSeconds },
     );
+  }
+
+  /** 删除单个对象存储文件；对象不存在时静默成功（幂等）。 */
+  async deleteObject(objectKey: string): Promise<void> {
+    await this.internalClient
+      .send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: objectKey }))
+      .catch((error: unknown) => {
+        if (!isMissingBucket(error)) throw error;
+      });
   }
 
   destroy() {

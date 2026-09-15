@@ -1,13 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { RepositoryNotFoundError, hashPassword } from '@repo/db';
+import { RepositoryConflictError, RepositoryNotFoundError, hashPassword } from '@repo/db';
 
 import { requireAdmin } from './auth.js';
 import type { AgentRepository } from '@repo/db';
+import type { S3ArtifactStore } from '@repo/artifacts';
 
 type Services = {
   repository: AgentRepository;
+  artifacts: S3ArtifactStore;
 };
 
 const roleSchema = z.enum(['admin', 'owner', 'member']);
@@ -101,5 +103,29 @@ export async function registerAdminRoutes(app: FastifyInstance, services: Servic
       }
       throw error;
     }
+  });
+
+  app.delete('/api/admin/users/:userId', async (request, reply) => {
+    requireAdmin(request.auth);
+    const { userId } = request.params as { userId: string };
+    const target = id.parse(userId);
+    if (target === request.auth.userId) {
+      return reply.code(409).send({ error: 'cannot_delete_self' });
+    }
+    let result: { deletedArtifactKeys: string[] } | null;
+    try {
+      result = await services.repository.deleteUser(request.auth.tenantId, target);
+    } catch (error) {
+      if (error instanceof RepositoryConflictError) {
+        return reply.code(409).send({ error: error.code });
+      }
+      throw error;
+    }
+    if (!result) return notFound(reply, 'user_not_found');
+    // S3 对象删除失败不阻塞事务，残留文件后续可由运维批量清理。
+    await Promise.allSettled(
+      result.deletedArtifactKeys.map((key) => services.artifacts.deleteObject(key)),
+    );
+    return reply.code(204).send();
   });
 }

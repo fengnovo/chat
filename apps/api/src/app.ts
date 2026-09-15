@@ -205,6 +205,7 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerAdminRoutes(app, {
     repository: options.repository,
+    artifacts,
   });
 
   app.addHook('onReady', async () => outbox.start());

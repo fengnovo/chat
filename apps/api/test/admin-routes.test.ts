@@ -7,15 +7,25 @@ import { z } from 'zod';
 import { registerAdminRoutes } from '../src/admin-routes.js';
 import { ForbiddenError } from '../src/auth.js';
 import type { AgentRepository } from '@repo/db';
+import type { S3ArtifactStore } from '@repo/artifacts';
 
 const tenantId = '00000000-0000-4000-8000-000000000001';
 const adminId = '00000000-0000-4000-8000-0000000000a1';
 const memberId = '00000000-0000-4000-8000-0000000000a3';
 const kbId = '00000000-0000-4000-8000-0000000000b1';
 
+function makeArtifactsStub(tracker?: string[]): S3ArtifactStore {
+  return {
+    deleteObject: async (key: string) => {
+      tracker?.push(key);
+    },
+  } as unknown as S3ArtifactStore;
+}
+
 function makeApp(
   repository: Record<string, unknown>,
   roles: string[] = ['admin'],
+  artifactsTracker?: string[],
 ) {
   const app = Fastify();
   app.decorateRequest('auth');
@@ -33,6 +43,7 @@ function makeApp(
   });
   return registerAdminRoutes(app, {
     repository: repository as unknown as AgentRepository,
+    artifacts: makeArtifactsStub(artifactsTracker),
   }).then(() => app);
 }
 
@@ -57,6 +68,7 @@ test('non-admin roles are forbidden from every admin route', async () => {
       url: `/api/admin/users/${memberId}/knowledge-bases`,
       payload: { knowledgeBaseIds: [kbId] },
     },
+    { method: 'DELETE', url: `/api/admin/users/${memberId}` },
   ] as const;
   for (const route of routes) {
     const response = await app.inject({ ...route });
@@ -215,5 +227,76 @@ test('grant replacement maps unknown users or KBs to 404', async () => {
   });
   assert.equal(response.statusCode, 404);
   assert.equal(response.json().error, 'knowledge_base_not_found');
+  await app.close();
+});
+
+test('delete user refuses self-deletion with 409', async () => {
+  const app = await makeApp({
+    deleteUser: async () => {
+      throw new Error('must not call');
+    },
+  });
+  const response = await app.inject({
+    method: 'DELETE',
+    url: `/api/admin/users/${adminId}`,
+  });
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.json().error, 'cannot_delete_self');
+  await app.close();
+});
+
+test('delete user blocks when the user owns knowledge bases', async () => {
+  const { RepositoryConflictError } = await import('@repo/db');
+  const app = await makeApp({
+    deleteUser: async () => {
+      throw new RepositoryConflictError('user_owns_knowledge_bases');
+    },
+  });
+  const response = await app.inject({
+    method: 'DELETE',
+    url: `/api/admin/users/${memberId}`,
+  });
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.json().error, 'user_owns_knowledge_bases');
+  await app.close();
+});
+
+test('delete user returns 404 for unknown user', async () => {
+  const app = await makeApp({
+    deleteUser: async () => null,
+  });
+  const response = await app.inject({
+    method: 'DELETE',
+    url: `/api/admin/users/${memberId}`,
+  });
+  assert.equal(response.statusCode, 404);
+  assert.equal(response.json().error, 'user_not_found');
+  await app.close();
+});
+
+test('delete user cleans up DB and S3 artifacts', async () => {
+  const deletedKeys: string[] = [];
+  const app = await makeApp({
+    deleteUser: async (tenant: string, userId: string) => {
+      assert.equal(tenant, tenantId);
+      assert.equal(userId, memberId);
+      return {
+        deletedArtifactKeys: [
+          'tenants/t/runs/r1/file.pdf',
+          'tenants/t/runs/r2/note.md',
+        ],
+      };
+    },
+  }, ['admin'], deletedKeys);
+  const response = await app.inject({
+    method: 'DELETE',
+    url: `/api/admin/users/${memberId}`,
+  });
+  assert.equal(response.statusCode, 204);
+  assert.equal(response.body, '');
+  assert.deepEqual(deletedKeys.sort(), [
+    'tenants/t/runs/r1/file.pdf',
+    'tenants/t/runs/r2/note.md',
+  ].sort());
   await app.close();
 });

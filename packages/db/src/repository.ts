@@ -1270,6 +1270,85 @@ export class AgentRepository {
       return unique;
     });
   }
+
+  /**
+   * 删除用户及其全部数据（会话、运行记录、事件、产物、授权等）。
+   * 若用户拥有知识库则拒绝（需先转移或删除知识库）。
+   * 返回被删除的 artifact object key 列表，供调用方清理 S3。
+   */
+  async deleteUser(
+    tenantId: string,
+    userId: string,
+  ): Promise<{ deletedArtifactKeys: string[] } | null> {
+    return inTransaction(this.pool, async (client) => {
+      const membership = await client.query(
+        `SELECT 1 FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      if (!membership.rows[0]) return null;
+
+      const ownedKbs = await client.query(
+        `SELECT 1 FROM knowledge_bases WHERE tenant_id = $1 AND owner_user_id = $2 AND deleted_at IS NULL LIMIT 1`,
+        [tenantId, userId],
+      );
+      if (ownedKbs.rows[0]) {
+        throw new RepositoryConflictError('user_owns_knowledge_bases');
+      }
+
+      const artifactKeys = await client.query(
+        `SELECT a.object_key FROM artifacts a
+         JOIN agent_runs r ON r.id = a.run_id
+         WHERE r.tenant_id = $1 AND r.user_id = $2`,
+        [tenantId, userId],
+      );
+      const deletedArtifactKeys = artifactKeys.rows.map((row) => String(row.object_key));
+
+      const runIds = await client.query(
+        `SELECT id FROM agent_runs WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      const runIdList = runIds.rows.map((row) => String(row.id));
+
+      if (runIdList.length > 0) {
+        await client.query(
+          `DELETE FROM run_events WHERE tenant_id = $1 AND run_id = ANY($2::uuid[])`,
+          [tenantId, runIdList],
+        );
+        await client.query(
+          `DELETE FROM run_dispatch_outbox WHERE tenant_id = $1 AND run_id = ANY($2::uuid[])`,
+          [tenantId, runIdList],
+        );
+        await client.query(
+          `DELETE FROM artifacts WHERE tenant_id = $1 AND run_id = ANY($2::uuid[])`,
+          [tenantId, runIdList],
+        );
+      }
+
+      await client.query(
+        `DELETE FROM knowledge_retrieval_logs WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      await client.query(
+        `DELETE FROM agent_runs WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      await client.query(
+        `DELETE FROM agent_sessions WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      await client.query(
+        `DELETE FROM knowledge_base_grants WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      await client.query(
+        `DELETE FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+      await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+
+      return { deletedArtifactKeys };
+    });
+  }
 }
 
 export class RepositoryConflictError extends Error {

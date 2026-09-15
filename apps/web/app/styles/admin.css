@@ -76,6 +76,47 @@
   color: var(--violet-dark);
 }
 
+.admin-user-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.admin-delete-btn {
+  border-color: var(--line-strong) !important;
+  color: var(--red) !important;
+}
+
+.admin-delete-btn:hover:not(:disabled) {
+  border-color: var(--red) !important;
+  background: var(--red-soft) !important;
+}
+
+.admin-delete-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.admin-delete-confirm {
+  background: var(--red) !important;
+  border-color: var(--red) !important;
+  color: #fff !important;
+}
+
+.admin-delete-confirm:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.admin-delete-warning {
+  font-size: 15px;
+  margin: 4px 0 0;
+}
+
+.admin-delete-hint {
+  color: var(--ink-soft);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
 .admin-user-table {
   background: var(--surface);
   border: 1px solid var(--line);

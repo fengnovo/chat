@@ -319,3 +319,8 @@ export async function replaceUserKbGrants(userId: string, knowledgeBaseIds: stri
   });
   await requireOk(response, '保存授权失败');
 }
+
+export async function deleteAdminUser(userId: string): Promise<void> {
+  const response = await apiFetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+  await requireOk(response, '删除用户失败');
+}
