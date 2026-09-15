@@ -179,6 +179,7 @@ packages/
 
 infra/compose.yaml        本地基础设施（Postgres × 2、Redis、Qdrant、MinIO）
 deploy/                   生产部署（systemd、nginx、compose、运维脚本）
+deploy/langfuse-local/    本地 Langfuse v4 开发环境（Docker Compose）
 docs/                     设计文档与验收清单
 ```
 
@@ -227,6 +228,50 @@ DOCKER_SANDBOX_IMAGE=chat-agent-sandbox:latest
 # FALLBACK_MODELS=anthropic:claude-sonnet-4
 # ANTHROPIC_API_KEY=...
 # MCP_CONFIG_PATH=/absolute/path/to/mcp.json
+```
+
+### 沙箱镜像构建
+
+Worker 默认使用本机 Docker 沙箱，需要先构建镜像：
+
+```bash
+# 标准构建（需能访问 Docker Hub）
+docker build -f infra/sandbox/Dockerfile -t chat-agent-sandbox:latest infra/sandbox
+
+# 国内网络：使用 DaoCloud 镜像源
+sed 's|FROM node:.*|FROM docker.m.daocloud.io/library/node:24.14.0-bookworm-slim|' \
+  infra/sandbox/Dockerfile | docker build -f - -t chat-agent-sandbox:latest infra/sandbox
+```
+
+构建完成后 Worker 会自动拉取该镜像创建沙箱容器。
+
+### Langfuse 本地观测
+
+Langfuse 用于 LLM/Agent 链路追踪（trace、generation、tool call）。本地开发用 Docker Compose 快速启动：
+
+```bash
+# 启动 Langfuse v4（web + worker + Postgres + ClickHouse + Redis + MinIO）
+docker compose -f deploy/langfuse-local/docker-compose.yml up -d --wait
+```
+
+- UI：<http://127.0.0.1:33002>
+- 首次访问需注册账号，然后在 **Settings → API Keys** 创建密钥对
+- 将密钥填入 `.env`：
+
+```dotenv
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=http://127.0.0.1:33002
+LANGFUSE_ENABLED=true
+LANGFUSE_SAMPLE_RATE=1
+```
+
+> 已内置 `LANGFUSE_MIGRATION_V4_WRITE_MODE=dual`，兼容当前 `@langfuse/langchain` v5 SDK。
+
+停止 Langfuse：
+
+```bash
+docker compose -f deploy/langfuse-local/docker-compose.yml down
 ```
 
 ### 登录与角色 RBAC

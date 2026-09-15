@@ -141,8 +141,16 @@ export function createLangfuseSpanProcessor(config: LangfuseResultConfig): SpanP
       ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
       environment: config.environment,
       timeout: Math.ceil(MAX_LIFECYCLE_TIMEOUT_MS / 1000),
-      // 默认导出器只导 gen_ai span；显式沿用同一判定，双保险。
-      shouldExportSpan: (span) => isDefaultExportSpan(span.otelSpan),
+      // 默认过滤器只认 gen_ai / langfuse-sdk scope 的 span；
+      // 但 @langfuse/langchain v5 的 CallbackHandler 通过全局 OTel
+      // TracerProvider 建 span（scope 非 langfuse-sdk），属性前缀为
+      // langfuse.* 而非 gen_ai.*。补充 langfuse.* 属性检测，确保
+      // CallbackHandler 产出的 span 也能导出到 Langfuse。
+      shouldExportSpan: (span) => {
+        const s = span.otelSpan;
+        if (isDefaultExportSpan(s)) return true;
+        return Object.keys(s.attributes ?? {}).some((key) => key.startsWith('langfuse.'));
+      },
       mask: createContentMask(config.captureContent),
     });
   } catch {
