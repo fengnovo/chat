@@ -1,29 +1,29 @@
-# Observability security and operations
+# 可观测性安全与运维
 
-## Configuration contract
+## 配置契约
 
-`.env.example` and `deploy/env.production.example` intentionally contain the same observability keys. They are templates, not credential stores. Local development keeps `OTEL_ENABLED=false` and `OBSERVABILITY_CAPTURE_CONTENT=false`. Production uses parent-based trace-ID ratio sampling with an initial ratio of `0.05`; staging should use 100% trace sampling (`OTEL_TRACES_SAMPLER_ARG=1`). Error requests and explicitly debugged runs may raise sampling through the approved runtime controls, but user IDs must never be used as telemetry labels.
+`.env.example` 和 `deploy/env.production.example` 有意包含相同的可观测性配置键。它们是模板，不是凭据存储。本地开发保持 `OTEL_ENABLED=false` 和 `OBSERVABILITY_CAPTURE_CONTENT=false`。生产环境使用基于父级的 trace-ID 比率采样，初始比率为 `0.05`；staging 应使用 100% trace 采样（`OTEL_TRACES_SAMPLER_ARG=1`）。错误请求和明确调试的运行可以通过批准的运行时控制提高采样率，但用户 ID 绝不能用作遥测标签。
 
-OTLP headers and Langfuse keys stay empty in repository templates. Inject them at runtime from the deployment secret manager. Never add new credentials to Git.
+OTLP header 和 Langfuse 密钥在仓库模板中保持为空。在运行时从部署密钥管理器注入。绝不要向 Git 添加新凭据。
 
-## Historical credential cleanup
+## 历史凭据清理
 
-An older Git history revision of `.env.example` contained suspected Langfuse credentials. Before production rollout, the credential owner must revoke and rotate those credentials and confirm the replacements are injected only by the secret manager. The security owner decides whether history rewriting is required and must retain an audit record of that decision and any rewrite.
+较早的 Git 历史版本中 `.env.example` 包含疑似 Langfuse 凭据。在生产上线之前，凭据负责人必须撤销并轮换这些凭据，并确认替换凭据仅由密钥管理器注入。安全负责人决定是否需要重写 Git 历史，并且必须保留该决策及任何重写操作的审计记录。
 
-## Retention and privacy
+## 保留期限与隐私
 
-- Metrics: 30 days.
-- Ordinary logs: 14 days.
-- Traces: 7 days.
-- Langfuse data: 30 days.
-- Production content capture: disabled.
+- 指标：30 天。
+- 普通日志：14 天。
+- Trace：7 天。
+- Langfuse 数据：30 天。
+- 生产环境内容捕获：已禁用。
 
-Deletion requests and access audits remain subject to the existing PostgreSQL governance process. Telemetry must use low-cardinality operational identifiers; do not put user IDs, prompts, completions, tool inputs or outputs, document contents or metadata, or secrets into labels or captured content.
+删除请求和访问审计仍遵循现有的 PostgreSQL 治理流程。遥测必须使用低基数的运维标识符；不要将用户 ID、prompt、completion、工具输入或输出、文档内容或元数据、或密钥放入标签或捕获的内容中。
 
-## Public health responses
+## 公开健康检查响应
 
-Public health responses expose only sanitized status, version, and component summaries. They must never expose secrets, DSNs, raw errors, stack traces, hostnames, or other internal connection details. This is a contract for the health endpoint implementation; observability tests cover the response boundary without requiring the endpoint to be implemented in this task.
+公开健康检查响应仅暴露脱敏后的状态、版本和组件摘要。绝不能暴露密钥、DSN、原始错误、堆栈跟踪、主机名或其他内部连接细节。这是健康检查端点实现的契约；可观测性测试覆盖响应边界，但不要求在此任务中实现端点。
 
-## Operational guardrails
+## 运维护栏
 
-Telemetry must be fail-open for business traffic: an exporter or collector outage must not fail API requests or worker jobs. Shutdown flushes are bounded by `OBSERVABILITY_SHUTDOWN_TIMEOUT_MS` (five seconds in the production template). Rotate credentials immediately if a secret appears in logs, traces, or a repository artifact, then record the incident and verify downstream revocation.
+遥测对业务流量必须是 fail-open 的：exporter 或 collector 中断不得导致 API 请求或 Worker 任务失败。关闭时的 flush 操作受 `OBSERVABILITY_SHUTDOWN_TIMEOUT_MS` 限制（生产模板中为五秒）。如果密钥出现在日志、trace 或仓库产物中，立即轮换凭据，然后记录事件并验证下游撤销。

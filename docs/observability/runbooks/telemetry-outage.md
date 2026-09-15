@@ -1,11 +1,11 @@
-# Runbook: telemetry outage
+# Runbook：遥测中断
 
-Use this runbook when OTLP, Alloy, Langfuse, dashboards, or alerting stop receiving expected data.
+当 OTLP、Alloy、Langfuse、Dashboard 或告警停止接收预期数据时，使用此 Runbook。
 
-1. Confirm the business-plane health endpoints and representative API/worker requests. Telemetry loss must not block them.
-2. Check collector/exporter health, endpoint reachability, queue/backlog depth, and recent deploy or credential-rotation events.
-3. If the collector is unavailable, leave application traffic running in degraded/no-op mode. Do not enable content capture to compensate.
-4. Restore connectivity or rotate the failed credential through the credential-rotation runbook. Validate one API trace, one worker run, and one metric export.
-5. Record the outage window, affected signals, dropped data, customer impact, and retention implications. Escalate if the outage exceeds the applicable alert/SLO window.
+1. 确认业务面健康端点和代表性 API/Worker 请求正常。遥测丢失不得阻塞业务。
+2. 检查 collector/exporter 健康状态、端点可达性、队列/积压深度，以及最近的部署或凭据轮换事件。
+3. 如果 collector 不可用，保持应用流量在降级/no-op 模式下运行。不要启用内容捕获来补偿。
+4. 恢复连接或通过凭据轮换 Runbook 轮换失败的凭据。验证一个 API trace、一个 Worker 运行和一个指标导出。
+5. 记录中断时间窗口、受影响的信号、丢失的数据、用户影响和保留期限影响。如果中断超过适用的告警/SLO 窗口，则上报。
 
-Public health output remains sanitized during an outage: only status/version/component summaries are allowed; never return secrets, DSNs, raw errors, stack traces, or hostnames.
+中断期间公开健康检查输出保持脱敏：仅允许状态/版本/组件摘要；绝不返回密钥、DSN、原始错误、堆栈跟踪或主机名。

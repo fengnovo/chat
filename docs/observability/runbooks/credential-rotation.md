@@ -1,10 +1,10 @@
-# Runbook: observability credential rotation
+# Runbook：可观测性凭据轮换
 
-Use this runbook when an OTLP or Langfuse credential is expiring, suspected exposed, or changed by the provider.
+当 OTLP 或 Langfuse 凭据即将过期、疑似泄露、或被提供商更改时，使用此 Runbook。
 
-1. Identify the credential owner and affected environment; do not paste the value into tickets or chat.
-2. Revoke the old Langfuse/OTLP credential at the provider and create a replacement in the approved secret manager.
-3. Update the secret-manager version consumed by the API and worker services. Keep the corresponding repository template values empty.
-4. Perform a rolling restart, then verify health checks and a synthetic trace/export. Confirm normal requests still succeed if the collector is unavailable.
-5. Search logs and telemetry for the old credential, remove any accidental exposure according to incident policy, and document timestamps, owners, provider request IDs, and verification evidence.
-6. The security owner decides whether Git history rewriting is necessary for historical `.env.example` exposure and preserves the audit record either way.
+1. 确认凭据负责人和受影响的环境；不要将凭据值粘贴到工单或聊天中。
+2. 在提供商处撤销旧的 Langfuse/OTLP 凭据，并在批准的密钥管理器中创建替换凭据。
+3. 更新 API 和 Worker 服务消费的密钥管理器版本。保持仓库模板中的对应值为空。
+4. 执行滚动重启，然后验证健康检查和合成 trace/export。确认在 collector 不可用时正常请求仍然成功。
+5. 在日志和遥测中搜索旧凭据，根据事件策略移除任何意外暴露，并记录时间戳、负责人、提供商请求 ID 和验证证据。
+6. 安全负责人决定是否需要针对历史 `.env.example` 暴露进行 Git 历史重写，并在两种情况下都保留审计记录。

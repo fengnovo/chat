@@ -19,13 +19,22 @@ flowchart LR
     Worker --> Sandbox[Docker/E2B]
     Worker --> Model[LLM Provider]
     Worker --> MCP --> Knowledge[Knowledge Service]
-    Knowledge --> Qdrant[(Qdrant)] & PG & S3[(S3/MinIO)]
+    Knowledge --> Qdrant[(Qdrant)]
+    Knowledge --> PG
+    Knowledge --> S3[(S3/MinIO)]
 
-    API & Worker & Knowledge & Web -. OTLP .-> Alloy[Grafana Alloy<br/>业务主机 loopback]
+    API -. OTLP .-> Alloy[Grafana Alloy<br/>业务主机 loopback]
+    Worker -. OTLP .-> Alloy
+    Knowledge -. OTLP .-> Alloy
+    Web -. OTLP .-> Alloy
     Journal[journald/Docker logs] -. logs .-> Alloy
     Exporters[Host/Nginx/PG/Redis Exporter] -. scrape .-> Alloy
-    Alloy --> Prometheus[(Prometheus)] & Loki[(Loki)] & Tempo[(Tempo)]
-    Prometheus & Loki & Tempo --> Grafana[Grafana]
+    Alloy --> Prometheus[(Prometheus)]
+    Alloy --> Loki[(Loki)]
+    Alloy --> Tempo[(Tempo)]
+    Prometheus --> Grafana[Grafana]
+    Loki --> Grafana
+    Tempo --> Grafana
     Prometheus --> Alertmanager[Alertmanager]
     Worker -. GenAI spans .-> Langfuse[Langfuse]
     Langfuse -. 自身 OTel .-> Alloy
@@ -56,7 +65,7 @@ flowchart TD
     C -- 否 --> F[测试失败]
     C -- 是 --> D{含非空 secret?}
     D -- 是 --> F
-    D -- 否 --> E{采样比例∈[0,1] 且 captureContent=false?}
+    D -- 否 --> E{采样比例在 0~1 且 captureContent 为 false?}
     E -- 否 --> F
     E -- 是 --> G[通过]
 ```
@@ -216,14 +225,12 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    API[API request span] -->|inject| Outbox[(Outbox row<br/>observability: traceparent/tracestate/requestId)]
-    Outbox -->|queue.add| Producer[outbox.dispatch<br/>producer span]
+    API[API request span] -->|inject| Outbox["Outbox row<br/>observability context"]
+    Outbox -->|queue.add| Producer["outbox.dispatch<br/>producer span"]
     Producer -->|job payload| Queue[(BullMQ)]
-    Queue -->|consume| Consumer[worker.job.execute<br/>consumer root span]
-    Consumer -. span.link .-> Producer
+    Queue -->|consume| Consumer["worker.job.execute<br/>consumer root span"]
+    Consumer -. span link .-> Producer
     Consumer --> Agent[agent.execute span]
-    style Consumer fill:#e8f5e9
-    style Producer fill:#fff3e0
 ```
 
 ---
@@ -391,10 +398,8 @@ export type LangfuseRuntime = {
 flowchart LR
     Worker[Worker Agent run] --> Filter{GenAI span?}
     Filter -- 是 --> Langfuse[Langfuse]
-    Filter -- 否(HTTP/PG/Redis) --> Tempo[Tempo 平台 Trace]
+    Filter -- "否 (HTTP/PG/Redis)" --> Tempo[Tempo 平台 Trace]
     Langfuse -->|metadata: run_id, tempo_trace_id| Jump[可从 Langfuse 跳 Tempo]
-    style Langfuse fill:#f3e5f5
-    style Tempo fill:#e1f5fe
 ```
 
 ---
@@ -429,7 +434,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph 业务主机
+    subgraph host[业务主机]
         App[API/Worker/Knowledge] -->|OTLP 4317/4318| Alloy
         Journal[journald/Docker logs] -->|filelog| Alloy
         Exp[node/nginx/pg/redis exporter] -->|scrape| Alloy
@@ -473,7 +478,9 @@ flowchart LR
     AM -->|Page| Pager[值班通知]
     AM -->|Urgent| Chat[群聊通知]
     AM -->|Ticket| Ticket[工单]
-    Pager & Chat & Ticket --> RB[Runbook 链接]
+    Pager --> RB[Runbook 链接]
+    Chat --> RB
+    Ticket --> RB
     RB --> Dash[Grafana Dashboard]
     RB --> Logs[Loki 查询]
     RB --> Trace[Tempo 跳转]
