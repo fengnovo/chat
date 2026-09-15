@@ -1,5 +1,5 @@
 import { AIBoundary } from '@cognicatch/react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -17,6 +17,7 @@ function Message({
   onBoundaryError,
   onCopy,
   onDismissCard,
+  reasoning,
   runTokens,
   showWaitingDots,
   streaming,
@@ -31,6 +32,8 @@ function Message({
   onBoundaryError: () => void;
   onCopy: (id: string, text: string) => Promise<void>;
   onDismissCard: (id: string) => void;
+  /** 模型思考过程（reasoning_content），按 runId 独立存储，持久化保留。 */
+  reasoning: string;
   /** 本轮运行结束后的 token 用量，展示在最后一条 assistant 消息的复制按钮后。 */
   runTokens: number;
   /** 执行面板可见时不再重复显示三点 loading（面板头部自带 spinner）。 */
@@ -47,6 +50,14 @@ function Message({
     const data = part.data as { citations?: import('./types').Citation[] };
     return data.citations ?? [];
   });
+  // 思考过程自动滚动到底部
+  const thinkingBodyRef = useRef<HTMLDivElement>(null);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  useEffect(() => {
+    if (thinkingBodyRef.current) {
+      thinkingBodyRef.current.scrollTop = thinkingBodyRef.current.scrollHeight;
+    }
+  }, [reasoning]);
 
   return (
     <article className={`message-row ${isUser ? 'is-user' : 'is-assistant'}`}>
@@ -57,6 +68,27 @@ function Message({
         {!isUser && message.metadata?.model && (
           <div className="message-meta">
             <span>{message.metadata.model}</span>
+          </div>
+        )}
+        {!isUser && reasoning && (
+          <div className={`thinking-chain ${thinkingExpanded ? 'is-expanded' : ''}`}>
+            <button
+              type="button"
+              className="thinking-chain-header"
+              onClick={() => setThinkingExpanded((v) => !v)}
+            >
+              <span className="thinking-chain-bullet" />
+              <span className="thinking-chain-title">
+                {text ? '思考过程' : '思考中'}
+              </span>
+              {!text && <StreamingDots />}
+              <span className="thinking-chain-toggle">
+                {thinkingExpanded ? '收起' : '展开'}
+              </span>
+            </button>
+            <div className="thinking-chain-body" ref={thinkingBodyRef}>
+              <div className="thinking-chain-content">{reasoning}</div>
+            </div>
           </div>
         )}
         {header}
@@ -206,14 +238,7 @@ function ThinkingRow({ children }: { children?: ReactNode }) {
         <Icon name="shield" size={17} />
       </div>
       <div className="message-body">
-        {children ?? (
-          <>
-            <div className="message-meta">
-              <span>正在等待 Worker 启动</span>
-            </div>
-            <StreamingDots />
-          </>
-        )}
+        {children ?? <StreamingDots />}
       </div>
     </article>
   );

@@ -370,11 +370,16 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       runs.map((run) => services.repository.listEvents(request.auth, run.id, 0, 100_000)),
     );
     const messages = runs.flatMap((run, index) => {
-      const assistantText = (eventGroups[index] ?? [])
+      const events = eventGroups[index] ?? [];
+      const assistantText = events
         .filter((event) => event.type === 'assistant.delta')
         .map((event) => event.text)
         .join('');
-      const citations = (eventGroups[index] ?? [])
+      const reasoning = events
+        .filter((event) => event.type === 'assistant.reasoning')
+        .map((event) => event.text)
+        .join('');
+      const citations = events
         .filter((event) => event.type === 'retrieval.completed')
         .flatMap((event) => event.citations);
       return [
@@ -393,6 +398,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
                 role: 'assistant' as const,
                 text: assistantText,
                 createdAt: run.updatedAt,
+                ...(reasoning ? { reasoning } : {}),
                 ...(citations.length ? { citations } : {}),
               },
             ]

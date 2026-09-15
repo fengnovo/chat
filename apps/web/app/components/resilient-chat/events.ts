@@ -33,6 +33,8 @@ function agentEventToTrace(event: AgentEvent): PipelineEvent | null {
       return null;
     case 'assistant.narration':
       return null;
+    case 'assistant.reasoning':
+      return null;
     case 'usage.updated':
       return null;
     case 'retrieval.completed':

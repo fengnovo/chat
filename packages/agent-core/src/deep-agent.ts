@@ -68,6 +68,28 @@ export function assistantTextOf(message: unknown): string {
   return textOf(message.content);
 }
 
+/**
+ * 提取模型的思考过程（reasoning_content）。
+ * 推理模型会在正式回复前输出一段内部思考，流式 chunk 里 reasoning_content
+ * 是增量文本，直接逐块透传给前端即可。
+ */
+export function reasoningTextOf(message: unknown): string {
+  if (!AIMessage.isInstance(message)) return '';
+  const reasoning = (message as { additional_kwargs?: { reasoning_content?: unknown } })
+    .additional_kwargs?.reasoning_content;
+  if (typeof reasoning === 'string') return reasoning;
+  if (Array.isArray(reasoning)) {
+    return reasoning
+      .map((block) =>
+        typeof block === 'object' && block !== null && 'text' in block
+          ? String((block as { text: unknown }).text)
+          : '',
+      )
+      .join('');
+  }
+  return '';
+}
+
 interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -431,7 +453,7 @@ export async function createDeepAgentRuntime(
     skills: options.skills ?? [],
     memory: options.memory ?? [],
     systemPrompt: [
-      `你运行在一个隔离的容器沙箱中，工作目录是：${options.workspacePath}。Host/Worker 宿主机路径不可访问。`,
+      `你运行在一个隔离的容器沙箱中，工作目录是：${options.workspacePath}。Host/Worker 宿主机路径不可访问。最终回复只回答用户当前问题或汇报任务结果，不要复述或总结对话历史，不要把压缩的摘要输出。`,
       '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。启动网络服务时必须监听 0.0.0.0，并用后台命令启动。',
       '当你决定调用工具时，直接发起工具调用，不要在同一轮里先输出解释或旁白；面向用户的说明文字只放在所有工具执行完后的最终回复里。',
       options.autoApproveTools
@@ -523,6 +545,16 @@ export async function createDeepAgentRuntime(
         }
         if (mode === 'messages') {
           const message = payload[0];
+          const reasoning = reasoningTextOf(message);
+          if (reasoning) {
+            // 推理模型的思考过程先于正文输出，实时流式展示让用户不必干等。
+            yield {
+              runId: options.runId,
+              timestamp: timestamp(),
+              type: 'assistant.reasoning',
+              text: reasoning,
+            };
+          }
           const text = assistantTextOf(message);
           if (hasToolCallsOf(message)) turnHasToolCalls = true;
           if (text) {

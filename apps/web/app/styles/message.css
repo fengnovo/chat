@@ -423,3 +423,102 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+
+/* 模型思考过程（reasoning_content）：竖直思维链样式，持久化保留 */
+.thinking-chain {
+  background: var(--surface-soft, #f7f7f8);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.thinking-chain-header {
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--ink-soft, #6b7280);
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  font-weight: 500;
+  gap: 8px;
+  padding: 10px 14px;
+  text-align: left;
+  user-select: none;
+  width: 100%;
+}
+
+.thinking-chain-bullet {
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  height: 8px;
+  width: 8px;
+}
+
+.thinking-chain-title {
+  flex: 1;
+}
+
+.thinking-chain-toggle {
+  color: var(--ink-muted, #9ca3af);
+  font-size: 12px;
+}
+
+.thinking-chain .streaming-dots {
+  margin-left: 4px;
+}
+
+.thinking-chain-body {
+  border-top: 1px solid var(--border, #e5e7eb);
+  /* 1 行起始，随内容增长到 6 行，超出滚动 */
+  max-height: calc(1.65em * 6);
+  overflow-y: auto;
+  padding: 10px 14px;
+  transition: max-height 0.2s ease;
+}
+
+.thinking-chain.is-expanded .thinking-chain-body {
+  max-height: 60vh;
+}
+
+/* 未展开时，底部渐变遮罩暗示还有更多内容。
+   mask-image 直接作用于容器，固定在可见区域底部，不随滚动移动。 */
+.thinking-chain:not(.is-expanded) .thinking-chain-body {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 calc(100% - 40px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 calc(100% - 40px),
+    transparent 100%
+  );
+}
+
+.thinking-chain-content {
+  color: var(--ink-soft, #6b7280);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 自定义滚动条，尽量细 */
+.thinking-chain-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.thinking-chain-body::-webkit-scrollbar-thumb {
+  background: var(--border, #d1d5db);
+  border-radius: 2px;
+}
+
+.thinking-chain-body::-webkit-scrollbar-track {
+  background: transparent;
+}

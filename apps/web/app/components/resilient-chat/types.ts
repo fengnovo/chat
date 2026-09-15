@@ -111,6 +111,8 @@ type HistoryMessage = {
   text: string;
   createdAt: string;
   citations?: Citation[];
+  /** 模型思考过程（reasoning_content），持久化保留。 */
+  reasoning?: string;
 };
 
 type Citation = {

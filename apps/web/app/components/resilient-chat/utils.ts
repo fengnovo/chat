@@ -66,8 +66,10 @@ function messagesFromHistory(messages: HistoryMessage[]): ResilientMessage[] {
       createdAt: message.createdAt,
       runId: message.runId,
     },
-    parts: [{ type: 'text', text: message.text }],
-    ...(message.citations?.length ? { parts: [{ type: 'text', text: message.text }, { type: 'data-citations', data: { citations: message.citations } }] } : {}),
+    parts: [
+      { type: 'text', text: message.text },
+      ...(message.citations?.length ? [{ type: 'data-citations' as const, data: { citations: message.citations } }] : []),
+    ],
   }));
 }
 

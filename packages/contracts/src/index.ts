@@ -91,6 +91,12 @@ export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({ ...eventBase, type: z.literal('run.started') }),
   z.object({ ...eventBase, type: z.literal('assistant.delta'), text: z.string() }),
   /**
+   * 模型的思考过程（reasoning_content）。推理模型在输出正式回复前会先输出
+   * 一段内部思考，这里把它实时流式出来，避免用户在思考阶段看不到任何反馈。
+   * 前端在可折叠区展示，不属于最终答复正文。
+   */
+  z.object({ ...eventBase, type: z.literal('assistant.reasoning'), text: z.string() }),
+  /**
    * 模型在「带工具调用的轮次」里输出的过程旁白。
    * 这类文本属于执行过程而非最终答复，前端只在可折叠的过程区展示，
    * 不能混进最终消息正文。

@@ -125,6 +125,8 @@ function ChatRuntime() {
   const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
   const [historyFiles, setHistoryFiles] = useState<TouchedFile[]>([]);
   const [generatedTokens, setGeneratedTokens] = useState(0);
+  /** 模型思考过程，按 runId 独立存储，避免被 AI SDK 流式 text-delta 更新覆盖。 */
+  const [reasoningByRunId, setReasoningByRunId] = useState<Map<string, string>>(new Map());
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
@@ -334,6 +336,7 @@ function ChatRuntime() {
     regenerate: reload,
     resumeStream,
     sendMessage,
+    setMessages,
     status,
     stop,
   } = useChat<ResilientMessage>({
@@ -360,6 +363,15 @@ function ChatRuntime() {
             lastEventAt: Date.now(),
           });
           setGeneratedTokens(0);
+        }
+        if (event.type === 'assistant.reasoning') {
+          // 推理模型的思考过程：按 runId 独立存储，不写入消息 parts，
+          // 避免被 AI SDK 流式 text-delta 更新覆盖。run 结束后仍保留。
+          setReasoningByRunId((current) => {
+            const next = new Map(current);
+            next.set(event.runId, (next.get(event.runId) ?? '') + event.text);
+            return next;
+          });
         }
         if (event.type === 'usage.updated') {
           // 真实用量：每次模型调用报一条增量，按 run 累加即为本轮生成量。
@@ -835,6 +847,14 @@ function ChatRuntime() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const history = (await response.json()) as SessionHistory;
       const restoredMessages = messagesFromHistory(history.messages);
+      // 从历史消息中恢复思考过程到 Map，刷新后仍可见。
+      setReasoningByRunId(() => {
+        const map = new Map<string, string>();
+        for (const msg of history.messages) {
+          if (msg.reasoning) map.set(msg.runId, msg.reasoning);
+        }
+        return map;
+      });
       const latestRun = history.latestRun;
       const persistedRun = latestRun
         ? {
@@ -1348,6 +1368,7 @@ function ChatRuntime() {
                       ? liveActivityLabel
                       : null
                   }
+                  reasoning={reasoningByRunId.get(message.metadata?.runId ?? '') ?? ''}
                 />
               ))}
               {status === 'submitted' && !hasAssistantPlaceholder && (
@@ -1409,9 +1430,9 @@ function ChatRuntime() {
                     processPanelVisible
                     ? null
                     : status === 'submitted'
-                      ? '正在连接 Agent…'
+                      ? '思考中'
                       : status === 'streaming'
-                        ? 'Agent 正在处理请求…'
+                        ? '思考中'
                         : null
           }
           disabled={Boolean(error) || Boolean(pendingInterrupt)}
