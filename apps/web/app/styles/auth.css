@@ -21,6 +21,24 @@
   box-shadow: var(--shadow-md);
 }
 
+.login-brand {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.login-logo {
+  height: 64px;
+  width: 64px;
+}
+
+.login-brand h1 {
+  font-size: 22px;
+  margin: 0;
+}
+
 .login-card h1 {
   margin: 0;
   font-size: 22px;
@@ -105,4 +123,38 @@
 
 .login-alt a:hover {
   text-decoration: underline;
+}
+
+/* 登录态校验期间的全屏加载：页面正中 Logo 明暗呼吸渐变 */
+.auth-gate-loading {
+  align-items: center;
+  background: var(--paper);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 200;
+}
+
+.auth-gate-logo {
+  animation: auth-gate-breath 2s ease-in-out infinite;
+  height: 150px;
+  width: 150px;
+}
+
+@keyframes auth-gate-breath {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-gate-logo {
+    animation: none;
+    opacity: 1;
+  }
 }

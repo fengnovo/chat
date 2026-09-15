@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import {
@@ -13,6 +14,7 @@ import {
   type AdminUser,
   type KnowledgeBase,
 } from '../../components/resilient-chat/api';
+import { Icon } from '../../components/resilient-chat/icon';
 import { useAuth } from '../../components/auth/auth-context';
 import { AuthGate } from '../../components/auth/auth-gate';
 import { UserMenu } from '../../components/auth/user-menu';
@@ -47,8 +49,14 @@ function AdminUsersView() {
   if (user && user.role !== 'admin') {
     return (
       <main className="admin-page">
-        <header>
-          <h1>用户管理</h1>
+        <header className="admin-page-header">
+          <div className="admin-page-heading">
+            <Link href="/" className="admin-back">
+              <Icon name="arrow-left" size={15} />
+              返回首页
+            </Link>
+            <h1>用户管理</h1>
+          </div>
         </header>
         <p role="alert">需要管理员权限。</p>
       </main>
@@ -58,9 +66,15 @@ function AdminUsersView() {
   return (
     <main className="admin-page">
       <header className="admin-page-header">
-        <div>
-          <h1>用户管理</h1>
-          <p>管理租户成员、角色与知识库授权。</p>
+        <div className="admin-page-heading">
+          <Link href="/" className="admin-back">
+            <Icon name="arrow-left" size={15} />
+            返回首页
+          </Link>
+          <div>
+            <h1>用户管理</h1>
+            <p>管理租户成员、角色与知识库授权。</p>
+          </div>
         </div>
         <UserMenu />
       </header>

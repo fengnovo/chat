@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 
 import { resetUserData } from '@/app/lib/persistence';
 
@@ -250,10 +251,12 @@ export function UserMenu() {
             <Icon name="home" size={15} />
             首页
           </Link>
-          <Link href="/knowledge" onClick={() => setOpen(false)}>
-            <Icon name="layers" size={15} />
-            知识库
-          </Link>
+          {(user.role === 'admin' || user.role === 'owner') && (
+            <Link href="/knowledge" onClick={() => setOpen(false)}>
+              <Icon name="layers" size={15} />
+              知识库
+            </Link>
+          )}
           {user.role === 'admin' && (
             <Link href="/admin/users" onClick={() => setOpen(false)}>
               <Icon name="shield" size={15} />
@@ -294,25 +297,29 @@ export function UserMenu() {
         )}
       </div>
 
-      {passwordOpen && (
-        passwordSaved ? (
-          <div className="modal-layer">
-            <section className="modal-card password-dialog" role="status">
-              <p className="password-saved">
-                <Icon name="check" size={16} />
-                密码修改成功
-              </p>
-            </section>
-          </div>
-        ) : (
-          <ChangePasswordDialog
-            busy={passwordBusy}
-            error={passwordError}
-            onClose={() => setPasswordOpen(false)}
-            onSubmit={(input) => void handleChangePassword(input)}
-          />
-        )
-      )}
+      {/* Portal 到 body：知识库页 .kc-steps-user 带 transform 会形成包含块，
+          导致 fixed 定位的弹窗被挤成窄条，因此弹窗不能渲染在头像容器内。 */}
+      {passwordOpen &&
+        createPortal(
+          passwordSaved ? (
+            <div className="modal-layer">
+              <section className="modal-card password-dialog" role="status">
+                <p className="password-saved">
+                  <Icon name="check" size={16} />
+                  密码修改成功
+                </p>
+              </section>
+            </div>
+          ) : (
+            <ChangePasswordDialog
+              busy={passwordBusy}
+              error={passwordError}
+              onClose={() => setPasswordOpen(false)}
+              onSubmit={(input) => void handleChangePassword(input)}
+            />
+          ),
+          document.body,
+        )}
     </div>
   );
 }

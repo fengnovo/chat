@@ -1,10 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { useAuth } from '../components/auth/auth-context';
+import { AuthLoading } from '../components/auth/auth-gate';
 import { login } from '../components/resilient-chat/api';
 
 export default function LoginPage() {
@@ -21,6 +23,11 @@ export default function LoginPage() {
       router.replace('/');
     }
   }, [loading, user, router]);
+
+  // 鉴权态未决时只显示加载屏；已登录则留空白帧等待 replace('/')，
+  // 避免刷新过程中登录表单一闪而过。
+  if (loading) return <AuthLoading />;
+  if (user) return null;
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -45,8 +52,16 @@ export default function LoginPage() {
   return (
     <main className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <h1>登录</h1>
-        <p className="login-subtitle">多租户 Coding Agent 平台</p>
+        <div className="login-brand">
+          <Image
+            alt="Keen Agent"
+            className="login-logo"
+            height={64}
+            src="/keen-ai-logo.png"
+            width={64}
+          />
+          <h1>登录</h1>
+        </div>
         <label htmlFor="login-username">用户名</label>
         <input
           id="login-username"

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 type IconName =
   | 'arrow'
+  | 'arrow-left'
   | 'braces'
   | 'check'
   | 'chevron'
@@ -31,6 +32,7 @@ type IconName =
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
     arrow: <path d="m5 12 7-7 7 7M12 5v14" />,
+    'arrow-left': <><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></>,
     braces: <path d="M8 3H6a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h2m8-16h2a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-2" />,
     check: <path d="m5 12 4 4L19 6" />,
     chevron: <path d="m9 18 6-6-6-6" />,

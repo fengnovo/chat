@@ -37,12 +37,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // active 标志用于丢弃 StrictMode 重挂载/组件卸载后才 settle 的旧请求：
+    // 被 abort 的首个请求不能把状态置成“未登录”，否则刷新时会出现
+    // logo → 登录页一闪 → 首页 的闪烁链路。
+    let active = true;
     const controller = new AbortController();
     void fetchCurrentUser(controller.signal)
-      .then((next) => setUser(next))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
-    return () => controller.abort();
+      .then((next) => {
+        if (active) setUser(next);
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setUser(null);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, []);
 
   const value = useMemo(() => ({ user, loading, refresh }), [user, loading, refresh]);

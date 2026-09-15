@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { useAuth } from '../components/auth/auth-context';
+import { AuthLoading } from '../components/auth/auth-gate';
 import { register } from '../components/resilient-chat/api';
 
 export default function RegisterPage() {
@@ -22,6 +23,10 @@ export default function RegisterPage() {
       router.replace('/');
     }
   }, [loading, user, router]);
+
+  // 鉴权态未决时只显示加载屏；已登录则留空白帧等待 replace('/')。
+  if (loading) return <AuthLoading />;
+  if (user) return null;
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
