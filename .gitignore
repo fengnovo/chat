@@ -7,6 +7,9 @@ deploy/env.*
 !deploy/env.*.example
 .turbo/
 .worktrees/
+.pnpm-store/
+.superpowers/
+.trae/
 coverage/
 /data/
 workspace/
