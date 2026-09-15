@@ -77,6 +77,16 @@ export interface AgentTelemetry {
 /** Agent 运行所依赖的沙箱后端类型。 */
 export type AgentBackendMode = 'e2b' | 'docker';
 
+/** 历史消息压缩配置。 */
+export interface SummarizationConfig {
+  /** 触发压缩的 token 阈值。 */
+  triggerTokens: number;
+  /** 压缩后保留的最近 token 数（按 token 而非消息条数，因为工具调用单条消息可能很大）。 */
+  keepTokens: number;
+  /** 旧消息中截断工具参数的 token 阈值（可选）。 */
+  truncateArgsTokens?: number;
+}
+
 export interface HeadlessAgentOptions {
   runId: string;
   sessionId: string;
@@ -103,6 +113,12 @@ export interface HeadlessAgentOptions {
    * 由宿主按 run 粒度构建并决定是否采样；agent-core 只负责透传，不识别内容。
    */
   callbacks?: readonly unknown[];
+  /**
+   * 历史消息压缩配置。
+   * deepagents 内置的 SummarizationMiddleware 对自定义模型无法自动推算 trigger，
+   * 必须由宿主显式提供。传 `false` 可完全禁用。
+   */
+  summarization?: SummarizationConfig | false;
 }
 
 export type AgentResumeInput =

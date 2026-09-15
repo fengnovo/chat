@@ -7,7 +7,7 @@ import { tool } from '@langchain/core/tools';
 import { Command, interrupt, type Interrupt } from '@langchain/langgraph';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import { agentEventSchema, type AgentEvent } from '@repo/contracts';
-import { createDeepAgent } from 'deepagents';
+import { createDeepAgent, createSummarizationMiddleware } from 'deepagents';
 import { humanInTheLoopMiddleware, modelCallLimitMiddleware, todoListMiddleware } from 'langchain';
 import type { HITLRequest, HITLResponse } from 'langchain';
 import { z } from 'zod';
@@ -379,6 +379,32 @@ export async function createDeepAgentRuntime(
   const approvalRule = options.autoApproveTools
     ? false
     : { allowedDecisions: ['approve', 'reject'] };
+  // deepagents 内置的 SummarizationMiddleware 对自定义模型（如 model router）
+  // 无法从 profile 推算 maxInputTokens，导致 trigger 为 undefined、永远不触发压缩。
+  // 这里显式传入 trigger/keep 配置，通过同名中间件替换机制覆盖默认实例。
+  const summarizationConfig = options.summarization;
+  const customMiddleware: unknown[] = [];
+  if (summarizationConfig !== false) {
+    const triggerTokens = (summarizationConfig as { triggerTokens?: number } | undefined)?.triggerTokens ?? 50_000;
+    const keepTokens = (summarizationConfig as { keepTokens?: number } | undefined)?.keepTokens ?? 15_000;
+    const truncateArgsTokens = (summarizationConfig as { truncateArgsTokens?: number } | undefined)?.truncateArgsTokens;
+    customMiddleware.push(
+      createSummarizationMiddleware({
+        backend: options.backend as never,
+        trigger: { type: 'tokens', value: triggerTokens },
+        keep: { type: 'tokens', value: keepTokens },
+        ...(truncateArgsTokens
+          ? {
+              truncateArgsSettings: {
+                trigger: { type: 'tokens', value: truncateArgsTokens },
+                keep: { type: 'tokens', value: 10_000 },
+                maxLength: 2_000,
+              },
+            }
+          : {}),
+      }) as never,
+    );
+  }
   const agent = createDeepAgent({
     model: router.primary,
     checkpointer: options.checkpointer as never,
@@ -426,10 +452,11 @@ export async function createDeepAgentRuntime(
           edit_file: approvalRule,
           delete: approvalRule,
           ...mcpApprovalRules,
-          // execute 此前被硬编码为恒审批，导致“本会话都允许”对命令执行不生效。
+          // execute 此前被硬编码为恒审批，导致"本会话都允许"对命令执行不生效。
           execute: approvalRule,
         },
       } as never) as never,
+      ...customMiddleware,
     ] as never,
   });
   const runnable = agent as unknown as {

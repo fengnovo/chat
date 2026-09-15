@@ -38,7 +38,7 @@ import { withSessionLock } from './lock.js';
 import type { WorkerObservability } from './observability.js';
 import type { WorkerLangfuse } from './langfuse.js';
 import { RedisCircuitBreakerStore } from './redis-circuit-breaker.js';
-import { prepareWorkspace, remoteWorkspacePath } from './workspace.js';
+import { prepareWorkspace, remoteWorkspacePath, uploadAgentResources, type AgentResources } from './workspace.js';
 
 interface ProcessorServices {
   config: WorkerConfig;
@@ -171,6 +171,7 @@ async function createRuntime(
   signal: AbortSignal,
   agentTelemetry?: AgentTelemetry,
   callbacks?: readonly unknown[],
+  agentResources?: AgentResources,
 ): Promise<HeadlessAgentRuntime> {
   if (!backend) throw new Error('Deep agent requires a sandbox backend');
   const root = fileURLToPath(new URL('../../..', import.meta.url));
@@ -208,6 +209,13 @@ async function createRuntime(
       token: knowledgeToken,
       timeoutMs: services.config.KNOWLEDGE_MCP_TIMEOUT_MS,
       enabled: knowledgeMcpEnabled,
+    },
+    ...(agentResources?.memory && agentResources.memory.length > 0 ? { memory: agentResources.memory } : {}),
+    ...(agentResources?.skills && agentResources.skills.length > 0 ? { skills: agentResources.skills } : {}),
+    summarization: {
+      triggerTokens: services.config.AGENT_SUMMARIZATION_TRIGGER_TOKENS,
+      keepTokens: services.config.AGENT_SUMMARIZATION_KEEP_TOKENS,
+      truncateArgsTokens: 40_000,
     },
   });
 }
@@ -387,6 +395,13 @@ export function createRunProcessor(
             job.kind === 'start',
           ),
         );
+        // 上传 DeepAgents memory/skills 到沙箱（宿主机路径由环境变量配置）。
+        const agentResources = await uploadAgentResources(
+          acquiredSandbox,
+          remotePath,
+          services.config.AGENT_MEMORY_FILE,
+          services.config.AGENT_SKILLS_DIR,
+        );
         // Langfuse 按 run 采样：命中则在当前 job span 上下文内建一个 LangChain
         // callback（trace 上会带 tempo_trace_id）；任何异常退化为不写 Langfuse。
         const langchainCallbacks = langfuse
@@ -407,6 +422,7 @@ export function createRunProcessor(
           controller.signal,
           agentTelemetry,
           langchainCallbacks,
+          agentResources,
         );
         if (telemetry) {
           safely(() =>

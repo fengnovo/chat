@@ -57,6 +57,12 @@ const schema = z.object({
   KNOWLEDGE_MCP_SECRET: z.string().optional(),
   KNOWLEDGE_MCP_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(10_000),
   KNOWLEDGE_MCP_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  // DeepAgents memory/skills：宿主机路径，Worker 启动时上传到沙箱。
+  AGENT_MEMORY_FILE: z.string().optional(),
+  AGENT_SKILLS_DIR: z.string().optional(),
+  // 历史消息压缩：token 数超过该阈值时自动压缩旧消息，降低 LLM 输入 token 数。
+  AGENT_SUMMARIZATION_TRIGGER_TOKENS: z.coerce.number().int().min(5_000).max(200_000).default(50_000),
+  AGENT_SUMMARIZATION_KEEP_TOKENS: z.coerce.number().int().min(1_000).max(100_000).default(15_000),
 });
 
 export type WorkerConfig = ReturnType<typeof loadWorkerConfig>;

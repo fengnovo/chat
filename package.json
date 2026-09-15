@@ -20,6 +20,7 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
+    "test:llm": "node --env-file=.env scripts/llm-test.mjs",
     "test": "turbo run test",
     "test:integration": "pnpm infra:up && pnpm db:migrate:test && RUN_INTEGRATION_TESTS=1 DATABASE_URL=${DATABASE_TEST_URL:-postgresql://agent:agent@127.0.0.1:55433/agent_test} pnpm --filter @repo/db test",
     "dev:web": "turbo run dev --filter=web",
