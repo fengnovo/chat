@@ -426,8 +426,8 @@
 
 /* 模型思考过程（reasoning_content）：竖直思维链样式，持久化保留 */
 .thinking-chain {
-  background: var(--surface-soft, #f7f7f8);
-  border: 1px solid var(--border, #e5e7eb);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
   border-radius: 10px;
   margin-bottom: 14px;
   overflow: hidden;
@@ -437,7 +437,7 @@
   align-items: center;
   background: none;
   border: none;
-  color: var(--ink-soft, #6b7280);
+  color: var(--ink-soft);
   cursor: pointer;
   display: flex;
   font-size: 13px;
@@ -462,8 +462,14 @@
   flex: 1;
 }
 
+.thinking-chain-title .streaming-dots {
+  display: inline-flex;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 .thinking-chain-toggle {
-  color: var(--ink-muted, #9ca3af);
+  color: var(--ink-muted);
   font-size: 12px;
 }
 
@@ -472,7 +478,7 @@
 }
 
 .thinking-chain-body {
-  border-top: 1px solid var(--border, #e5e7eb);
+  border-top: 1px solid var(--line);
   /* 1 行起始，随内容增长到 6 行，超出滚动 */
   max-height: calc(1.65em * 6);
   overflow-y: auto;
@@ -502,7 +508,7 @@
 }
 
 .thinking-chain-content {
-  color: var(--ink-soft, #6b7280);
+  color: var(--ink-soft);
   font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
@@ -515,7 +521,7 @@
 }
 
 .thinking-chain-body::-webkit-scrollbar-thumb {
-  background: var(--border, #d1d5db);
+  background: var(--line);
   border-radius: 2px;
 }
 

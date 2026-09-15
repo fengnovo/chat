@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Icon } from './icon';
 import type { AgentActivityEntry, AgentStatus } from './types';
@@ -58,7 +58,14 @@ function AgentStatusPanel({
   status: AgentStatus;
 }) {
   const [open, setOpen] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const visible = status.entries.slice(-VISIBLE_ENTRIES);
+  // 过程记录更新时自动滚动到底部，让用户看到最新动作。
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [status.entries.length, open]);
   // 只有真的产生了过程记录（工具调用或旁白）才显示，避免一上来就挂个空面板。
   if (visible.length === 0) return null;
 
@@ -122,7 +129,7 @@ function AgentStatusPanel({
         </span>
       </button>
       {open && (
-        <div className="agent-process-body" style={{ maxHeight: BODY_MAX_HEIGHT }}>
+        <div className="agent-process-body" ref={bodyRef} style={{ maxHeight: BODY_MAX_HEIGHT }}>
           {visible.map((entry) => (
             <ProcessEntry entry={entry} key={entry.id} />
           ))}

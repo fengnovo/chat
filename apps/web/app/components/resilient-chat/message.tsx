@@ -80,8 +80,8 @@ function Message({
               <span className="thinking-chain-bullet" />
               <span className="thinking-chain-title">
                 {text ? '思考过程' : '思考中'}
+                {!text && <StreamingDots />}
               </span>
-              {!text && <StreamingDots />}
               <span className="thinking-chain-toggle">
                 {thinkingExpanded ? '收起' : '展开'}
               </span>
