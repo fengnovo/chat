@@ -5,7 +5,7 @@ import { startKnowledgeService } from '../src/index.js';
 import { createMcpHttpServer } from '../src/mcp/server.js';
 
 const config: any = { port: 0, tokenSecret:'0123456789012345', redisUrl:'redis://x', postgresUrl:'postgres://x', qdrantUrl:'http://x', embeddingProfile:'p', extractionModel:'m', concurrency:1, budget:1 };
-class FakeServer extends EventEmitter { listening = false; closeCount = 0; listen(_p: number, cb: () => void) { this.listening = true; cb(); return this; } close(cb: (e?: Error) => void) { this.closeCount++; this.listening = false; cb(); } }
+class FakeServer extends EventEmitter { listening = false; closeCount = 0; listen(_p: number, _host: string | undefined, cb: () => void) { this.listening = true; cb(); return this; } close(cb: (e?: Error) => void) { this.closeCount++; this.listening = false; cb(); } }
 test('service close cleans HTTP and dependencies even when worker close fails', async () => {
   const server = new FakeServer(); let queueClosed = false, redisClosed = false;
   const service = await startKnowledgeService(config, { server, worker:{ close: async () => { throw new Error('worker') } }, queue:{ close: async () => { queueClosed = true } }, connection:{ quit: async () => { redisClosed = true } } });

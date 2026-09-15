@@ -1,4 +1,5 @@
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
+import { closeSharedMcpClients } from '@repo/agent-core';
 import { S3ArtifactStore } from '@repo/artifacts';
 import { RUN_QUEUE_NAME, runCancellationChannel } from '@repo/contracts';
 import { createDatabase, migrateDatabase } from '@repo/db';
@@ -121,7 +122,8 @@ const shutdown = async () => {
     }
     // 3. 等待在途任务退出（abort 后很快结束）。
     await worker.close();
-    // 4. 关闭业务资源。
+    // 4. 关闭业务资源（含进程级共享的 base MCP client）。
+    await closeSharedMcpClients();
     await cancellationSubscriber.quit();
     await publisher.quit();
     await connection.quit();

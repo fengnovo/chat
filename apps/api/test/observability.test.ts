@@ -311,6 +311,14 @@ for (const [operation, stream] of [['events', streamAgentEvents], ['chat', strea
       assert.deepEqual(active[0]?.attributes, active[1]?.attributes);
       assert.equal(recording.measurements.find(item => item.name === 'sse.disconnects.total')?.attributes?.reason, reason);
       assert.equal(recording.spans.find(item => item.name === `sse ${operation}`)?.ended, true);
+      const firstDataMeasurements = recording.measurements.filter(
+        item => item.name === 'sse.first_byte.duration',
+      );
+      assert.equal(
+        firstDataMeasurements.length,
+        reason === 'server' ? 1 : 0,
+        'SSE first-byte timing must start at the first event frame, not headers',
+      );
       assert.equal(JSON.stringify(recording.measurements).includes('secret'), false);
     });
   }

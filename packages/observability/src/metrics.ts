@@ -22,6 +22,8 @@ export type AgentPhase =
   | 'session.lock.acquire'
   | 'sandbox.acquire'
   | 'workspace.prepare'
+  | 'agent.resources.upload'
+  | 'agent.runtime.create'
   | 'agent.execute'
   | 'persist'
   | 'cleanup'
@@ -102,6 +104,8 @@ const AGENT_PHASES: readonly AgentPhase[] = [
   'session.lock.acquire',
   'sandbox.acquire',
   'workspace.prepare',
+  'agent.resources.upload',
+  'agent.runtime.create',
   'agent.execute',
   'persist',
   'cleanup',

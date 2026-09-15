@@ -65,7 +65,7 @@ test('service with host adapters runs an IndexPipeline wired to the configured e
     async close() {}
   }
   class FakeServer extends EventEmitter {
-    listen(_port: number, callback: () => void) { callback(); return this; }
+    listen(_port: number, _host: string | undefined, callback: () => void) { callback(); return this; }
     close(callback: () => void) { callback(); }
   }
 

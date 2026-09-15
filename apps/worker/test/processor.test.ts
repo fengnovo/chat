@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jwtVerify } from 'jose';
 
-import { createKnowledgeRunToken } from '../src/processor.js';
+import {
+  createKnowledgeRunToken,
+  resolveWorkerMcpConfigPath,
+} from '../src/processor.js';
 
 const job = {
   kind: 'start' as const,
@@ -17,4 +20,12 @@ test('run token is signed from the immutable job knowledge base snapshot', async
   const { payload } = await jwtVerify(token, new TextEncoder().encode('secret'), { audience: 'knowledge-service' });
   assert.deepEqual(payload.kbIds, job.knowledgeBaseIds);
   assert.equal(payload.runId, job.runId);
+});
+
+test('web worker only loads base MCP tools from an explicitly configured path', () => {
+  assert.equal(resolveWorkerMcpConfigPath(undefined), undefined);
+  assert.equal(
+    resolveWorkerMcpConfigPath('/opt/chat/mcp/production.json'),
+    '/opt/chat/mcp/production.json',
+  );
 });

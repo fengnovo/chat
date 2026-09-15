@@ -60,7 +60,6 @@ export async function streamAgentEvents(
     'x-request-id': request.id,
   });
   reply.raw.flushHeaders();
-  telemetry?.firstByte();
 
   const flush = async () => {
     if (flushing || closed) return;
@@ -73,6 +72,7 @@ export async function streamAgentEvents(
         for (const event of events) {
           if (event.seq <= cursor) continue;
           cursor = event.seq;
+          telemetry?.firstByte();
           reply.raw.write(sseFrame(event));
         }
         if (events.length < 500) break;

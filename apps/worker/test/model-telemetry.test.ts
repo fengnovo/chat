@@ -199,6 +199,15 @@ test('runSpan records phase metric and a child span carrying run_id, and rethrow
   );
   assert.equal(result, 'acquired');
 
+  await harness.telemetry.runSpan(
+    { runId: 'run-123', operation: 'agent.resources.upload' },
+    async () => undefined,
+  );
+  await harness.telemetry.runSpan(
+    { runId: 'run-123', operation: 'agent.runtime.create' },
+    async () => undefined,
+  );
+
   await assert.rejects(
     harness.telemetry.runSpan(
       { runId: 'run-123', operation: 'agent.execute' },
@@ -217,6 +226,14 @@ test('runSpan records phase metric and a child span carrying run_id, and rethrow
   assert.equal(acquire!.attributes.phase, 'sandbox.acquire');
   const execute = spans.find((span) => span.name === 'agent.execute');
   assert.ok(execute);
+  assert.equal(
+    spans.find((span) => span.name === 'agent.resources.upload')?.attributes.phase,
+    'agent.resources.upload',
+  );
+  assert.equal(
+    spans.find((span) => span.name === 'agent.runtime.create')?.attributes.phase,
+    'agent.runtime.create',
+  );
 
   const points = await harness.collect();
   const phasePoints = points.filter((point) => point.name === 'agent.phase.duration');
@@ -228,6 +245,16 @@ test('runSpan records phase metric and a child span carrying run_id, and rethrow
   assert.ok(
     phasePoints.some(
       (point) => point.attributes.phase === 'agent.execute' && point.attributes.outcome === 'failure',
+    ),
+  );
+  assert.ok(
+    phasePoints.some(
+      (point) => point.attributes.phase === 'agent.resources.upload' && point.attributes.outcome === 'success',
+    ),
+  );
+  assert.ok(
+    phasePoints.some(
+      (point) => point.attributes.phase === 'agent.runtime.create' && point.attributes.outcome === 'success',
     ),
   );
   // phase 指标只有 phase/outcome 两个 label。

@@ -143,7 +143,6 @@ export async function streamWorkflowRun(
     'x-request-id': request.id,
   });
   reply.raw.flushHeaders();
-  telemetry?.firstByte();
 
   // flush 期间到达的通知必须排队重跑，不能直接丢弃：
   // 最后一次通知（通常是 run.completed）若被丢掉，finish 永远不会发出，
@@ -155,6 +154,7 @@ export async function streamWorkflowRun(
     if (closed) return true;
     const chunks = chunksFrom(runId, events);
     for (const chunk of chunks.slice(chunkCursor)) {
+      telemetry?.firstByte();
       reply.raw.write(frame(chunk));
       chunkCursor += 1;
     }

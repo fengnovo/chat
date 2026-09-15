@@ -1,5 +1,4 @@
 import { performance } from 'node:perf_hooks';
-import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
@@ -52,6 +51,13 @@ interface ProcessorServices {
 
 function metricJobKind(kind: RunJob['kind']): JobKind {
   return kind === 'start' ? 'run' : 'resume';
+}
+
+/** Web Worker 的通用 MCP 必须显式启用，不能回退到 CLI 的示例配置。 */
+export function resolveWorkerMcpConfigPath(
+  configuredPath: string | undefined,
+): string | undefined {
+  return configuredPath;
 }
 
 /** 遥测调用永不影响任务执行。 */
@@ -174,13 +180,13 @@ async function createRuntime(
   agentResources?: AgentResources,
 ): Promise<HeadlessAgentRuntime> {
   if (!backend) throw new Error('Deep agent requires a sandbox backend');
-  const root = fileURLToPath(new URL('../../..', import.meta.url));
   const knowledgeMcpEnabled = services.config.KNOWLEDGE_MCP_ENABLED &&
     Boolean(services.config.KNOWLEDGE_MCP_URL && services.config.KNOWLEDGE_MCP_SECRET) &&
     job.knowledgeBaseIds.length > 0;
   const knowledgeToken = knowledgeMcpEnabled
     ? await createKnowledgeRunToken(job, services.config.KNOWLEDGE_MCP_SECRET!)
     : '';
+  const mcpConfigPath = resolveWorkerMcpConfigPath(services.config.MCP_CONFIG_PATH);
   return createDeepAgentRuntime({
     runId: job.runId,
     sessionId: job.sessionId,
@@ -202,8 +208,7 @@ async function createRuntime(
     recursionLimit: services.config.AGENT_RECURSION_LIMIT,
     modelCallLimit: services.config.AGENT_MODEL_CALL_LIMIT,
     signal,
-    mcpConfigPath:
-      services.config.MCP_CONFIG_PATH ?? `${root}/packages/ai-cli/mcp/mcp.json`,
+    ...(mcpConfigPath ? { mcpConfigPath } : {}),
     knowledgeMcp: {
       url: services.config.KNOWLEDGE_MCP_URL ?? '',
       token: knowledgeToken,
@@ -396,11 +401,13 @@ export function createRunProcessor(
           ),
         );
         // 上传 DeepAgents memory/skills 到沙箱（宿主机路径由环境变量配置）。
-        const agentResources = await uploadAgentResources(
-          acquiredSandbox,
-          remotePath,
-          services.config.AGENT_MEMORY_FILE,
-          services.config.AGENT_SKILLS_DIR,
+        const agentResources = await observed('agent.resources.upload', () =>
+          uploadAgentResources(
+            acquiredSandbox,
+            remotePath,
+            services.config.AGENT_MEMORY_FILE,
+            services.config.AGENT_SKILLS_DIR,
+          ),
         );
         // Langfuse 按 run 采样：命中则在当前 job span 上下文内建一个 LangChain
         // callback（trace 上会带 tempo_trace_id）；任何异常退化为不写 Langfuse。
@@ -414,15 +421,17 @@ export function createRunProcessor(
               }),
             ) ?? undefined
           : undefined;
-        runtime = await createRuntime(
-          services,
-          job,
-          remotePath,
-          acquiredSandbox,
-          controller.signal,
-          agentTelemetry,
-          langchainCallbacks,
-          agentResources,
+        runtime = await observed('agent.runtime.create', () =>
+          createRuntime(
+            services,
+            job,
+            remotePath,
+            acquiredSandbox,
+            controller.signal,
+            agentTelemetry,
+            langchainCallbacks,
+            agentResources,
+          ),
         );
         if (telemetry) {
           safely(() =>

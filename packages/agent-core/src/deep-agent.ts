@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -12,6 +11,7 @@ import { humanInTheLoopMiddleware, modelCallLimitMiddleware, todoListMiddleware 
 import type { HITLRequest, HITLResponse } from 'langchain';
 import { z } from 'zod';
 
+import { getSharedMcpToolsForConfigPath } from './mcp-client-cache.js';
 import { createResilientModelRouter } from './model-router.js';
 import type {
   AgentResumeInput,
@@ -254,17 +254,35 @@ async function loadMcpTools(configPath?: string, server?: McpServerConfig) {
   if (!server && (!configPath || !existsSync(configPath))) {
     return { tools: [], status: 'not configured', client: null };
   }
-  let client: MultiServerMCPClient | null = null;
+  // knowledgeMcp 携带 per-run JWT（绑定 run、5 分钟过期），token 每轮都变，
+  // 连接必须每次新建、用完即关；loopback 建连仅毫秒级，不做共享缓存。
+  if (server) {
+    let client: MultiServerMCPClient | null = null;
+    try {
+      client = new MultiServerMCPClient({
+        mcpServers: {
+          graphrag: {
+            type: 'http',
+            url: server.url,
+            headers: { Authorization: `Bearer ${server.token}` },
+            timeout: server.timeoutMs,
+          },
+        },
+      } as never);
+      const tools = await client.getTools();
+      return { tools, status: `${tools.length} tools connected`, client };
+    } catch {
+      await client?.close().catch(() => undefined);
+      return { tools: [], status: 'GraphRAG unavailable', client: null };
+    }
+  }
+  // base MCP 由配置文件驱动、无 per-run 凭证：client 进程级共享，首次连接后常驻
+  // 复用，配置内容变更或超 TTL 才重建；dispose 不关闭它（见 mcp-client-cache.ts）。
   try {
-    const config = server
-      ? { mcpServers: { graphrag: { type: 'http', url: server.url, headers: { Authorization: `Bearer ${server.token}` }, timeout: server.timeoutMs } } }
-      : JSON.parse(await readFile(configPath!, 'utf8')) as Record<string, unknown>;
-    client = new MultiServerMCPClient(config as never);
-    const tools = await client.getTools();
-    return { tools, status: `${tools.length} tools connected`, client };
+    const shared = await getSharedMcpToolsForConfigPath(configPath!);
+    return { tools: shared.tools, status: shared.status, client: null };
   } catch {
-    await client?.close().catch(() => undefined);
-    return { tools: [], status: server ? 'GraphRAG unavailable' : 'MCP unavailable', client: null };
+    return { tools: [], status: 'MCP unavailable', client: null };
   }
 }
 
@@ -802,7 +820,9 @@ export async function createDeepAgentRuntime(
       return resumeApproval(input);
     },
     async dispose() {
-      await Promise.all([baseMcp.client?.close(), knowledgeMcp.client?.close()]);
+      // base MCP client 是进程级共享资源（mcp-client-cache.ts），生命周期不绑定
+      // 单次请求；这里只关闭本轮新建的 knowledgeMcp 连接。
+      await knowledgeMcp.client?.close();
     },
   };
 }

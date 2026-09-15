@@ -3,7 +3,7 @@ import { SpanStatusCode } from '@opentelemetry/api';
 import { loadConfig, type KnowledgeServiceConfig } from './config.js';
 import { createMcpHttpServer } from './mcp/server.js';
 import { startConsumer } from './consumer.js';
-import { reconcileQueuedJobs } from './reconciler.js';
+import { findMissingIndexJobs, requeueMissingJobs } from './reconciler.js';
 import { createKnowledgeRuntime } from './runtime.js';
 
 export { createKnowledgeRuntime } from './runtime.js';
@@ -15,27 +15,38 @@ function safely(action: () => void): void {
   } catch {}
 }
 
-/** 对账循环：数据库任务状态是事实，遥测只记录尝试/重新入队数量与最终结果。 */
-async function reconcileOnce(repository: any, queue: any, telemetry: any): Promise<void> {
+/**
+ * 对账循环：数据库任务状态是事实，遥测只记录尝试/重新入队数量与最终结果。
+ * 空轮询（绝大多数情况）只记指标用于心跳与失败率，不产生 trace，避免每 30 秒
+ * 向 Langfuse 刷一条 0.01s 的空 span；仅在实际补偿入队或对账失败时才开 span。
+ * span 一律回填循环开始时间，保证耗时覆盖「扫描 + 补偿」完整对账尝试。
+ */
+export async function reconcileOnce(repository: any, queue: any, telemetry: any): Promise<void> {
   const startedAt = Date.now();
-  const span = telemetry?.tracer?.startSpan('knowledge.reconcile');
+  let span: any;
   let outcome: 'success' | 'failure' = 'success';
   let requeued = 0;
   try {
-    requeued = await reconcileQueuedJobs(repository, queue);
+    const missing = await findMissingIndexJobs(repository, queue);
+    if (missing.length > 0) {
+      span = telemetry?.tracer?.startSpan('knowledge.reconcile', { startTime: startedAt });
+      requeued = await requeueMissingJobs(missing, queue);
+      safely(() => span?.setAttribute('requeued', requeued));
+    }
   } catch (error) {
     outcome = 'failure';
     safely(() => {
+      span ??= telemetry?.tracer?.startSpan('knowledge.reconcile', { startTime: startedAt });
       span?.setStatus({ code: SpanStatusCode.ERROR });
       span?.setAttribute(
         'error.type',
         error instanceof Error ? error.constructor.name.slice(0, 40) : 'unknown',
       );
+      if (error instanceof Error) span?.recordException(error);
     });
     throw error;
   } finally {
     safely(() => {
-      span?.setAttribute('requeued', requeued);
       telemetry?.metrics?.knowledgeOperation?.({
         operation: 'reconcile',
         outcome,
