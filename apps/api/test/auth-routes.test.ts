@@ -265,3 +265,121 @@ test('register maps a duplicate username to 409 and rejects malformed input', as
   }
   await invalid.close();
 });
+
+test('change password is unavailable outside password auth mode', async () => {
+  const app = await makeApp({}, makeConfig());
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    payload: { currentPassword: 'whatever-1', newPassword: 'a-new-password' },
+  });
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.json().error, 'password_change_unavailable');
+  await app.close();
+});
+
+test('change password rejects a wrong current password', async () => {
+  const { hashPassword } = await import('@repo/db');
+  const stored = await hashPassword('old-password-1');
+  let updated = false;
+  const app = await makeApp(
+    {
+      getUserPasswordHash: async (tenant: string, user: string) =>
+        tenant === tenantId && user === userId ? stored : null,
+      updateTenantUser: async () => {
+        updated = true;
+        return null;
+      },
+    },
+    signupConfig(),
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    payload: { currentPassword: 'wrong-password', newPassword: 'a-new-password' },
+  });
+  assert.equal(response.statusCode, 401);
+  assert.equal(response.json().error, 'invalid_current_password');
+  assert.equal(updated, false);
+  await app.close();
+});
+
+test('change password persists the new hash after verifying the current one', async () => {
+  const { hashPassword, verifyPassword } = await import('@repo/db');
+  const stored = await hashPassword('old-password-1');
+  const patches: Array<Record<string, unknown>> = [];
+  const app = await makeApp(
+    {
+      getUserPasswordHash: async () => stored,
+      updateTenantUser: async (tenant: string, user: string, patch: Record<string, unknown>) => {
+        patches.push({ tenant, user, ...patch });
+        return { id: user, username: 'self', displayName: '本人', role: 'member' };
+      },
+    },
+    signupConfig(),
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    payload: { currentPassword: 'old-password-1', newPassword: 'brand-new-password-2' },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { ok: true });
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0]!.tenant, tenantId);
+  assert.equal(patches[0]!.user, userId);
+  assert.match(String(patches[0]!.passwordHash), /^scrypt\$/);
+  assert.equal(
+    await verifyPassword('brand-new-password-2', String(patches[0]!.passwordHash)),
+    true,
+  );
+  await app.close();
+});
+
+test('change password rejects same, short, or missing new passwords', async () => {
+  const { hashPassword } = await import('@repo/db');
+  const stored = await hashPassword('old-password-1');
+  const app = await makeApp(
+    {
+      getUserPasswordHash: async () => stored,
+      updateTenantUser: async () => {
+        throw new Error('must not update');
+      },
+    },
+    signupConfig(),
+  );
+  for (const payload of [
+    { currentPassword: 'old-password-1', newPassword: 'old-password-1' },
+    { currentPassword: 'old-password-1', newPassword: 'short' },
+    { currentPassword: 'old-password-1' },
+    {},
+  ]) {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/change-password',
+      payload,
+    });
+    assert.equal(response.statusCode, 400, JSON.stringify(payload));
+  }
+  await app.close();
+});
+
+test('change password fails closed when the account has no password credential', async () => {
+  const app = await makeApp(
+    {
+      getUserPasswordHash: async () => null,
+      updateTenantUser: async () => {
+        throw new Error('must not update');
+      },
+    },
+    signupConfig(),
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    payload: { currentPassword: 'old-password-1', newPassword: 'a-new-password' },
+  });
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.json().error, 'password_change_unavailable');
+  await app.close();
+});

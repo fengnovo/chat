@@ -1102,6 +1102,20 @@ export class AgentRepository {
     return result.rows[0] ? String(result.rows[0].display_name) : null;
   }
 
+  // 自助修改密码时校验原密码：无成员关系或账号没有密码（非密码模式账号）时返回 null。
+  async getUserPasswordHash(tenantId: string, userId: string): Promise<string | null> {
+    const result = await this.pool.query(
+      `SELECT u.password_hash
+       FROM users u
+       JOIN tenant_memberships tm ON tm.user_id = u.id AND tm.tenant_id = $1
+       WHERE u.id = $2`,
+      [tenantId, userId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return row.password_hash === null ? null : String(row.password_hash);
+  }
+
   async listTenantUsers(
     tenantId: string,
   ): Promise<Array<{ id: string; username: string | null; displayName: string; role: string; grantedKbCount: number; createdAt: string }>> {

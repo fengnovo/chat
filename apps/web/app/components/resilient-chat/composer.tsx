@@ -251,12 +251,14 @@ function Composer({
           >
             <Icon name="paperclip" size={18} />
           </button>
-          <KnowledgeBaseMenu
-            bases={knowledgeBases}
-            value={knowledgeBaseIds}
-            onToggle={onToggleKnowledgeBase}
-            onChangeAll={onChangeKnowledgeBases}
-          />
+          {knowledgeBases.length > 0 && (
+            <KnowledgeBaseMenu
+              bases={knowledgeBases}
+              value={knowledgeBaseIds}
+              onToggle={onToggleKnowledgeBase}
+              onChangeAll={onChangeKnowledgeBases}
+            />
+          )}
           {isBusy ? (
             <button
               className="send-button is-stop"

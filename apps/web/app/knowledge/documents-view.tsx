@@ -109,8 +109,14 @@ export function DocumentsView({
         );
         setUploadState(state);
         await onChanged();
-      } catch {
-        setUploadState({ kind: 'error', message: `${file.name} 上传失败，请重试。` });
+      } catch (caught) {
+        setUploadState({
+          kind: 'error',
+          message:
+            caught instanceof Error && caught.message
+              ? `${file.name}：${caught.message}`
+              : `${file.name} 上传失败，请重试。`,
+        });
       } finally {
         activeUploads.current.delete(kb.id);
       }

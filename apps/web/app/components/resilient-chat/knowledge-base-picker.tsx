@@ -90,7 +90,6 @@ function KnowledgeBaseMenu({
   }, [open]);
 
   const allSelected = bases.length > 0 && value.length === bases.length;
-  const noneSelected = value.length === 0;
 
   return (
     <div className={`kb-menu ${open ? 'is-open' : ''}`} ref={rootRef}>
@@ -103,11 +102,6 @@ function KnowledgeBaseMenu({
         onClick={() => setOpen((current) => !current)}
       >
         <Icon name="layers" size={18} />
-        {!allSelected && !noneSelected && (
-          <span className="kb-menu-count" aria-hidden="true">
-            {value.length}
-          </span>
-        )}
       </button>
 
       <div className="kb-menu-popover" role="menu">

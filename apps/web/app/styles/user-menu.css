@@ -146,8 +146,11 @@
   padding-top: 6px;
 }
 
-.user-badge-links a {
+.user-badge-links a,
+.user-badge-links button {
   align-items: center;
+  background: none;
+  border: 0;
   border-radius: 8px;
   color: var(--ink-soft);
   display: flex;
@@ -155,11 +158,14 @@
   font-weight: 500;
   gap: 9px;
   padding: 8px 10px;
+  text-align: left;
   text-decoration: none;
   transition: background 140ms ease, color 140ms ease;
+  width: 100%;
 }
 
-.user-badge-links a:hover {
+.user-badge-links a:hover,
+.user-badge-links button:hover {
   background: var(--surface-soft);
   color: var(--ink);
 }
@@ -202,4 +208,20 @@
   .user-badge-trigger {
     padding: 3px;
   }
+}
+
+/* 修改密码弹窗：复用 modal.css 的卡片体系，收窄到表单宽度 */
+.password-dialog {
+  width: min(420px, 100%);
+}
+
+.password-saved {
+  align-items: center;
+  color: var(--green);
+  display: flex;
+  font-size: 15px;
+  font-weight: 650;
+  gap: 8px;
+  justify-content: center;
+  margin: 8px 0;
 }

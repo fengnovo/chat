@@ -26,8 +26,8 @@
 |---|---|---|
 | 22 | SSH | 你的固定 IP |
 | 80 | HTTP → HTTPS 跳转 + Let's Encrypt 校验 | 0.0.0.0/0 |
-| 443 | Web + API | 0.0.0.0/0 |
-| 9443 | MinIO 预签名直传/下载（§8.3） | 0.0.0.0/0 |
+| 443 | Web + API + MinIO 同源代理（`/agent-artifacts/`，§8.3） | 0.0.0.0/0 |
+| 9443 | （可选）MinIO 独立端口备选方案，同源方案下不需要 | 0.0.0.0/0 |
 
 **不要**对外开放 3020 / 8002 / 55432 / 56379 / 59000 —— 这些在 `.env` 里都绑定在 127.0.0.1。
 
@@ -127,7 +127,7 @@ openssl rand -hex 16   # → MINIO_ROOT_PASSWORD
 | 变量 | 值 |
 |---|---|
 | `WEB_ORIGIN` | `https://你的域名`（自签方案填 `https://公网IP`） |
-| `S3_PUBLIC_ENDPOINT` | `https://你的域名:9443` |
+| `S3_PUBLIC_ENDPOINT` | `https://你的域名`（与主站同源，Nginx 代理 `/agent-artifacts/`；独立端口方案才用 `:9443`） |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | 与 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` 一致 |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `MODEL` | 你的模型服务 |
 | `AUTH_JWT_SECRET` | 上一步生成，≥32 字符 |
@@ -224,7 +224,9 @@ sudo certbot renew --dry-run     # 确认自动续期
 - `proxy_buffering off` + `chunked_transfer_encoding on` + 长超时：**SSE 流式输出必需**，
   少了这些聊天会一次性卡住不出字。
 - `/api/` 直接转发到 `8002`，绕过 Next 的 rewrite，少一跳、流式更稳。
-- MinIO 那段的 `proxy_set_header Host $http_host;` **必须保留端口**：
+- MinIO 走主站同源时，443 段必须有 `location /agent-artifacts/ { proxy_pass http://chat_minio; }`，
+  且 `.env` 的 `S3_PUBLIC_ENDPOINT=https://你的域名`（不带端口）。
+- 独立端口方案（:9443）下 MinIO 段的 `proxy_set_header Host $http_host;` **必须保留端口**：
   预签名 URL 的 SigV4 签名包含 Host，丢了端口会 `SignatureDoesNotMatch`。
 - `location = /knowledge { return 404; }` 暂时挡掉知识库页面（§11）。启用后删掉。
 
@@ -313,6 +315,7 @@ sudo crontab -e
 | Worker 报 `docker: command not found` / 权限拒绝 | `chatapp` 未在 docker 组或服务未重启 | `sudo usermod -aG docker chatapp && sudo systemctl restart chat-worker` |
 | 聊天不出字、最后一次性刷出 | Nginx 缓冲了 SSE | 确认 `proxy_buffering off` 与长 `proxy_read_timeout` 生效 |
 | 上传/下载 `SignatureDoesNotMatch` | 预签名 Host 与 Nginx 转发的不一致 | MinIO 段必须 `proxy_set_header Host $http_host;`，且 `S3_PUBLIC_ENDPOINT` 与访问地址完全一致 |
+| 上传一直 pending / 超时 / 控制台 CORS 报错 | 预签名 URL 走 `:9443` 但安全组没放行，或跨域被拦 | 改用同源方案：443 加 `location /agent-artifacts/`，`S3_PUBLIC_ENDPOINT=https://域名`，重启 API；或安全组放行 9443 |
 | `pnpm install` 报 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` | 非 TTY 下 pnpm 拒绝重建 node_modules | `CI=true pnpm install --frozen-lockfile` |
 | 沙箱命令返回 124 | 单条命令超时 | 调整 `DOCKER_SANDBOX_COMMAND_TIMEOUT_MS`（上限 600000） |
 | 磁盘逐渐满 | 会话目录 + 容器日志 | 上 §12 的清理 cron；确认 Docker `log-opts` 已生效 |
@@ -412,240 +415,172 @@ deploy/
 └── scripts/
     ├── host-setup.sh                # 宿主机初始化
     ├── app-build.sh                 # 构建 + 发布
-    └── cleanup-sandboxes.sh         # 会话目录清理（cron）
+    ├── cleanup-sandboxes.sh         # 会话目录清理（cron）
+    ├── verify-observability.sh      # 可观测性静态校验
+    └── fault-injection-observability.sh  # 9 类故障 fail-open 演练
 ```
 
+---
 
+## 14. 上线到 chat.keen-tech.top（2026-09 可观测性版本）
 
-基础设施全上 Docker。这和我生成的配置一致——Postgres/Redis/MinIO/Qdrant 走 Docker Compose，应用走 systemd。让我确认一下 infra compose 的端口映射是否和 .env 对应。
-用户补充说整个项目包括数据库、Docker 都会部署到 xxx.xxx.xxx.xxx 上，所有数据库相关的都部署到 Docker 上。
+面向服务器 **101.96.208.160**、域名 **https://chat.keen-tech.top**、部署目录 `/opt/chat`。
+本次更新在已有部署上叠加：可观测性（OTel + Alloy + Grafana 栈）、合成探针、
+4 个 systemd 单元的 `--import` 预载。首次裸机部署仍走第 1~12 节，本节是**更新清单**。
 
-这和现有的部署架构是一致的——基础设施（Postgres、Redis、MinIO、Qdrant）都用 Docker Compose 部署，应用（Web、API、Worker、Knowledge-service）用 systemd 部署在宿主机上。
+> 密钥纪律：`deploy/env.keen-tech.top` 已被 `.gitignore` 忽略且模板内密钥已全部换成
+> `REPLACE_*` 占位。真实值只存在于服务器 `/opt/chat/.env`（chmod 600），
+> rsync/git 都不应带走它。
 
-我刚才生成的配置已经是这个架构了。让我确认一下 compose.infra.yaml 看看数据库配置是否正确。
-
-端口映射完全对应。让我确认构建脚本是否包含 knowledge-service。
-compose.infra.yaml 的端口映射和我的 .env 配置完全对应：
-- Postgres: 127.0.0.1:55432 → DATABASE_URL 用 55432 ✓
-- Redis: 127.0.0.1:56379 → REDIS_URL 用 56379 ✓
-- MinIO: 127.0.0.1:59000 → S3_ENDPOINT 用 59000 ✓
-- Qdrant: 127.0.0.1:56333 (compose.qdrant.yaml) → QDRANT_URL 用 56333 ✓
-
-所有数据库/中间件都在 Docker 里，只绑定 127.0.0.1，不暴露公网。应用通过 systemd 跑在宿主机上，通过 127.0.0.1 访问这些服务。
-
-现在让我更新 todo list 并给用户一个完整的总结。
-
-我还需要提醒用户：
-1. 密钥需要替换（REPLACE_* 的部分）
-2. knowledge-service 需要构建（pnpm build 会构建所有包）
-3. 启动 Qdrant 需要叠加 compose.qdrant.yaml
-4. systemd 配置需要安装并启动
-
-让我检查 app-build.sh 是否会构建 knowledge-service。
-
-构建脚本会 `pnpm build` 全部包，但只装了 3 个 systemd unit，漏了 knowledge-service。我来补上。
-`app-build.sh` 会执行 `pnpm build`，这会构建所有 workspace 包，包括 knowledge-service。但它只安装了 chat-api、chat-worker、chat-web 三个 systemd unit，没有 chat-knowledge。我需要更新这个脚本，把 chat-knowledge.service 也加进去。
-
-让我更新 app-build.sh。
-
-配置全部生成完毕。以下是完整方案：
-
-## 生成的文件
-
-| 文件 | 用途 |
-|------|------|
-| [deploy/env.keen-tech.top](file:///Users/keen/Desktop/code/projects/chat/deploy/env.keen-tech.top) | 线上 .env 配置 |
-| [deploy/nginx/chat.keen-tech.top.conf](file:///Users/keen/Desktop/code/projects/chat/deploy/nginx/chat.keen-tech.top.conf) | Nginx 配置 |
-| [deploy/systemd/chat-knowledge.service](file:///Users/keen/Desktop/code/projects/chat/deploy/systemd/chat-knowledge.service) | knowledge-service systemd |
-
-## 架构总览
-
-```
-公网用户
-  │
-  ▼
-chat.keen-tech.top:443 (Nginx)
-  ├─ /          → Next.js Web (3020)
-  ├─ /api/*     → API 直连 (8002)        ← SSE 流式少一跳
-  └─ /knowledge → Next.js Web (3020)
-  │
-chat.keen-tech.top:9443 (Nginx)
-  └─ /*         → MinIO (59000)          ← 预签名直传/下载
-  │
-  ──────────── 127.0.0.1 内网 ────────────
-  │
-  ├─ Postgres (55432)    ┐
-  ├─ Redis (56379)       │  Docker Compose
-  ├─ MinIO (59000)       │
-  └─ Qdrant (56333)      ┘
-  │
-  ├─ chat-web.service      (systemd)
-  ├─ chat-api.service      (systemd)
-  ├─ chat-worker.service   (systemd, 需 docker.sock)
-  └─ chat-knowledge.service (systemd)
-```
-
-## 部署步骤
-
-### 1. 上传代码到服务器
+### 14.1 同步代码到服务器
 
 ```bash
-rsync -av --delete \
-  --exclude node_modules --exclude .next --exclude dist --exclude .turbo \
-  --exclude .git --exclude data \
-  ./ chatapp@xxx.xxx.xxx.xxx:/opt/chat/
-```
-
-### 2. 复制并填写 .env
-
-```bash
-cd /opt/chat
-cp deploy/env.keen-tech.top .env
-chmod 600 .env
-```
-
-**必须替换的密钥**（在服务器上生成）：
-```bash
-openssl rand -hex 32   # → AUTH_JWT_SECRET
-openssl rand -hex 16   # → POSTGRES_PASSWORD（同时填 DATABASE_URL 和 POSTGRES_PASSWORD）
-openssl rand -hex 16   # → MINIO_ROOT_PASSWORD
-openssl rand -hex 32   # → KNOWLEDGE_MCP_SECRET 和 KNOWLEDGE_TOKEN_SECRET（两个必须相同）
-```
-
-### 3. 启动基础设施（含 Qdrant）
-
-```bash
-docker compose -f deploy/compose.infra.yaml -f deploy/compose.qdrant.yaml --env-file .env up -d --wait
-```
-
-### 4. 初始化数据库
-
-```bash
-pnpm install --frozen-lockfile
-pnpm db:migrate
-pnpm db:seed    # 建 admin/owner/user 三个默认账号
-```
-
-### 5. 构建并启动应用
-
-```bash
-bash deploy/scripts/app-build.sh
-```
-
-### 6. 配置 Nginx + HTTPS
-
-```bash
-sudo cp /opt/chat/deploy/nginx/chat.keen-tech.top.conf /etc/nginx/conf.d/chat.conf
-sudo certbot --nginx -d chat.keen-tech.top
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-## 安全组放行
-
-| 端口 | 用途 | 来源 |
-|------|------|------|
-| 22 | SSH | 你的 IP |
-| 80 | HTTP→HTTPS 跳转 | 0.0.0.0/0 |
-| 443 | Web + API | 0.0.0.0/0 |
-| 9443 | MinIO 预签名 | 0.0.0.0/0 |
-
-**不要**开放 3020/8002/55432/56379/59000/56333/8090，这些都绑在 127.0.0.1。
-
-## 验证
-
-```bash
-# 服务状态
-systemctl status chat-api chat-worker chat-web chat-knowledge --no-pager
-
-# 健康检查
-curl -s http://127.0.0.1:8002/health/ready
-curl -s http://127.0.0.1:8090/healthz
-
-# 外网
-curl -I https://chat.keen-tech.top/
-```
-
-
-需要区分几个 `.env` 文件，它们的用途不同：
-
-## 三个 .env 文件的区别
-
-| 文件 | 用途 | 需要改吗 |
-|------|------|---------|
-| 根目录 `.env` | **本地开发**用（端口 8002/3020、本地数据库等） | ❌ 不用改，本地开发继续用 |
-| `.env.example` | **模板**，提交到 git 给别人参考 | ❌ 不用改（除非加新变量） |
-| `deploy/env.keen-tech.top` | **线上配置模板**，我刚生成的 | ✅ 复制到服务器后替换密钥 |
-
-## 关键点：rsync 时要排除本地 .env
-
-你本地的 `.env` 是开发配置，如果直接 rsync 到服务器会覆盖线上配置。让我确认一下排除规则。
-用户问的是：部署上线时，根目录的 `.env` 文件需要管吗？需要改吗？
-
-这里有几个 `.env` 文件需要区分：
-1. 本地开发用的 `.env`（在项目根目录，当前用户正在用的）
-2. 线上用的 `.env`（部署到服务器 `/opt/chat/.env`）
-3. `.env.example`（模板，提交到 git）
-
-用户当前打开的是 `.env.example`。
-
-关键问题是：根目录的 `.env`（本地开发用的）会不会被 rsync 传到线上？或者线上的 `.env` 是怎么来的？
-
-从之前的部署步骤看：
-- rsync 上传代码时，应该排除 `.env`（因为本地的 `.env` 是开发配置，端口、密钥等都不一样）
-- 线上应该用 `deploy/env.keen-tech.top` 复制成 `/opt/chat/.env`
-
-所以答案是：
-1. **本地根目录的 `.env`**：不需要改，它是本地开发用的。rsync 时要排除它。
-2. **线上 `/opt/chat/.env`**：需要用 `deploy/env.keen-tech.top` 复制过去，然后替换密钥。
-3. **`.env.example`**：是模板，不需要改（除非有新的变量要加）。
-
-让我检查一下 rsync 命令是否排除了 .env。从之前给的部署步骤看，rsync 排除了 node_modules, .next, dist, .turbo, .git, data，但没有排除 .env。这是个问题——本地的 .env 会被传到线上，覆盖线上的配置。
-
-我需要提醒用户在 rsync 时排除 .env，或者在部署步骤中明确说明。
-
-让我检查一下 .gitignore 是否排除了 .env。
-
-`.env` 已经在 `.gitignore` 里了，不会被提交到 git。但 rsync 不会自动读 .gitignore，需要手动排除。
-
-我之前给的 rsync 命令没有排除 .env，这是个问题。我需要更新部署步骤，在 rsync 时加上 `--exclude .env`。
-
-让我给用户一个清晰的回答：
-1. 本地 `.env` 不用改
-2. 线上用 `deploy/env.keen-tech.top` 复制成 `/opt/chat/.env`
-3. rsync 时要排除 `.env`，避免本地配置覆盖线上
-
-我应该更新之前给的 rsync 命令。
-`.env` 已在 `.gitignore` 中，不会进 git。但 **rsync 不会读 .gitignore**，需要手动排除。
-
-## 回答你的问题
-
-**根目录的 `.env` 不用管、不用改**，它是你本地开发用的。线上用的是单独的 `/opt/chat/.env`。
-
-但有一个坑：之前给的 rsync 命令**没有排除 `.env`**，本地的开发配置会被传到服务器覆盖线上配置。需要加上 `--exclude .env`。
-
-## 修正后的上传命令
-
-```bash
+# 在本机（工作区根目录）——注意 --exclude .env，绝不覆盖服务器配置
 rsync -av --delete \
   --exclude .env \
   --exclude node_modules --exclude .next --exclude dist --exclude .turbo \
   --exclude .git --exclude data \
-  ./ chatapp@xxx.xxx.xxx.xxx:/opt/chat/
+  ./ chatapp@101.96.208.160:/opt/chat/
 ```
 
-## 线上 .env 的正确放置方式
+### 14.2 合并 .env 新键（不要 cp 覆盖）
+
+模板新增了一整段可观测性配置（OTEL_* / LANGFUSE_* / PROBE_*）。
+在服务器上手工把这些键追加进 `/opt/chat/.env`，**保留服务器上的真实密钥**：
 
 ```bash
-# 在服务器上
+ssh chatapp@101.96.208.160
 cd /opt/chat
-cp deploy/env.keen-tech.top .env   # 从模板复制
+# 对照模板把新增段落补进 .env（OTEL_ENABLED=true、OTEL_ENVIRONMENT=production、
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 等）；
+# OPENAI_API_KEY / EMBEDDING_API_KEY / 各 REPLACE_* 不要动现有的真实值
+diff <(grep -oE '^[A-Z_]+' .env | sort) <(grep -oE '^[A-Z_]+' deploy/env.keen-tech.top | sort)
 chmod 600 .env
-# 然后替换里面的 REPLACE_* 密钥
 ```
 
-**不要**把本地的 `.env` 直接传上去，因为：
-- 本地 `API_PORT=8002` 虽然端口一样，但 `WEB_ORIGIN=http://localhost:3020` 线上必须是 `https://chat.keen-tech.top`
-- 本地密钥（JWT、数据库密码、MinIO 密码）线上必须重新生成
-- 本地 `AUTH_SIGNUP_ENABLED=true` 线上应该是 `false`
+注意：`OTEL_SERVICE_NAME` 在 .env 里**留空**，四个 systemd 单元会各自强制设置。
 
-所以总结：**本地 `.env` 不动，线上用 `deploy/env.keen-tech.top` 复制后填密钥**。
+### 14.3 启动观测栈（先于应用重启）
+
+```bash
+cd /opt/chat
+# compose 自动读取 compose 文件同目录的 .env（deploy/.env）；只在服务器创建，不入库
+sudo install -m 600 /dev/null /opt/chat/deploy/.env
+sudo tee -a /opt/chat/deploy/.env >/dev/null <<'EOF'
+GRAFANA_ADMIN_PASSWORD=换成强密码
+# 暂无通知渠道时保留下面三行默认值（.invalid，永不投递，告警照常评估）
+PAGE_WEBHOOK_URL=http://notify-page.disabled.invalid/hook
+URGENT_WEBHOOK_URL=http://notify-urgent.disabled.invalid/hook
+TICKET_WEBHOOK_URL=http://notify-ticket.disabled.invalid/hook
+EOF
+
+docker compose -f deploy/compose.observability.yaml up -d --wait
+docker compose -f deploy/compose.observability.yaml ps   # 6 个容器全 healthy
+```
+
+观测端口全部只绑 127.0.0.1，**安全组只放行 22/80/443**，不要开
+33000/39090/39093/4317/4318。Grafana/Prometheus 走 SSH 隧道在本机浏览器访问：
+
+```bash
+ssh -N -L 33000:127.0.0.1:33000 -L 39090:127.0.0.1:39090 chatapp@101.96.208.160
+# 本机浏览器：http://127.0.0.1:33000（admin / 上一步的 GRAFANA_ADMIN_PASSWORD）
+```
+
+资源预算：观测栈上限约 2.4 GiB 内存 / 4.5 CPU，与业务同机 8C16G 有余量；
+调参与扩容顺序见 [capacity-baseline.md](../docs/observability/capacity-baseline.md)。
+
+### 14.4 构建并重启应用
+
+```bash
+cd /opt/chat
+bash deploy/scripts/app-build.sh
+```
+
+app-build 会安装新版 systemd 单元（已带 `--import` 预载与 `TimeoutStopSec=15`）
+并重启 api/worker/web/knowledge。确认四个服务 active 且无遥测初始化报错：
+
+```bash
+systemctl is-active chat-api chat-worker chat-knowledge chat-web
+journalctl -u chat-api -u chat-worker --since '2 min ago' --no-pager | grep -iE 'observ|otel' || echo '无遥测报错'
+curl -s http://127.0.0.1:8002/health/ready
+```
+
+### 14.5 更新 Nginx（upstream 必须改回环）
+
+本次 [chat.keen-tech.top.conf](nginx/chat.keen-tech.top.conf) 把 upstream 从公网 IP
+改成了 `127.0.0.1`——应用只监听回环，写公网 IP 会连不上。
+
+```bash
+sudo cp /opt/chat/deploy/nginx/chat.keen-tech.top.conf /etc/nginx/conf.d/chat.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+证书沿用 `/etc/nginx/ssl/keen-tech.top.{crt,key}`；MinIO 主链路走 443 的
+`/agent-artifacts/`，**9443 不必在安全组放行**。
+
+### 14.6 合成探针
+
+常规探针（live/ready/鉴权拒绝，60s 一次，无需凭据）直接装：
+
+```bash
+sudo cp /opt/chat/deploy/systemd/chat-synthetic-probe.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now chat-synthetic-probe.timer
+systemctl list-timers chat-synthetic-probe.timer
+journalctl -u chat-synthetic-probe -n 20 --no-pager     # 看到 synthetic probe finished
+```
+
+canary（15m 一次真实建会话+发 run）可选。先在应用里建一个专用合成账号（member），
+在服务器上用 jose 签一张长效 token（登录 JWT 本身 7 天过期）：
+
+```bash
+cd /opt/chat/apps/api
+PROBE_USER_ID=<合成账号 uuid> \
+TENANT_ID=00000000-0000-4000-8000-000000000001 \
+SECRET=$(grep '^AUTH_JWT_SECRET=' /opt/chat/.env | cut -d= -f2-) \
+node --input-type=module -e '
+  import { SignJWT } from "jose";
+  console.log(await new SignJWT({ tenant_id: process.env.TENANT_ID, roles: ["member"] })
+    .setProtectedHeader({ alg: "HS256" }).setSubject(process.env.PROBE_USER_ID)
+    .setIssuedAt().setExpirationTime("730d")
+    .sign(new TextEncoder().encode(process.env.SECRET)));'
+# 把输出写入 /opt/chat/.env：PROBE_API_TOKEN=<token>，然后
+sudo cp /opt/chat/deploy/systemd/chat-synthetic-canary.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now chat-synthetic-canary.timer
+```
+
+### 14.7 验收（全部走真实 HTTPS 口径，不用 -k / 不走 HTTP）
+
+```bash
+# 1) 外网 HTTPS
+curl -fsSI https://chat.keen-tech.top/ | head -3
+curl -s -o /dev/null -w '%{http_code}\n' https://chat.keen-tech.top/api/auth/login \
+  -X POST -H 'content-type: application/json' -d '{}'   # 期望 400 类校验错误，不是 502/超时
+
+# 2) 服务器内健康；Grafana/Prometheus 经 SSH 隧道访问
+curl -s http://127.0.0.1:8002/health/ready             # {"status":"ready"}
+curl -s http://127.0.0.1:39090/api/v1/targets | grep -o '"health":"up"' | wc -l   # 期望 5
+```
+
+浏览器：
+- [ ] https://chat.keen-tech.top 登录成功、刷新不掉线（Secure cookie + HTTPS）
+- [ ] 发一条消息逐字流式输出；跑一次多步 Agent 任务
+- [ ] 隧道内 Grafana：Chat 文件夹 5 个 dashboard；Overview 出现 agent-api 等 job 的曲线；
+      Tempo 能查到一条 run 的完整父子链并可跳转 Loki 日志
+- [ ] Prometheus `/api/v1/rules` 31 条规则；Alertmanager `/api/v2/receivers` 有 page/urgent/ticket
+- [ ] `systemctl list-timers` 中探针 timer 在列，journal 有 finished 记录
+
+告警端到端与 9 类故障演练见第 13 节和 [release-checklist.md](../docs/observability/release-checklist.md)。
+
+### 14.8 回滚
+
+```bash
+# 应用层（秒级）：.env 设 OTEL_ENABLED=false、LANGFUSE_ENABLED=false 后重启
+sudo systemctl restart chat-api chat-worker chat-knowledge chat-web
+# 观测栈整体下线（不影响 infra 与业务）
+docker compose -f /opt/chat/deploy/compose.observability.yaml down
+# Nginx 异常时：恢复旧 conf 后 nginx -t && systemctl reload
+```
+
+发布窗口想屏蔽告警，在 Alertmanager UI（隧道 39093）按 service 建 silence，
+不要改 PromQL 做时间排除。

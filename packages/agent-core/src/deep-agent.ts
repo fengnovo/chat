@@ -363,13 +363,15 @@ export async function createDeepAgentRuntime(
     : { tools: [], status: 'not configured', client: null };
   const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools];
   const protectedToolApproval = { allowedDecisions: ['approve', 'reject'] };
+  // 会话级自动批准（用户点过“本会话都允许”）时，所有工具一律放行；
+  // 否则写操作、命令、MCP 工具都要逐项审批（graphrag_search 只读，始终免批）。
   const mcpApprovalRules = Object.fromEntries(
     mcpTools
       .map((mcpTool) => String((mcpTool as { name?: unknown }).name ?? ''))
       .filter((name) => name && name !== 'ask_user')
       .map((name) => [
         name,
-        name === 'graphrag_search'
+        options.autoApproveTools || name === 'graphrag_search'
           ? false
           : protectedToolApproval,
       ]),
@@ -424,7 +426,8 @@ export async function createDeepAgentRuntime(
           edit_file: approvalRule,
           delete: approvalRule,
           ...mcpApprovalRules,
-          execute: protectedToolApproval,
+          // execute 此前被硬编码为恒审批，导致“本会话都允许”对命令执行不生效。
+          execute: approvalRule,
         },
       } as never) as never,
     ] as never,

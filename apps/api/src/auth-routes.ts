@@ -101,6 +101,47 @@ export async function registerAuthRoutes(app: FastifyInstance, services: Service
     return { ok: true };
   });
 
+  // 自助修改密码：仅 password 模式开放，必须校验当前密码，新密码沿用注册/管理员建号规则。
+  // 修改成功后当前会话 Cookie（JWT）继续有效，无需重新登录。
+  app.post('/api/auth/change-password', async (request, reply) => {
+    if (services.config.AUTH_MODE !== 'password') {
+      return reply.code(403).send({ error: 'password_change_unavailable' });
+    }
+    const input = z
+      .object({
+        currentPassword: z.string().min(1).max(200),
+        newPassword: z.string().min(8).max(200),
+      })
+      .refine((value) => value.newPassword !== value.currentPassword, {
+        message: 'new_password_must_differ',
+        path: ['newPassword'],
+      })
+      .parse(request.body ?? {});
+
+    const passwordHash = await services.repository.getUserPasswordHash(
+      request.auth.tenantId,
+      request.auth.userId,
+    );
+    if (!passwordHash) {
+      // 当前账号没有密码凭据（正常 password 模式不会出现），失败收口而非放行。
+      return reply.code(403).send({ error: 'password_change_unavailable' });
+    }
+    const passwordOk = await verifyPassword(input.currentPassword, passwordHash);
+    if (!passwordOk) {
+      return reply.code(401).send({ error: 'invalid_current_password' });
+    }
+
+    const updated = await services.repository.updateTenantUser(
+      request.auth.tenantId,
+      request.auth.userId,
+      { passwordHash: await hashPassword(input.newPassword) },
+    );
+    if (!updated) {
+      return reply.code(404).send({ error: 'user_not_found' });
+    }
+    return { ok: true };
+  });
+
   app.get('/api/auth/me', async (request) => {
     const auth = request.auth;
     const displayName = await services.repository.getUserDisplayName(

@@ -224,6 +224,38 @@ export async function logout(): Promise<void> {
   await fetch('/api/auth/logout', { method: 'POST' });
 }
 
+export type ChangePasswordError =
+  | 'invalid_current_password'
+  | 'password_change_unavailable'
+  | 'weak_password'
+  | 'same_password';
+
+export async function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<void> {
+  const response = await apiFetch('/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (response.ok) return;
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string }
+    | null;
+  if (
+    payload?.error === 'invalid_current_password' ||
+    payload?.error === 'password_change_unavailable'
+  ) {
+    throw new Error(payload.error as ChangePasswordError);
+  }
+  // Zod 校验失败（新密码长度不足、与旧密码相同等）统一归为参数问题。
+  if (response.status === 400) {
+    throw new Error('weak_password' satisfies ChangePasswordError);
+  }
+  throw new Error(payload?.error ?? `HTTP ${response.status}`);
+}
+
 // ---- 管理员：用户管理与知识库授权 ----
 export type AdminUser = {
   id: string;

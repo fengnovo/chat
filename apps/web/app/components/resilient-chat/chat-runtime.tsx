@@ -17,7 +17,6 @@ import {
   clearPersistedRun,
   readPersistedRun,
   readSessionCache,
-  type SessionCache,
   writePersistedRun,
   writeSessionCache,
 } from '@/app/lib/persistence';
@@ -190,13 +189,13 @@ function ChatRuntime() {
       setSessions(page.data);
       setSessionsNextCursor(page.nextCursor);
       setSessionsError(null);
-      persistSessions({ data: page.data, nextCursor: page.nextCursor });
+      writeSessionCache({ data: page.data, nextCursor: page.nextCursor }, userId);
     } catch {
       setSessionsError('历史记录加载失败');
     } finally {
       setSessionsLoaded(true);
     }
-  }, []);
+  }, [userId]);
   useEffect(() => { void fetchKnowledgeBases().then(setKnowledgeBases).catch(() => undefined); }, []);
   useEffect(() => {
     setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId) ?? []);
@@ -273,7 +272,7 @@ function ChatRuntime() {
   const transport = useMemo(() => {
     return new WorkflowChatTransport<ResilientMessage>({
         api: '/api/chat',
-        fetch: createTrackedFetch(),
+        fetch: createTrackedFetch(userId),
         maxConsecutiveErrors: 3,
         initialStartIndex: 0,
         prepareSendMessagesRequest: ({ id, messages, trigger }) => ({
@@ -286,7 +285,7 @@ function ChatRuntime() {
           headers: { 'Content-Type': 'application/json' },
         }),
         prepareReconnectToStreamRequest: ({ api }) => {
-          const persistedRun = readPersistedRun();
+          const persistedRun = readPersistedRun(userId);
           const pendingRun =
             persistedRun?.pending && persistedRun.chatId === conversation.chatId
               ? persistedRun
@@ -302,22 +301,26 @@ function ChatRuntime() {
         onChatSendMessage: (response, options) => {
           const runId = response.headers.get('x-workflow-run-id');
           if (!runId) return;
-          writePersistedRun({
-            chatId: options.chatId,
-            runId,
-            chunkIndex: 0,
-            messages: options.messages,
-            pending: true,
-          });
+          writePersistedRun(
+            {
+              chatId: options.chatId,
+              runId,
+              chunkIndex: 0,
+              messages: options.messages,
+              pending: true,
+            },
+            userId,
+          );
           void refreshSessions();
         },
         onChatEnd: ({ chunkIndex }) => {
-          const current = readPersistedRun();
+          const current = readPersistedRun(userId);
           if (!current) return;
-          writePersistedRun({ ...current, chunkIndex });
+          writePersistedRun({ ...current, chunkIndex }, userId);
         },
       });
   }, [
+    userId,
     conversation.chatId,
     conversation.resumeRun,
     refreshSessions,
@@ -436,7 +439,7 @@ function ChatRuntime() {
     },
     onError: (caught) => {
       if (caught.message.includes('404')) {
-        clearPersistedRun();
+        clearPersistedRun(userId);
         setConversation((current) => ({ ...current, resumeRun: null }));
       }
       const rolledBack = sessionRef.current.rollbackAssistant();
@@ -484,16 +487,19 @@ function ChatRuntime() {
         ]);
       }
 
-      const persisted = readPersistedRun();
+      const persisted = readPersistedRun(userId);
       const runId = message.metadata?.runId ?? persisted?.runId ?? '';
       if (runId) {
-        writePersistedRun({
-          chatId: conversation.chatId,
-          runId,
-          chunkIndex: persisted?.chunkIndex ?? 0,
-          messages: finishedMessages,
-          pending: false,
-        });
+        writePersistedRun(
+          {
+            chatId: conversation.chatId,
+            runId,
+            chunkIndex: persisted?.chunkIndex ?? 0,
+            messages: finishedMessages,
+            pending: false,
+          },
+          userId,
+        );
       }
       void refreshSessions();
       setConversation((current) =>
@@ -531,7 +537,7 @@ function ChatRuntime() {
   // run 状态而不是前端 error 作为是否恢复的依据，避免任务被误判为结束。
   useEffect(() => {
     if (!isPageVisible) return;
-    const persisted = readPersistedRun();
+    const persisted = readPersistedRun(userId);
     const hasActiveRun =
       (status === 'submitted' || status === 'streaming') ||
       (persisted?.pending && persisted.chatId === conversation.chatId);
@@ -543,13 +549,13 @@ function ChatRuntime() {
     })
       .then(async (response) => {
         if (response.status === 404) {
-          clearPersistedRun();
+          clearPersistedRun(userId);
           return;
         }
         if (!response.ok) return;
         const run = (await response.json()) as RunSummary;
         const stillPending = isPendingStatus(run.status);
-        writePersistedRun({ ...persisted, pending: stillPending });
+        writePersistedRun({ ...persisted, pending: stillPending }, userId);
         if (stillPending && status === 'error') {
           // 任务还在后台运行，只是页面失去焦点的这段时间连接断了。
           await resumeStream();
@@ -558,7 +564,7 @@ function ChatRuntime() {
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [isPageVisible, status, conversation.chatId, resumeStream]);
+  }, [isPageVisible, status, conversation.chatId, resumeStream, userId]);
 
   useEffect(() => {
     if (status !== 'streaming' || !lastAssistant) return;
@@ -593,7 +599,7 @@ function ChatRuntime() {
         setSessions(page.data);
         setSessionsNextCursor(page.nextCursor);
         setSessionsError(null);
-        persistSessions({ data: page.data, nextCursor: page.nextCursor });
+        writeSessionCache({ data: page.data, nextCursor: page.nextCursor }, userId);
       })
       .catch((caught: unknown) => {
         if (
@@ -611,10 +617,10 @@ function ChatRuntime() {
       active = false;
       controller.abort();
     };
-  }, [restoredSessions]);
+  }, [restoredSessions, userId]);
 
   useEffect(() => {
-    const persisted = readPersistedRun();
+    const persisted = readPersistedRun(userId);
     if (!persisted) return;
     const controller = new AbortController();
     apiFetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
@@ -622,14 +628,14 @@ function ChatRuntime() {
     })
       .then(async (response) => {
         if (response.status === 404) {
-          clearPersistedRun();
+          clearPersistedRun(userId);
           return;
         }
         if (!response.ok) return;
         const run = (await response.json()) as RunSummary;
         setRunFailure(failureFromRun(run));
         const pending = isPendingStatus(run.status);
-        writePersistedRun({ ...persisted, pending });
+        writePersistedRun({ ...persisted, pending }, userId);
         if (pending) {
           setConversation((current) =>
             current.chatId === persisted.chatId
@@ -641,7 +647,7 @@ function ChatRuntime() {
       .catch(() => undefined);
     return () => controller.abort();
     // 仅在挂载时校准一次上一次运行的持久化状态
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -852,8 +858,8 @@ function ChatRuntime() {
 
       await stop();
       clearError();
-      if (persistedRun) writePersistedRun(persistedRun);
-      else clearPersistedRun();
+      if (persistedRun) writePersistedRun(persistedRun, userId);
+      else clearPersistedRun(userId);
       setConversation({
         chatId: session.externalKey,
         messages: restoredMessages,
@@ -903,7 +909,7 @@ function ChatRuntime() {
   }
 
   async function handleConnectionRecovery() {
-    const persistedRun = readPersistedRun();
+    const persistedRun = readPersistedRun(userId);
     const canResume =
       persistedRun?.pending && persistedRun.chatId === conversation.chatId;
     setTrace((current) => [
@@ -926,7 +932,7 @@ function ChatRuntime() {
   }
 
   async function stopCurrentConversation() {
-    const currentRun = readPersistedRun();
+    const currentRun = readPersistedRun(userId);
     if (currentRun?.pending) {
       await apiFetch(
         `/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`,
@@ -939,7 +945,7 @@ function ChatRuntime() {
   function resetConversation(chatId: string) {
     stickToBottomRef.current = true;
     clearError();
-    clearPersistedRun();
+    clearPersistedRun(userId);
     setConversation({
       chatId,
       messages: [],
@@ -1143,7 +1149,7 @@ function ChatRuntime() {
   }
 
   async function handleStop() {
-    const currentRun = readPersistedRun();
+    const currentRun = readPersistedRun(userId);
     if (!currentRun?.runId) {
       await stop();
       return;
@@ -1172,7 +1178,7 @@ function ChatRuntime() {
     window.setTimeout(() => setCopiedMessage(null), 1400);
   }
 
-  const persistedForRecovery = error ? readPersistedRun() : null;
+  const persistedForRecovery = error ? readPersistedRun(userId) : null;
   const canResumeConnection = Boolean(
     persistedForRecovery?.pending &&
       persistedForRecovery.chatId === conversation.chatId,
@@ -1263,6 +1269,16 @@ function ChatRuntime() {
             </button>
           </div>
           <div className="topbar-actions">
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={filesOpen ? '隐藏文件浏览器' : '显示文件浏览器'}
+              aria-expanded={filesOpen}
+              title={filesOpen ? '隐藏文件浏览器' : '文件浏览器'}
+              onClick={() => setFilesOpen((current) => !current)}
+            >
+              <Icon name="folder" size={16} />
+            </button>
             <button
               className="icon-button"
               type="button"

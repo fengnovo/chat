@@ -1,11 +1,11 @@
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { ParsedDocument } from '../types.js';
 
 // Node 环境：解析 pdfjs-dist worker 的真实文件路径
 const require = createRequire(import.meta.url);
-const workerPath = require.resolve('pdfjs-dist/build/pdf.worker.mjs');
+const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
 pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
 
 /**
@@ -14,7 +14,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
  */
 export async function parsePdfDocument(bytes: Uint8Array): Promise<ParsedDocument> {
   const data = bytes instanceof Buffer ? new Uint8Array(bytes) : bytes;
-  const loadingTask = pdfjsLib.getDocument({ data, isEvalSupported: false });
+  const loadingTask = pdfjsLib.getDocument({ data } as any);
   const pdf = await loadingTask.promise;
   const parts: string[] = [];
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {

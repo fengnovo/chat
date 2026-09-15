@@ -93,11 +93,15 @@
   color: var(--violet);
 }
 
+/* 头像菜单浮层会向下溢出到内容区；容器带 transform 会形成层叠上下文，
+   必须显式给出高于内容区（z-auto）但低于弹窗遮罩（60/80）的层级，
+   否则知识库搜索框等定位元素会盖在账号菜单上面。 */
 .kc-steps-user {
   position: absolute;
   right: 20px;
   top: 50%;
   transform: translateY(-50%);
+  z-index: 30;
 }
 
 /* ---- 主体两栏 ---- */

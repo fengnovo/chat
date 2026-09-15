@@ -217,7 +217,13 @@ export async function uploadKnowledgeDocument(kbId: string, file: File): Promise
   for (const [name, value] of Object.entries(presign.upload?.headers ?? {})) {
     uploadHeaders.set(name, value);
   }
-  const putResponse = await fetch(uploadUrl, { method: 'PUT', body: file, headers: uploadHeaders });
+  // 直连对象存储失败通常是端口未放行 / CORS / 证书问题，fetch 只会给笼统的 TypeError，单独转译。
+  let putResponse: Response;
+  try {
+    putResponse = await fetch(uploadUrl, { method: 'PUT', body: file, headers: uploadHeaders });
+  } catch {
+    throw new Error('无法连接文件存储服务（网络超时或被跨域策略拦截），请联系管理员检查对象存储入口');
+  }
   if (!putResponse.ok) throw new Error(`对象存储上传失败 HTTP ${putResponse.status}`);
 
   const confirmed = await requestJson<Record<string, unknown>>(
