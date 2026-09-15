@@ -184,3 +184,42 @@ test('start job accepts up to five inline image attachments and defaults to empt
     false,
   );
 });
+
+test('run jobs carry optional W3C observability context and stay backward compatible', () => {
+  const base = {
+    kind: 'start' as const,
+    tenantId: '00000000-0000-4000-8000-000000000001',
+    userId: '00000000-0000-4000-8000-000000000002',
+    sessionId: '00000000-0000-4000-8000-000000000003',
+    runId: '00000000-0000-4000-8000-000000000004',
+    message: 'hello',
+    workspacePath: '/workspace',
+    knowledgeBaseIds: [],
+  };
+  // 旧 payload 没有 observability 字段仍可解析。
+  assert.equal(runJobSchema.safeParse({ ...base, attachments: [] }).success, true);
+  // 合法 W3C 上下文随 payload 保留。
+  const parsed = runJobSchema.parse({
+    ...base,
+    attachments: [],
+    observability: {
+      traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+      tracestate: 'vendor=opaque',
+      requestId: 'req-123',
+    },
+  });
+  assert.equal(parsed.observability?.requestId, 'req-123');
+  assert.equal(
+    runJobSchema.safeParse({
+      ...base,
+      observability: { traceparent: 'x'.repeat(300) },
+    }).success,
+    false,
+  );
+  // baggage 等其他字段不进入持久化上下文。
+  const stripped = runJobSchema.parse({
+    ...base,
+    observability: { requestId: 'req-1', baggage: 'tenant=x' },
+  });
+  assert.deepEqual(stripped.observability, { requestId: 'req-1' });
+});

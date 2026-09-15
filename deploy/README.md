@@ -319,18 +319,95 @@ sudo crontab -e
 
 ---
 
+## 13. 可观测性（OpenTelemetry + Alloy + Grafana）
+
+可选组件，**默认全部关闭**（`OTEL_ENABLED=false` / `LANGFUSE_ENABLED=false`），
+遥测任何环节故障都不影响业务（fail-open）。
+
+### 13.1 启动本地观测栈
+
+```bash
+cd /opt/chat
+# 首次必须设置 Grafana 管理员密码
+GRAFANA_ADMIN_PASSWORD='强密码' \
+  docker compose -f deploy/compose.observability.yaml up -d --wait
+```
+
+| 服务 | 地址（仅 127.0.0.1） |
+|---|---|
+| Grafana | http://127.0.0.1:33000 （admin / `GRAFANA_ADMIN_PASSWORD`，自动 provision 5 个 dashboard） |
+| Prometheus | http://127.0.0.1:39090 （含 SLO 录制/告警规则） |
+| Alertmanager | http://127.0.0.1:39093 |
+| Alloy OTLP | 127.0.0.1:4317 (gRPC) / 4318 (HTTP) |
+| Tempo / Loki | 仅集群内暴露，通过 Grafana 查询 |
+
+告警通知 webhook 通过 `PAGE_WEBHOOK_URL` / `URGENT_WEBHOOK_URL` / `TICKET_WEBHOOK_URL`
+注入（compose 同目录 `.env` 或 shell 环境）；不配置时指向 `.invalid`，规则照常评估但永不投递。
+
+### 13.2 应用接入（已内置，零改动）
+
+4 个 systemd 单元已加 `--import .../observability/dist/register.js` 与 `TimeoutStopSec=15`，
+并强制各自的 `OTEL_SERVICE_NAME`（agent-api / agent-worker / knowledge-service / chat-web），
+shutdown 时遥测 flush 上限 5s。只需在 `/opt/chat/.env` 中开启：
+
+```bash
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+OTEL_ENVIRONMENT=production
+# 可选：Langfuse GenAI 专项观测（只有 Worker 会建 callback）
+# LANGFUSE_ENABLED=true / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
+```
+
+改完 `systemctl restart chat-api chat-worker chat-knowledge chat-web`。
+SLO/告警说明见 `docs/observability/slo-and-alerts.md`，故障处置见
+`docs/observability/runbooks/`。
+
+### 13.3 合成探针（主动拨测）
+
+结果仅以低基数指标（`synthetic_probe_result` / `synthetic_probe_duration`，
+label 只有 check/outcome）和 journal 日志输出，绝不记录用户内容。
+
+```bash
+# 手工自检（不发任何业务请求）
+/opt/chat/deploy/observability/synthetic/run-synthetic.sh --dry-run
+
+# 启用：60s 常规探针（live/ready/鉴权失败预期）+ 15m canary（最小 run + 检索）
+sudo cp /opt/chat/deploy/systemd/chat-synthetic-{probe,canary}.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now chat-synthetic-probe.timer chat-synthetic-canary.timer
+```
+
+canary 需要专用合成用户（最小权限）的凭据，写入 `/opt/chat/.env`：
+
+```bash
+PROBE_API_TOKEN=<合成用户 JWT 或长效 token>
+PROBE_KB_ID=<可选，用于检索 canary 的知识库 id>
+```
+
+---
+
 ## 附：文件清单
 
 ```
 deploy/
 ├── README.md                        # 本文件
 ├── compose.infra.yaml               # Postgres / Redis / MinIO
+├── compose.observability.yaml       # Alloy / Tempo / Loki / Prometheus / AM / Grafana
 ├── env.production.example           # 生产 .env 模板
 ├── nginx/chat.conf                  # 主站 + MinIO 反代（含 SSE 配置）
+├── observability/
+│   ├── alloy/config.alloy           # OTLP 接收 -> Tempo/Prometheus/Loki
+│   ├── alertmanager/                # 三级路由 + env 注入 entrypoint
+│   ├── prometheus/prometheus.yaml   # 含 rule_files / alerting
+│   ├── tempo/ loki/ grafana/        # 存储与 provisioning
+│   └── synthetic/                   # 合成探针 health-probe.ts + run-synthetic.sh
 ├── systemd/
-│   ├── chat-api.service
+│   ├── chat-api.service             # --import 预载遥测，TimeoutStopSec=15
 │   ├── chat-worker.service          # SupplementaryGroups=docker
-│   └── chat-web.service
+│   ├── chat-knowledge.service
+│   ├── chat-web.service             # NODE_OPTIONS=--import
+│   ├── chat-synthetic-probe.{service,timer}    # 60s 拨测
+│   └── chat-synthetic-canary.{service,timer}   # 15m canary
 ├── sandbox/Dockerfile.mirror        # 沙箱镜像国内加速变体（可选）
 └── scripts/
     ├── host-setup.sh                # 宿主机初始化

@@ -7,25 +7,30 @@
     "dev": "node --env-file-if-exists=../../.env --conditions=development --import tsx --watch src/worker.ts",
     "start": "node --env-file-if-exists=../../.env --conditions=development --import tsx src/worker.ts",
     "build": "tsup --config tsup.config.ts",
-    "start:prod": "NODE_ENV=production node --env-file-if-exists=../../.env dist/worker.js",
+    "start:prod": "NODE_ENV=production node --env-file-if-exists=../../.env --import ../../packages/observability/dist/register.js dist/worker.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --conditions=development --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
     "@langchain/langgraph-checkpoint-postgres": "^1.0.5",
+    "@langfuse/langchain": "5.11.1",
+    "@opentelemetry/api": "1.9.1",
     "@repo/agent-core": "workspace:*",
     "@repo/artifacts": "workspace:*",
     "@repo/contracts": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/observability": "workspace:*",
     "bullmq": "^5.58.5",
     "ioredis": "^5.7.0",
     "jose": "^6.1.0",
     "zod": "^4.6.1"
   },
   "devDependencies": {
+    "@opentelemetry/sdk-metrics": "2.10.0",
+    "@opentelemetry/sdk-trace-base": "2.11.0",
     "@types/node": "^26.3.0",
-    "tsx": "^4.23.12",
     "tsup": "^8.5.0",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.2"
   }
 }

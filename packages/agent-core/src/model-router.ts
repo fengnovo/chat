@@ -2,7 +2,7 @@ import { initChatModel } from 'langchain/chat_models/universal';
 import { createMiddleware } from 'langchain';
 
 import { InMemoryCircuitBreakerStore } from './circuit-breaker.js';
-import type { CircuitBreakerStore, ModelRouterEvent, ModelSpec } from './types.js';
+import type { AgentTelemetry, CircuitBreakerStore, ModelRouterEvent, ModelSpec } from './types.js';
 
 interface RouterOptions {
   models: ModelSpec[];
@@ -11,6 +11,7 @@ interface RouterOptions {
   initialDelayMs?: number;
   maxDelayMs?: number;
   onEvent?: (event: ModelRouterEvent) => void;
+  telemetry?: Pick<AgentTelemetry, 'modelCall' | 'event'>;
 }
 
 function errorMessage(error: unknown): string {
@@ -73,6 +74,8 @@ export async function createResilientModelRouter(options: RouterOptions) {
     name: 'ResilientModelRouter',
     wrapModelCall: async (request, handler) => {
       let lastError: unknown;
+      let lastSpec: ModelSpec = primary.spec;
+      const callStartedAt = Date.now();
       for (let modelIndex = 0; modelIndex < candidates.length; modelIndex += 1) {
         const candidate = candidates[modelIndex];
         if (!candidate) continue;
@@ -84,15 +87,29 @@ export async function createResilientModelRouter(options: RouterOptions) {
             to: candidate.spec.id,
             reason: errorMessage(lastError),
           });
+          options.telemetry?.event('model.fallback', {
+            from: candidates[modelIndex - 1]?.spec.id ?? primary.spec.id,
+            to: candidate.spec.id,
+          });
         }
 
         for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
           try {
+            const attemptStartedAt = Date.now();
             const response = await handler({ ...request, model: candidate.instance });
+            options.telemetry?.modelCall({
+              provider: candidate.spec.provider,
+              model: candidate.spec.model,
+              outcome: 'success',
+              latencyMs: Date.now() - attemptStartedAt,
+              ...(attempt > 1 ? { retries: attempt - 1 } : {}),
+              ...(modelIndex > 0 ? { fallbacks: modelIndex } : {}),
+            });
             await breaker.recordSuccess(candidate.spec.id);
             return response;
           } catch (error) {
             lastError = error;
+            lastSpec = candidate.spec;
             if (!isRecoverableModelError(error) || attempt > maxRetries) break;
             const base = Math.min(initialDelayMs * 2 ** (attempt - 1), maxDelayMs);
             const delayMs = Math.max(1, Math.round(base * (0.5 + Math.random() * 0.5)));
@@ -103,11 +120,23 @@ export async function createResilientModelRouter(options: RouterOptions) {
               delayMs,
               reason: errorMessage(error),
             });
+            options.telemetry?.event('model.retry', {
+              model: candidate.spec.id,
+              attempt,
+              delay_ms: delayMs,
+            });
             await delay(delayMs, request.runtime.signal);
           }
         }
         await breaker.recordFailure(candidate.spec.id);
       }
+      // 全部候选/重试耗尽：按最后一个候选结算一次失败，重试与降级次数随调用带上。
+      options.telemetry?.modelCall({
+        provider: lastSpec.provider,
+        model: lastSpec.model,
+        outcome: 'failure',
+        latencyMs: Date.now() - callStartedAt,
+      });
       throw lastError instanceof Error ? lastError : new Error(errorMessage(lastError));
     },
   });

@@ -42,6 +42,7 @@ import {
   toggleKnowledgeBase,
 } from './knowledge-base-picker';
 import { UserMenu } from '../auth/user-menu';
+import { useAuth } from '../auth/auth-context';
 import { apiFetch } from './api';
 import { PendingInteraction } from './pending-interaction';
 import { SessionActionDialog } from './session-dialog';
@@ -71,20 +72,6 @@ import {
   messagesFromHistory,
 } from './utils';
 
-let cachedSessions: SessionCache<WebSessionSummary> | null | undefined;
-
-function initialSessions() {
-  if (cachedSessions === undefined) {
-    cachedSessions = readSessionCache<WebSessionSummary>();
-  }
-  return cachedSessions;
-}
-
-function persistSessions(page: SessionCache<WebSessionSummary>) {
-  cachedSessions = page;
-  writeSessionCache(page);
-}
-
 const emptyActivity: AgentActivityState = {
   entries: [],
   startedAt: null,
@@ -108,8 +95,12 @@ function AppSkeleton() {
 }
 
 function ChatRuntime() {
+  // ChatRuntime 只在 AuthGate 内渲染，user 一定存在。所有本地缓存都按该
+  // 用户 ID 隔离，避免同一浏览器切换账号后看到上一个用户的会话与消息。
+  const { user } = useAuth();
+  const userId = user!.id;
   const [conversation, setConversation] = useState<ConversationSeed>(() => {
-    const persisted = readPersistedRun();
+    const persisted = readPersistedRun(userId);
     return {
       chatId: persisted?.chatId ?? crypto.randomUUID(),
       messages: (persisted?.messages ?? []) as ResilientMessage[],
@@ -139,7 +130,9 @@ function ChatRuntime() {
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
   const [runFailure, setRunFailure] = useState<TaskFailure | null>(null);
-  const [restoredSessions] = useState(() => initialSessions());
+  const [restoredSessions] = useState(() =>
+    readSessionCache<WebSessionSummary>(userId),
+  );
   const [sessions, setSessions] = useState<WebSessionSummary[]>(
     () => restoredSessions?.data ?? [],
   );

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
+import { context, trace, SpanStatusCode, type Tracer } from '@opentelemetry/api';
 import type { Pool } from 'pg';
 import {
   mergeCandidates,
@@ -26,7 +27,42 @@ export interface ProductionRetrieverDeps {
   vectorStore: Pick<QdrantChunkStore, 'search' | 'ensureCollection'>;
   repository?: { appendRetrievalLog?(input: unknown): Promise<void> };
   logger?: { error?(error: unknown): void };
+  tracer?: Tracer;
   limits?: Partial<GraphLimits> & { maxCandidates?: number; fanoutPerHop?: number; passageChars?: number };
+}
+
+/**
+ * 为检索子阶段建立子 span。只记录数量类属性；
+ * query 原文、SQL 参数、文档正文、向量绝不进入。
+ */
+function segment<T>(
+  tracer: Tracer | undefined,
+  name: string,
+  action: () => Promise<T>,
+  attributes?: Record<string, number>,
+): Promise<T> {
+  if (!tracer) return action();
+  const span = tracer.startSpan(name, {
+    attributes: { 'knowledge.component': name, ...attributes },
+  });
+  return context.with(trace.setSpan(context.active(), span), async () => {
+    try {
+      const result = await action();
+      return result;
+    } catch (error) {
+      try {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        // 只放错误构造名，避免 pg 错误携带语句片段。
+        span.setAttribute(
+          'error.type',
+          error instanceof Error ? error.constructor.name.slice(0, 40) : 'unknown',
+        );
+      } catch {}
+      throw error;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 const MAX_CITATIONS = 20;
@@ -120,23 +156,42 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
 
       collectionReady ??= deps.vectorStore.ensureCollection(deps.embedder.profile);
       await collectionReady;
-      const queryVector = await deps.embedder.embedQuery(params.query);
-      const vectorHits = await deps.vectorStore.search(queryVector, params.tenantId, kbs.map((kb) => kb.id), topK);
+      const queryVector = await segment(deps.tracer, 'knowledge.embed', () =>
+        deps.embedder.embedQuery(params.query),
+      );
+      const vectorHits = await segment(
+        deps.tracer,
+        'knowledge.vector.search',
+        () => deps.vectorStore.search(queryVector, params.tenantId, kbs.map((kb) => kb.id), topK),
+        { 'kb_count': kbs.length, 'top_k': topK },
+      );
 
       const graph = kbs.some((kb) => kb.graph_enabled)
-        ? await traverseGraph(params.tenantId, kbs.map((kb) => kb.id), vectorHits.map((hit) => hit.chunkId), maxHops)
-        : { relations: [], hops: 0 };
+        ? await segment(
+            deps.tracer,
+            'knowledge.graph.traverse',
+            () =>
+              traverseGraph(params.tenantId, kbs.map((kb) => kb.id), vectorHits.map((hit) => hit.chunkId), maxHops),
+            { 'seed_count': vectorHits.length, 'max_hops': maxHops },
+          )
+        : { relations: [] as GraphRelation[], hops: 0 };
 
       const candidates = mergeCandidates(vectorHits, { entityKeys: [], relations: graph.relations, chunkIds: [] }, { maxCandidates: limits.maxCandidates });
 
-      const chunkRows = await deps.pool.query<{
-        id: string; document_id: string; ordinal: number; heading: string | null; text: string; document_name: string;
-      }>(
-        `SELECT c.id, c.document_id, c.ordinal, c.heading, c.text, d.name AS document_name
-         FROM knowledge_chunks c
-         JOIN knowledge_documents d ON d.id = c.document_id
-         WHERE c.tenant_id = $1 AND c.id = ANY($2::uuid[]) AND d.deleted_at IS NULL`,
-        [params.tenantId, candidates.map((candidate) => candidate.chunkId)],
+      const chunkRows = await segment(
+        deps.tracer,
+        'knowledge.chunks.fetch',
+        () =>
+          deps.pool.query<{
+            id: string; document_id: string; ordinal: number; heading: string | null; text: string; document_name: string;
+          }>(
+            `SELECT c.id, c.document_id, c.ordinal, c.heading, c.text, d.name AS document_name
+             FROM knowledge_chunks c
+             JOIN knowledge_documents d ON d.id = c.document_id
+             WHERE c.tenant_id = $1 AND c.id = ANY($2::uuid[]) AND d.deleted_at IS NULL`,
+            [params.tenantId, candidates.map((candidate) => candidate.chunkId)],
+          ),
+        { 'candidate_count': candidates.length },
       );
       const chunksById = new Map(chunkRows.rows.map((row) => [row.id, row]));
       const validCandidates = candidates.filter((candidate) => chunksById.has(candidate.chunkId));

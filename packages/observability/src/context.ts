@@ -1,7 +1,11 @@
 import { context, ROOT_CONTEXT, defaultTextMapGetter, defaultTextMapSetter, type Context } from '@opentelemetry/api';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 
-export type ObservabilityContext = { traceparent?: string; tracestate?: string; requestId?: string };
+export type ObservabilityContext = {
+  traceparent?: string | undefined;
+  tracestate?: string | undefined;
+  requestId?: string | undefined;
+};
 
 const propagator = new W3CTraceContextPropagator();
 

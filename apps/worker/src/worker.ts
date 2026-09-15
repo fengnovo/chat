@@ -2,11 +2,24 @@ import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { S3ArtifactStore } from '@repo/artifacts';
 import { RUN_QUEUE_NAME, runCancellationChannel } from '@repo/contracts';
 import { createDatabase, migrateDatabase } from '@repo/db';
+import { registeredObservability } from '@repo/observability/register';
+import { redactTelemetryValue } from '@repo/observability';
 import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 
 import { loadWorkerConfig } from './config.js';
+import { createWorkerObservability } from './observability.js';
+import { createWorkerLangfuse } from './langfuse.js';
 import { createRunProcessor } from './processor.js';
+
+const runtime = await registeredObservability;
+const observability = createWorkerObservability(runtime, { serviceVersion: '0.1.0' });
+const { logger } = observability;
+// Langfuse 只在 Worker 装配；processor 挂在共享 tracer provider 上，
+// 因此 shutdown 时由 runtime.forceFlush/shutdown 统一覆盖 5s 上限，不单独等待。
+const langfuse = createWorkerLangfuse({
+  shutdownTimeoutMs: observability.config.shutdownTimeoutMs,
+});
 
 const config = loadWorkerConfig();
 const database = createDatabase(config.DATABASE_URL);
@@ -39,20 +52,27 @@ cancellationSubscriber.on('pmessage', (_pattern, channel) => {
   controllers.get(runId)?.abort(new Error('Run cancelled by user'));
 });
 cancellationSubscriber.on('error', (error) => {
-  console.error('Cancellation subscriber error', error);
+  logger.error(
+    { error: redactTelemetryValue(error), operation: 'cancellation.subscriber' },
+    'cancellation subscriber error',
+  );
 });
 
 const worker = new Worker(
   RUN_QUEUE_NAME,
-  createRunProcessor({
-    config,
-    repository: database.repository,
-    redis: connection,
-    publisher,
-    checkpointer,
-    artifacts,
-    controllers,
-  }),
+  createRunProcessor(
+    {
+      config,
+      repository: database.repository,
+      redis: connection,
+      publisher,
+      checkpointer,
+      artifacts,
+      controllers,
+    },
+    observability,
+    langfuse,
+  ),
   {
     connection,
     concurrency: config.WORKER_CONCURRENCY,
@@ -60,9 +80,18 @@ const worker = new Worker(
   },
 );
 
-worker.on('completed', (job) => console.log(`Run job ${job.id} completed`));
-worker.on('failed', (job, error) => console.error(`Run job ${job?.id} failed`, error));
-worker.on('error', (error) => console.error('Worker error', error));
+worker.on('completed', (job) =>
+  logger.info({ operation: 'worker.job', reason: 'completed' }, `run job ${job.id ?? ''} completed`),
+);
+worker.on('failed', (job, error) =>
+  logger.error(
+    { error: redactTelemetryValue(error), operation: 'worker.job', reason: 'failed' },
+    `run job ${job?.id ?? ''} failed`,
+  ),
+);
+worker.on('error', (error) =>
+  logger.error({ error: redactTelemetryValue(error), operation: 'worker' }, 'worker error'),
+);
 
 const sandboxDetail =
   config.SANDBOX_RUNTIME === 'docker'
@@ -70,28 +99,45 @@ const sandboxDetail =
     : config.E2B_API_URL
       ? ` (${config.E2B_API_URL})`
       : '';
-console.log(
-  `Agent worker ready: driver=${config.AGENT_DRIVER}, sandbox=${config.SANDBOX_RUNTIME}${sandboxDetail}, concurrency=${config.WORKER_CONCURRENCY}`,
+logger.info(
+  {
+    operation: 'worker.startup',
+    reason: 'ready',
+  },
+  `agent worker ready: driver=${config.AGENT_DRIVER}, sandbox=${config.SANDBOX_RUNTIME}${sandboxDetail}, concurrency=${config.WORKER_CONCURRENCY}`,
 );
 
 let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  logger.info({ operation: 'worker.shutdown' }, 'worker shutdown started');
   try {
+    // 1. 停止领取新任务。
+    await worker.pause();
+    // 2. 通知在途任务尽快收尾。
     for (const controller of controllers.values()) {
       controller.abort(new Error('Worker shutting down'));
     }
+    // 3. 等待在途任务退出（abort 后很快结束）。
     await worker.close();
+    // 4. 关闭业务资源。
     await cancellationSubscriber.quit();
     await publisher.quit();
     await connection.quit();
     await checkpointer.end();
     artifacts.destroy();
     await database.repository.close();
+    // 5. flush 遥测后退出，超时只告警不阻塞进程。
+    await runtime.forceFlush(observability.config.shutdownTimeoutMs);
+    await runtime.shutdown(observability.config.shutdownTimeoutMs);
     process.exit(0);
   } catch (error) {
-    console.error('Worker shutdown failed', error);
+    logger.error(
+      { error: redactTelemetryValue(error), operation: 'worker.shutdown' },
+      'worker shutdown failed',
+    );
+    await runtime.shutdown(observability.config.shutdownTimeoutMs).catch(() => undefined);
     process.exit(1);
   }
 };

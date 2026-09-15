@@ -27,6 +27,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { streamWorkflowRun } from './chat-stream.js';
+import { startRunEnqueue } from './observability.js';
 import { streamAgentEvents } from './sse.js';
 import type { ApiServices } from './types.js';
 
@@ -455,6 +456,9 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     const input = createRunSchema.parse(request.body);
     const session = await services.repository.getSession(request.auth, sessionId);
     if (!session) return reply.code(404).send({ error: 'session_not_found' });
+    const enqueue = services.observability
+      ? startRunEnqueue(services.observability, { requestId: request.id, jobKind: 'start' })
+      : null;
     try {
       const key = idempotencyKey(request.headers['idempotency-key']);
       const result = await services.repository.createRun(request.auth, {
@@ -462,12 +466,15 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
         message: input.message,
         ...(key ? { idempotencyKey: key } : {}),
         knowledgeBaseIds: input.knowledgeBaseIds,
+        ...(enqueue ? { observabilityContext: enqueue.observabilityContext } : {}),
       });
+      enqueue?.finish({ runId: result.run.id, outboxId: result.outboxId, created: result.created });
       if (result.created) {
         services.outbox.wake();
       }
       return reply.code(result.created ? 202 : 200).send(result.run);
     } catch (error) {
+      enqueue?.finish({ created: false, error });
       if ((error as { code?: string }).code === '23505') {
         return reply.code(409).send({ error: 'session_has_active_run' });
       }
@@ -497,14 +504,28 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     if (run.status !== 'waiting_approval') {
       return reply.code(409).send({ error: 'run_not_waiting_for_approval' });
     }
-    const interrupt = await services.repository.resolveInterrupt(
-      request.auth,
-      runId,
-      interruptId,
-      'approval',
-      decision,
-    );
-    if (!interrupt) return reply.code(409).send({ error: 'interrupt_already_resolved' });
+    const enqueue = services.observability
+      ? startRunEnqueue(services.observability, { requestId: request.id, jobKind: 'resume-approval' })
+      : null;
+    let interrupt;
+    try {
+      interrupt = await services.repository.resolveInterrupt(
+        request.auth,
+        runId,
+        interruptId,
+        'approval',
+        decision,
+        enqueue?.observabilityContext,
+      );
+    } catch (error) {
+      enqueue?.finish({ runId, created: false, error });
+      throw error;
+    }
+    if (!interrupt) {
+      enqueue?.finish({ runId, created: false });
+      return reply.code(409).send({ error: 'interrupt_already_resolved' });
+    }
+    enqueue?.finish({ runId, created: true });
     services.outbox.wake();
     return reply.code(202).send({ status: 'queued' });
   });
@@ -517,14 +538,28 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     if (run.status !== 'waiting_question') {
       return reply.code(409).send({ error: 'run_not_waiting_for_question' });
     }
-    const interrupt = await services.repository.resolveInterrupt(
-      request.auth,
-      runId,
-      interruptId,
-      'question',
-      answer,
-    );
-    if (!interrupt) return reply.code(409).send({ error: 'interrupt_already_resolved' });
+    const enqueue = services.observability
+      ? startRunEnqueue(services.observability, { requestId: request.id, jobKind: 'resume-question' })
+      : null;
+    let interrupt;
+    try {
+      interrupt = await services.repository.resolveInterrupt(
+        request.auth,
+        runId,
+        interruptId,
+        'question',
+        answer,
+        enqueue?.observabilityContext,
+      );
+    } catch (error) {
+      enqueue?.finish({ runId, created: false, error });
+      throw error;
+    }
+    if (!interrupt) {
+      enqueue?.finish({ runId, created: false });
+      return reply.code(409).send({ error: 'interrupt_already_resolved' });
+    }
+    enqueue?.finish({ runId, created: true });
     services.outbox.wake();
     return reply.code(202).send({ status: 'queued' });
   });
@@ -688,12 +723,23 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
           ...(input.project_id ? { projectId: input.project_id } : {}),
         },
       );
-      const result = await services.repository.createRun(request.auth, {
-        sessionId: session.id,
-        message: message.trim(),
-        knowledgeBaseIds: input.knowledge_base_ids,
-        attachments,
-      });
+      const enqueue = services.observability
+        ? startRunEnqueue(services.observability, { requestId: request.id, jobKind: 'start' })
+        : null;
+      let result;
+      try {
+        result = await services.repository.createRun(request.auth, {
+          sessionId: session.id,
+          message: message.trim(),
+          knowledgeBaseIds: input.knowledge_base_ids,
+          attachments,
+          ...(enqueue ? { observabilityContext: enqueue.observabilityContext } : {}),
+        });
+      } catch (error) {
+        enqueue?.finish({ created: false, error });
+        throw error;
+      }
+      enqueue?.finish({ runId: result.run.id, outboxId: result.outboxId, created: result.created });
       if (result.created) services.outbox.wake();
       return streamWorkflowRun(request, reply, services, result.run.id);
     } catch (error) {

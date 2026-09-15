@@ -1,5 +1,6 @@
 import { loadObservabilityConfig } from './config.js';
 import { startObservability, type ObservabilityRuntime } from './sdk.js';
+import { registerLangfuse } from './langfuse.js';
 
 const REGISTRATION_KEY = Symbol.for('@repo/observability/runtime');
 const registry = globalThis as typeof globalThis & Record<PropertyKey, unknown>;
@@ -16,9 +17,12 @@ export function registerObservability(
 ): Promise<ObservabilityRuntime> {
   const existing = registry[REGISTRATION_KEY];
   if (existing instanceof Promise) return existing as Promise<ObservabilityRuntime>;
-  const runtime = startObservability(
-    loadObservabilityConfig(environment, preloadDefaults(environment)),
-  );
+  const config = loadObservabilityConfig(environment, preloadDefaults(environment));
+  // Langfuse 专项导出随预载一起装配；仅 gen_ai span 会被导出，其他服务挂载无害。
+  const langfuse = registerLangfuse(environment, config);
+  const runtime = startObservability(config, {
+    ...(langfuse.spanProcessor ? { extraSpanProcessors: [langfuse.spanProcessor] } : {}),
+  });
   registry[REGISTRATION_KEY] = runtime;
   return runtime;
 }

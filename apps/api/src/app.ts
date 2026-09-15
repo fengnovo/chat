@@ -83,6 +83,11 @@ export async function buildApp(options: BuildAppOptions) {
     repository: options.repository,
     queue,
     logger: app.log,
+    queueName: RUN_QUEUE_NAME,
+    telemetry: {
+      tracer: observability.runtime.tracer,
+      metrics: observability.metrics,
+    },
     pollIntervalMs: options.config.OUTBOX_POLL_INTERVAL_MS,
     batchSize: options.config.OUTBOX_BATCH_SIZE,
     leaseMs: options.config.OUTBOX_LEASE_MS,

@@ -729,3 +729,24 @@ flowchart LR
 5. **当前实际只落地了 Task 1-4**（共享 SDK + API 层），且默认关闭。Worker/Agent/Knowledge/Langfuse/Alloy（Task 5-12）都还没动，所以现在线上问答流程**零影响**；真正的工作量和验证重心在后续阶段。
 
 **一句话总结**：架构上遥测是异步、批量、fail-open 的旁路，不进业务正确性链路，热路径开销微秒级，调试只会更简单；真正要投入精力验证的是初始化顺序、队列上下文传播这两个工程细节，以及用容量测试守住 5% 的性能预算。
+
+
+
+
+**Task 10 — 告警栈修通并实弹验证**
+- Alertmanager 启动 blocker 修复：v0.27.0 不支持 `--config.expand-env`，新增 [entrypoint.sh](file:///Users/keen/Desktop/code/projects/chat/deploy/observability/alertmanager/entrypoint.sh) 在容器内 sed 注入三个 webhook 环境变量；6 容器全部 healthy。
+- 实弹注入 3 rps 合成 5xx（66% 错误率）时发现并修复两个真实问题：
+  1. **PromQL 向量匹配 bug**：`and sum(rate(...))` 右侧无 `job` 标签，告警恒不触发 → 改 `sum by (job)`（两条可用性告警都有此问题）；
+  2. **指标名缺 `_total`**：Alloy 计数器实际暴露 `otelcol_exporter_send_failed_*_total` 等，规则和 telemetry-health dashboard 共 5 处修正。
+- 完整生命周期实测：规则加载 31 条、5 dashboard provision、`APIAvailabilityBurn` pending(5m)→**firing**→Alertmanager 按 severity=page 路由到 page receiver→停流后自动 resolve。
+
+**Task 11 — systemd 预载 + 合成探针**
+- 4 个单元加 `--import packages/observability/dist/register.js`（web 用 `NODE_OPTIONS`，引号问题已修）、强制各自 `OTEL_SERVICE_NAME`、`TimeoutStopSec=15`；容器内 `systemd-analyze verify` 无解析错误。
+- 新增 [health-probe.ts](file:///Users/keen/Desktop/code/projects/chat/deploy/observability/synthetic/health-probe.ts)（60s live/ready/鉴权拒绝 + 15m canary 建会话入队/检索，指标仅 check/outcome 低基数 label）、[run-synthetic.sh](file:///Users/keen/Desktop/code/projects/chat/deploy/observability/synthetic/run-synthetic.sh)（tsx/type-stripping 双运行器，`--dry-run` 通过）、probe/canary 两组 service+timer；deploy/README 新增 §13。
+
+**Task 12 — CI 与演练工具**
+- [.github/workflows/observability.yml](file:///Users/keen/Desktop/code/projects/chat/.github/workflows/observability.yml)：PR 门禁，无需凭据（lockfile、observability/api/worker/knowledge/contracts 测试、promtool、amtool、compose config、dashboard 白名单、密钥与高基数扫描）。
+- [verify-observability.sh](file:///Users/keen/Desktop/code/projects/chat/scripts/verify-observability.sh) 本机全绿；[fault-injection-observability.sh](file:///Users/keen/Desktop/code/projects/chat/scripts/fault-injection-observability.sh) 覆盖 9 类故障（case 1 Alloy 停、case 5 Langfuse 5xx mock 实测通过，自动恢复）。
+- 新增 [release-checklist.md](file:///Users/keen/Desktop/code/projects/chat/docs/observability/release-checklist.md) 与 [capacity-baseline.md](file:///Users/keen/Desktop/code/projects/chat/docs/observability/capacity-baseline.md)（数值已按实际 compose 上限/保留期核对）。
+
+观测栈容器已 `down` 清理（保留数据卷）；未做 git commit。本轮无 TS 代码改动，原有测试结论不受影响。

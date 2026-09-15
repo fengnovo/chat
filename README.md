@@ -15,11 +15,11 @@ Next.js Web ──HTTP/SSE──> Fastify Agent API ──Outbox/BullMQ──> A
 
 ## 当前能力
 
-- 三种鉴权模式：`AUTH_MODE=dev`（开发固定身份）、`AUTH_MODE=password`（本地用户名密码登录 + JWT 会话 Cookie）、`AUTH_MODE=oidc`（生产 OIDC JWT）。
+- 三种鉴权模式：`AUTH_MODE=dev`（开发固定身份）、`AUTH_MODE=password`（本地用户名密码登录 + JWT 会话 Cookie）、`AUTH_MODE=oidc`（生产~~-  OIDC~~ JWT）。~~
 - 角色级 RBAC：`admin` 超级管理员 / `owner` 知识库拥有者 / `member` 普通用户，全部数据访问强制带租户上下文实现多租户隔离。
 - 知识库管理：admin 与知识库拥有者可增删改查知识库及文档；admin 可将知识库授权给指定用户（KB grants），被授权用户在聊天时可使用该知识库的 RAG 能力。
 - 强制带租户上下文的 Session、Run、审批、提问、取消 API。
-- Web 会话历史、切换、恢复、重命名、软删除与 keyset 游标分页。
+- Web 会话历史、切换、恢复、重命名、软删除（当前硬删除）与 keyset 游标分页。
 - 新建会话立即分配独立空白 workspace，无需选择项目或上传代码。
 - PostgreSQL 持久化会话、运行、事件 cursor、interrupt 和 LangGraph checkpoint。
 - 开发库与独立 `agent_test` 测试库/卷隔离，集成测试不会污染本地会话列表。

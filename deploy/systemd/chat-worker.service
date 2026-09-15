@@ -15,9 +15,13 @@ WorkingDirectory=/opt/chat
 EnvironmentFile=/opt/chat/.env
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node /opt/chat/apps/worker/dist/worker.js
+# 覆盖 .env 中通用的 OTEL_SERVICE_NAME；只有 Worker 会建 Langfuse GenAI callback
+Environment=OTEL_SERVICE_NAME=agent-worker
+ExecStart=/usr/bin/node --import /opt/chat/packages/observability/dist/register.js /opt/chat/apps/worker/dist/worker.js
 Restart=always
 RestartSec=5
+# SIGTERM 后先暂停领取新任务、abort 在途任务，再 flush 遥测（上限 5s）
+TimeoutStopSec=15
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=yes

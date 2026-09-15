@@ -15,10 +15,12 @@ import { z } from 'zod';
 import { createResilientModelRouter } from './model-router.js';
 import type {
   AgentResumeInput,
+  AgentTelemetry,
   ChatImageAttachment,
   HeadlessAgentOptions,
   HeadlessAgentRuntime,
   ModelRouterEvent,
+  ModelSpec,
 } from './types.js';
 
 interface UserQuestionRequest {
@@ -320,12 +322,37 @@ export async function createDeepAgentRuntime(
   options: HeadlessAgentOptions,
 ): Promise<HeadlessAgentRuntime> {
   const pendingRouterEvents: AgentEvent[] = [];
+  // 遥测失败永远不得影响 agent 执行；所有端口调用都过这一层兜底。
+  const telemetry = options.telemetry;
+  function safeTelemetry(action: (sink: AgentTelemetry) => void): void {
+    if (!telemetry) return;
+    try {
+      action(telemetry);
+    } catch {}
+  }
+  const specsById = new Map<string, ModelSpec>(
+    options.models.map((spec) => [spec.id, spec]),
+  );
+  let activeSpec = options.models[0];
   const router = await createResilientModelRouter({
     models: options.models,
     ...(options.circuitBreaker ? { circuitBreaker: options.circuitBreaker } : {}),
+    ...(telemetry
+      ? {
+          telemetry: {
+            modelCall: (meta) => safeTelemetry((sink) => sink.modelCall(meta)),
+            event: (name, attributes) =>
+              safeTelemetry((sink) => sink.event(name, attributes)),
+          },
+        }
+      : {}),
     onEvent: (event) => {
       const normalized = routerEvent(options.runId, event);
       if (normalized) pendingRouterEvents.push(normalized);
+      if (event.type === 'model.fallback' && event.to) {
+        const fallbackSpec = specsById.get(event.to);
+        if (fallbackSpec) activeSpec = fallbackSpec;
+      }
     },
   });
   if (!options.backend) throw new Error('DeepAgent requires an external sandbox backend');
@@ -411,6 +438,9 @@ export async function createDeepAgentRuntime(
     recursionLimit: options.recursionLimit ?? DEFAULT_RECURSION_LIMIT,
     runName: 'web-coding-agent',
     tags: ['coding-agent', backendMode],
+    ...(options.callbacks && options.callbacks.length > 0
+      ? { callbacks: options.callbacks as never[] }
+      : {}),
     metadata: {
       run_id: options.runId,
       thread_id: options.sessionId,
@@ -425,6 +455,8 @@ export async function createDeepAgentRuntime(
     let interruptRequest: AgentInterruptRequest | null = null;
     let interruptId: string = randomUUID();
     let lastTodos = '';
+    // invocationId -> on_tool_start 时间戳，用于配对计算工具耗时。
+    const toolStartedAt = new Map<string, number>();
     try {
       const stream = await runnable.stream(input, config);
       // 按「模型调用」为单位区分正文与旁白：带工具调用的轮次里模型吐出的文字是过程旁白
@@ -481,6 +513,18 @@ export async function createDeepAgentRuntime(
               type: 'usage.updated',
               ...usage,
             };
+            // token 结算归属当前实际服务本次调用的模型（发生 fallback 后会切换）。
+            if (activeSpec) {
+              const spec = activeSpec;
+              safeTelemetry((sink) =>
+                sink.modelTokens({
+                  provider: spec.provider,
+                  model: spec.model,
+                  inputTokens: usage.inputTokens,
+                  outputTokens: usage.outputTokens,
+                }),
+              );
+            }
           }
           continue;
         }
@@ -494,6 +538,7 @@ export async function createDeepAgentRuntime(
             payload.toolCallId ?? payload.run_id ?? payload.runId ?? randomUUID(),
           );
           if (eventName === 'on_tool_start') {
+            toolStartedAt.set(invocationId, Date.now());
             yield {
               runId: options.runId,
               timestamp: timestamp(),
@@ -504,7 +549,24 @@ export async function createDeepAgentRuntime(
             };
           } else if (eventName === 'on_tool_end') {
             const retrieval = extractRetrievalEvent(options.runId, invocationId, toolName, payload.output);
-            if (retrieval) yield retrieval;
+            if (retrieval && retrieval.type === 'retrieval.completed') {
+              yield retrieval;
+              safeTelemetry((sink) =>
+                sink.event('retrieval.completed', {
+                  knowledge_base_count: retrieval.knowledgeBaseIds.length,
+                  citation_count: retrieval.citations.length,
+                }),
+              );
+            }
+            const startedAt = toolStartedAt.get(invocationId);
+            safeTelemetry((sink) =>
+              sink.toolCall({
+                tool: toolName,
+                outcome: 'success',
+                ...(startedAt !== undefined ? { latencyMs: Date.now() - startedAt } : {}),
+              }),
+            );
+            toolStartedAt.delete(invocationId);
             yield {
               runId: options.runId,
               timestamp: timestamp(),
@@ -514,6 +576,15 @@ export async function createDeepAgentRuntime(
               output: normalizeToolOutput(payload.output),
             };
           } else if (eventName === 'on_tool_error') {
+            const startedAt = toolStartedAt.get(invocationId);
+            safeTelemetry((sink) =>
+              sink.toolCall({
+                tool: toolName,
+                outcome: 'failure',
+                ...(startedAt !== undefined ? { latencyMs: Date.now() - startedAt } : {}),
+              }),
+            );
+            toolStartedAt.delete(invocationId);
             yield {
               runId: options.runId,
               timestamp: timestamp(),
@@ -613,20 +684,26 @@ export async function createDeepAgentRuntime(
         }
         return;
       }
+      safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'completed' }));
       yield { runId: options.runId, timestamp: timestamp(), type: 'run.completed' };
     } catch (error) {
       if (options.signal?.aborted) {
+        safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'cancelled' }));
         yield { runId: options.runId, timestamp: timestamp(), type: 'run.cancelled' };
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
+      const code = isStepLimitError(error) ? 'AGENT_STEP_LIMIT' : 'AGENT_RUN_FAILED';
+      safeTelemetry((sink) =>
+        sink.event('run.terminal', { outcome: 'failed', code }),
+      );
       yield {
         runId: options.runId,
         timestamp: timestamp(),
         type: 'run.failed',
         // 步数耗尽与真正的执行错误区分开：工作区此时是完整的，
         // 下游据此保留沙箱，用户可以直接接着上一轮继续。
-        code: isStepLimitError(error) ? 'AGENT_STEP_LIMIT' : 'AGENT_RUN_FAILED',
+        code,
         message,
       };
     }

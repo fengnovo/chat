@@ -11,10 +11,13 @@ import {
 import {
   createCoreMetrics,
   extractObservabilityContext,
+  injectObservabilityContext,
   normalizeRoute,
   type CoreMetrics,
+  type ObservabilityContext,
   type ObservabilityRuntime,
 } from '@repo/observability';
+import { RUN_QUEUE_NAME } from '@repo/contracts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import type { ApiConfig } from './config.js';
@@ -116,6 +119,53 @@ export function createApiObservability(
           });
         },
       };
+    },
+  };
+}
+
+type EnqueueFinish = {
+  runId?: string | undefined;
+  outboxId?: string | undefined;
+  created: boolean;
+  error?: unknown;
+};
+
+/**
+ * Opens the agent.run.enqueue producer span and injects its W3C context into the
+ * Outbox payload. The returned carrier is persisted with the dispatch row so the
+ * Worker can link its consumer root span back to this HTTP trace.
+ */
+export function startRunEnqueue(
+  observability: ApiObservability,
+  meta: { requestId: string; jobKind: 'start' | 'resume-approval' | 'resume-question' },
+): { observabilityContext: ObservabilityContext; finish(result: EnqueueFinish): void } {
+  let span: Span | undefined;
+  safely(() => {
+    span = observability.runtime.tracer.startSpan('agent.run.enqueue', {
+      kind: SpanKind.PRODUCER,
+      attributes: {
+        'messaging.system': 'bullmq',
+        'messaging.destination.name': RUN_QUEUE_NAME,
+        'job.kind': meta.jobKind,
+      },
+    });
+  });
+  const parent = span ? trace.setSpan(context.active(), span) : context.active();
+  const carrier = injectObservabilityContext(parent, meta.requestId);
+  return {
+    observabilityContext: carrier,
+    finish(result) {
+      safely(() => {
+        if (result.runId) span?.setAttribute('run_id', result.runId);
+        if (result.outboxId) span?.setAttribute('outbox_id', result.outboxId);
+        span?.setAttribute('enqueue.created', result.created);
+        if (result.error) {
+          span?.setStatus({ code: SpanStatusCode.ERROR });
+          const exception = result.error instanceof Error ? result.error : new Error('enqueue failed');
+          span?.recordException(exception);
+        }
+        span?.end();
+      });
     },
   };
 }

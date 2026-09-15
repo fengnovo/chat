@@ -3,7 +3,7 @@ import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-ho
 import { ExportResultCode, W3CTraceContextPropagator, type ExportResult } from '@opentelemetry/core';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
-import { BasicTracerProvider, BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler, type SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { BasicTracerProvider, BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler, type SpanExporter, type SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { MeterProvider, PeriodicExportingMetricReader, type PushMetricExporter } from '@opentelemetry/sdk-metrics';
 import { MAX_LIFECYCLE_TIMEOUT_MS, type ObservabilityConfig } from './config.js';
 import { createObservabilityResource } from './resource.js';
@@ -19,6 +19,11 @@ export type ObservabilityRuntime = {
 export type ObservabilityOptions = {
   spanExporter?: SpanExporter;
   metricExporter?: PushMetricExporter;
+  /**
+   * 额外的 SpanProcessor（例如 Langfuse 专项导出器）。只参与导出，
+   * 不改变采样决策；追加失败不得影响 OTLP 主管线。
+   */
+  extraSpanProcessors?: SpanProcessor[];
 };
 
 function noopRuntime(): ObservabilityRuntime {
@@ -111,7 +116,7 @@ export async function startObservability(config: ObservabilityConfig, options: O
       spanProcessors: [new BatchSpanProcessor({
         export: safeExport(spanExporter.export.bind(spanExporter), exportTimeoutMs, warn),
         shutdown: () => bounded(() => spanExporter.shutdown(), exportTimeoutMs, warn),
-      }, { maxQueueSize: 2048, maxExportBatchSize: 512, scheduledDelayMillis: 5000, exportTimeoutMillis: exportTimeoutMs + 100 })],
+      }, { maxQueueSize: 2048, maxExportBatchSize: 512, scheduledDelayMillis: 5000, exportTimeoutMillis: exportTimeoutMs + 100 }), ...(options.extraSpanProcessors ?? [])],
     });
     const safeMetricExporter: PushMetricExporter = {
       export: safeExport(metricExporter.export.bind(metricExporter), exportTimeoutMs, warn),

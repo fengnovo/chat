@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
+import { context } from '@opentelemetry/api';
 import { ArtifactVerificationError } from '@repo/artifacts';
+import { injectObservabilityContext } from '@repo/observability';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -153,7 +155,17 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     }
     const result = await services.repository.confirmDocumentUpload(request.auth, id.parse(params.kbId), id.parse(params.documentId), input);
     if (!result) return notFound(reply, 'document_not_found');
-    if (result.created !== false && result.job?.id) await services.knowledgeQueue.add('index', { ...result.job }, { jobId: result.job.id });
+    if (result.created !== false && result.job?.id) {
+      // 把请求 SERVER span 上下文注入任务 payload，consumer 用 link 关联；注入失败 fail-open。
+      let jobPayload: unknown = result.job;
+      try {
+        const carrier = injectObservabilityContext(context.active(), `knowledge:${result.job.id}`);
+        jobPayload = { ...(result.job as Record<string, unknown>), observability: carrier };
+      } catch {
+        jobPayload = result.job;
+      }
+      await services.knowledgeQueue.add('index', jobPayload, { jobId: result.job.id });
+    }
     return reply.send(result.document ?? result);
   });
 

@@ -145,7 +145,7 @@ function countSseFrames(text: string) {
     .filter((frame) => frame.trimStart().startsWith('data:')).length;
 }
 
-function createTrackedFetch(): typeof fetch {
+function createTrackedFetch(userId: string): typeof fetch {
   return async (input, init) => {
     const response = await fetch(input, init);
     // 与 apiFetch 保持一致：会话过期时跳转登录页（/api/chat 也受鉴权保护）。
@@ -186,7 +186,7 @@ function createTrackedFetch(): typeof fetch {
           const complete = pending.slice(0, boundary + 2);
           pending = pending.slice(boundary + 2);
           cursor += countSseFrames(complete);
-          updatePersistedCursor(runId, cursor);
+          updatePersistedCursor(userId, runId, cursor);
         },
       }),
     );

@@ -1,5 +1,15 @@
 export const MAX_LIFECYCLE_TIMEOUT_MS = 5000;
 
+export const OBSERVABILITY_LOG_LEVELS = [
+  'trace',
+  'debug',
+  'info',
+  'warn',
+  'error',
+  'fatal',
+] as const;
+export type ObservabilityLogLevel = (typeof OBSERVABILITY_LOG_LEVELS)[number];
+
 export type ObservabilityConfig = {
   enabled: boolean;
   serviceName: string;
@@ -9,7 +19,7 @@ export type ObservabilityConfig = {
   tracesSampleRatio: number;
   metricExportIntervalMs: number;
   captureContent: boolean;
-  logLevel: string;
+  logLevel: ObservabilityLogLevel;
   shutdownTimeoutMs: number;
 };
 
@@ -51,7 +61,13 @@ export function loadObservabilityConfig(
     tracesSampleRatio: number('OTEL_TRACES_SAMPLER_ARG', 0.1, 0, 1),
     metricExportIntervalMs: number('OTEL_METRIC_EXPORT_INTERVAL', 60000, 1, 2147483647, true),
     captureContent: boolean('OBSERVABILITY_CAPTURE_CONTENT', false),
-    logLevel: value('OBSERVABILITY_LOG_LEVEL') ?? 'info',
+    logLevel: (() => {
+      const input = value('OBSERVABILITY_LOG_LEVEL');
+      if (input === undefined) return 'info';
+      return (OBSERVABILITY_LOG_LEVELS as readonly string[]).includes(input)
+        ? (input as ObservabilityLogLevel)
+        : invalid('OBSERVABILITY_LOG_LEVEL');
+    })(),
     shutdownTimeoutMs: number('OBSERVABILITY_SHUTDOWN_TIMEOUT_MS', MAX_LIFECYCLE_TIMEOUT_MS, 1, MAX_LIFECYCLE_TIMEOUT_MS, true),
   };
 }

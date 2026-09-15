@@ -1,7 +1,17 @@
 import type { UIMessage } from 'ai';
 
-const STORAGE_KEY = 'resilient-chat:last-run';
-const SESSION_CACHE_KEY = 'resilient-chat:sessions';
+// 所有缓存都按用户 ID 隔离：同一浏览器切换账号（退出再登录 / 注册新号）时，
+// 绝不能读到上一个用户的会话列表与消息内容。
+const RUN_KEY_PREFIX = 'resilient-chat:last-run';
+const SESSION_CACHE_KEY_PREFIX = 'resilient-chat:sessions';
+
+function runStorageKey(userId: string) {
+  return `${RUN_KEY_PREFIX}:${userId}`;
+}
+
+function sessionStorageKey(userId: string) {
+  return `${SESSION_CACHE_KEY_PREFIX}:${userId}`;
+}
 
 export type PersistedRun = {
   chatId: string;
@@ -16,9 +26,9 @@ export type SessionCache<T> = {
   nextCursor: string | null;
 };
 
-export function readPersistedRun(): PersistedRun | null {
+export function readPersistedRun(userId: string): PersistedRun | null {
   try {
-    const value = window.localStorage.getItem(STORAGE_KEY);
+    const value = window.localStorage.getItem(runStorageKey(userId));
     if (!value) return null;
     const parsed = JSON.parse(value) as Partial<PersistedRun>;
     if (
@@ -36,43 +46,72 @@ export function readPersistedRun(): PersistedRun | null {
   }
 }
 
-export function writePersistedRun(run: PersistedRun) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(run));
+export function writePersistedRun(run: PersistedRun, userId: string) {
+  window.localStorage.setItem(runStorageKey(userId), JSON.stringify(run));
 }
 
-export function updatePersistedCursor(runId: string, chunkIndex: number) {
-  const current = readPersistedRun();
+export function updatePersistedCursor(userId: string, runId: string, chunkIndex: number) {
+  const current = readPersistedRun(userId);
   if (!current || current.runId !== runId) return;
-  writePersistedRun({ ...current, chunkIndex });
+  writePersistedRun({ ...current, chunkIndex }, userId);
 }
 
-export function clearPersistedRun() {
-  window.localStorage.removeItem(STORAGE_KEY);
+export function clearPersistedRun(userId: string) {
+  window.localStorage.removeItem(runStorageKey(userId));
 }
 
-export function readSessionCache<T>(): SessionCache<T> | null {
+// 会话列表在 SPA 内还有一份模块内存缓存（避免切页签反复拉取），同样按用户存放。
+const memorySessionCache = new Map<string, SessionCache<unknown> | null>();
+
+export function readSessionCache<T>(userId: string): SessionCache<T> | null {
+  const cached = memorySessionCache.get(userId);
+  if (cached !== undefined) return cached as SessionCache<T> | null;
   try {
-    const value = window.sessionStorage.getItem(SESSION_CACHE_KEY);
-    if (!value) return null;
+    const value = window.sessionStorage.getItem(sessionStorageKey(userId));
+    if (!value) {
+      memorySessionCache.set(userId, null);
+      return null;
+    }
     const parsed = JSON.parse(value) as {
       data?: unknown;
       nextCursor?: unknown;
     };
-    if (!Array.isArray(parsed.data)) return null;
-    return {
+    if (!Array.isArray(parsed.data)) {
+      memorySessionCache.set(userId, null);
+      return null;
+    }
+    const cache: SessionCache<T> = {
       data: parsed.data as T[],
       nextCursor:
         typeof parsed.nextCursor === 'string' ? parsed.nextCursor : null,
     };
+    memorySessionCache.set(userId, cache);
+    return cache;
   } catch {
     return null;
   }
 }
 
-export function writeSessionCache(cache: SessionCache<unknown>) {
+export function writeSessionCache(cache: SessionCache<unknown>, userId: string) {
+  memorySessionCache.set(userId, cache);
   try {
-    window.sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(cache));
+    window.sessionStorage.setItem(sessionStorageKey(userId), JSON.stringify(cache));
   } catch {
     // 隐私模式或超出配额时忽略，下次挂载重新拉取即可
   }
+}
+
+// 退出登录时清掉当前用户留在本机的聊天痕迹（内存 + 存储）。
+export function clearSessionCache(userId: string) {
+  memorySessionCache.delete(userId);
+  try {
+    window.sessionStorage.removeItem(sessionStorageKey(userId));
+  } catch {
+    // ignore
+  }
+}
+
+export function resetUserData(userId: string) {
+  clearPersistedRun(userId);
+  clearSessionCache(userId);
 }

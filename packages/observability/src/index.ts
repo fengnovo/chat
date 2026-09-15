@@ -1,5 +1,17 @@
 export { loadObservabilityConfig, type ObservabilityConfig } from './config.js';
 export { startObservability, type ObservabilityRuntime, type ObservabilityOptions } from './sdk.js';
+export {
+  loadLangfuseConfig,
+  registerLangfuseRuntime,
+  registerLangfuse,
+  getRegisteredLangfuseRuntime,
+  createLangfuseSpanProcessor,
+  createContentMask,
+  pseudonymizeUserId,
+  shortRunId,
+  type LangfuseResultConfig,
+  type LangfuseRuntime,
+} from './langfuse.js';
 export { createObservabilityResource } from './resource.js';
 export { injectObservabilityContext, extractObservabilityContext, type ObservabilityContext } from './context.js';
 export {
@@ -28,5 +40,10 @@ export {
   type ModelProvider,
   type ModelFamily,
   type ToolName,
+  type ToolOperation,
   type KnowledgeOperation,
+  type OutboxDispatchOutcome,
+  type CircuitState,
+  type AgentPhase,
+  type PhaseOutcome,
 } from './metrics.js';

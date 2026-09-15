@@ -593,6 +593,9 @@ export class AgentRepository {
         knowledgeBaseIds,
         attachments: input.attachments ?? [],
         ...(workspaceSource ? { workspaceSource } : {}),
+        ...(input.observabilityContext
+          ? { observability: input.observabilityContext }
+          : {}),
       });
       return { run, created: true, outboxId };
     });
@@ -842,6 +845,7 @@ export class AgentRepository {
     interruptId: string,
     kind: 'approval' | 'question',
     response: unknown,
+    observabilityContext?: ObservabilityContextPayload,
   ): Promise<InterruptRecord | null> {
     return inTransaction(this.pool, async (client) => {
       const run = await client.query(
@@ -896,6 +900,9 @@ export class AgentRepository {
           ? run.rows[0].knowledge_base_ids.map(String)
           : [],
       };
+      const observability = observabilityContext
+        ? { observability: observabilityContext }
+        : {};
       const job: RunJob =
         kind === 'approval'
           ? {
@@ -905,6 +912,7 @@ export class AgentRepository {
                 RunJob,
                 { kind: 'resume-approval' }
               >['decision'],
+              ...observability,
             }
           : {
               ...common,
@@ -913,6 +921,7 @@ export class AgentRepository {
                 RunJob,
                 { kind: 'resume-question' }
               >['answer'],
+              ...observability,
             };
       await insertDispatch(client, job);
       return {

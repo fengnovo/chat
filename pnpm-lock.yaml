@@ -259,6 +259,12 @@ importers:
         specifier: ^4.6.1
         version: 4.6.1
     devDependencies:
+      '@opentelemetry/sdk-metrics':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-base':
+        specifier: 2.11.0
+        version: 2.11.0(@opentelemetry/api@1.9.1)
       '@types/node':
         specifier: ^26.3.0
         version: 26.5.1
@@ -295,6 +301,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.1)
+      '@opentelemetry/api':
+        specifier: 1.9.1
+        version: 1.9.1
       '@qdrant/js-client-rest':
         specifier: ^1.19.0
         version: 1.19.0(typescript@5.9.3)
@@ -310,6 +319,9 @@ importers:
       '@repo/knowledge-graphrag':
         specifier: workspace:*
         version: link:../../packages/knowledge-graphrag
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       bullmq:
         specifier: ^5.58.5
         version: 5.81.4(supports-color@10.2.2)
@@ -326,6 +338,12 @@ importers:
         specifier: ^4.6.1
         version: 4.6.1
     devDependencies:
+      '@opentelemetry/sdk-metrics':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-base':
+        specifier: 2.11.0
+        version: 2.11.0(@opentelemetry/api@1.9.1)
       '@types/node':
         specifier: ^26.3.0
         version: 26.5.1
@@ -414,6 +432,12 @@ importers:
       '@langchain/langgraph-checkpoint-postgres':
         specifier: ^1.0.5
         version: 1.0.5(@langchain/core@1.2.10(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-proto@0.221.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.1))(openai@7.13.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(undici@8.10.1)(ws@8.21.3)(zod@4.6.1))(ws@8.21.3))(@langchain/langgraph-checkpoint@1.1.5(@langchain/core@1.2.10(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-proto@0.221.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.1))(openai@7.13.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(undici@8.10.1)(ws@8.21.3)(zod@4.6.1))(ws@8.21.3)))
+      '@langfuse/langchain':
+        specifier: 5.11.1
+        version: 5.11.1(@langchain/core@1.2.10(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-proto@0.221.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.1))(openai@7.13.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(undici@8.10.1)(ws@8.21.3)(zod@4.6.1))(ws@8.21.3))(@opentelemetry/api@1.9.1)
+      '@opentelemetry/api':
+        specifier: 1.9.1
+        version: 1.9.1
       '@repo/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
@@ -426,6 +450,9 @@ importers:
       '@repo/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       bullmq:
         specifier: ^5.58.5
         version: 5.81.4(supports-color@10.2.2)
@@ -439,6 +466,12 @@ importers:
         specifier: ^4.6.1
         version: 4.6.1
     devDependencies:
+      '@opentelemetry/sdk-metrics':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-base':
+        specifier: 2.11.0
+        version: 2.11.0(@opentelemetry/api@1.9.1)
       '@types/node':
         specifier: ^26.3.0
         version: 26.5.1
@@ -664,6 +697,9 @@ importers:
 
   packages/observability:
     dependencies:
+      '@langfuse/otel':
+        specifier: 5.11.1
+        version: 5.11.1(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.221.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.1))
       '@opentelemetry/api':
         specifier: 1.9.1
         version: 1.9.1
