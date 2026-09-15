@@ -436,11 +436,24 @@ deploy/
 
 ```bash
 # 在本机（工作区根目录）——注意 --exclude .env，绝不覆盖服务器配置
-rsync -av --delete \
-  --exclude .env \
-  --exclude node_modules --exclude .next --exclude dist --exclude .turbo \
-  --exclude .git --exclude data \
-  ./ chatapp@101.96.208.160:/opt/chat/
+rsync -av --delete --progress \
+  --exclude '.env' \
+  --exclude 'deploy/.env' \
+  --exclude 'node_modules/' \
+  --exclude 'apps/desktop/' \
+  --exclude 'docs/' \
+  --exclude 'packages/ai-cli/sessions/' \
+  --exclude '.superpowers' \
+  --exclude '.turbo' \
+  --exclude '.worktrees' \
+  --exclude '.github' \
+  --exclude '.trace' \
+  --exclude '.pnpm-store' \
+  --exclude '.next/' \
+  --exclude 'dist/' \
+  --exclude 'data/' \
+  --exclude '.git' \
+  ./ root@101.96.208.160:/opt/chat/
 ```
 
 ### 14.2 合并 .env 新键（不要 cp 覆盖）
