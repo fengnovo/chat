@@ -110,6 +110,26 @@ test('does not cache failed connections and allows retry', async () => {
   assert.equal(recovered.tools.length, 1);
 });
 
+test('rejects a hung endpoint after connectTimeoutMs instead of waiting for the SDK default', async () => {
+  const file = await writeConfig('hung.json', ['t1']);
+  await closeSharedMcpClients();
+
+  const hungFactory = (): SharedMcpClientLike => ({
+    getTools: () => new Promise(() => {}), // TCP 可连但永不响应（黑洞）
+    close: async () => {},
+  });
+
+  const started = Date.now();
+  await assert.rejects(
+    getSharedMcpToolsForConfigPath(
+      file,
+      optsWith({ clientFactory: hungFactory, connectTimeoutMs: 100 }),
+    ),
+    /timed out after 100ms/,
+  );
+  assert.ok(Date.now() - started < 1_000, 'timeout must fire promptly');
+});
+
 test('reconnects after closeSharedMcpClients', async () => {
   const { factory, created } = createFakeFactory();
   const file = await writeConfig('closing.json', ['t1']);
@@ -151,4 +171,35 @@ test('rebuilds expired entries lazily and closes the stale client', async () => 
   assert.equal(created.length, 2, 'expired entry must be rebuilt');
   assert.equal(created[0]?.closed, true, 'stale client must be closed on rebuild');
   assert.match(rebuilt.status, /rebuilt/);
+});
+
+test('keeps serving stale tools when a TTL rebuild fails, then rebuilds after another TTL', async () => {
+  const { factory, created, failNextConnections, allowConnections } = createFakeFactory();
+  const file = await writeConfig('stale-on-failure.json', ['t1']);
+  await closeSharedMcpClients();
+
+  let clock = 1_000;
+  const options = () => optsWith({ clientFactory: factory, ttlMs: 5_000, now: () => clock });
+  await getSharedMcpToolsForConfigPath(file, options());
+  assert.equal(created.length, 1);
+
+  failNextConnections();
+  clock = 6_001;
+  const stale = await getSharedMcpToolsForConfigPath(file, options());
+
+  assert.equal(created.length, 2, 'expiry must still trigger one rebuild attempt');
+  assert.equal(stale.tools.length, 1, 'old tools keep being served when rebuild fails');
+  assert.match(stale.status, /stale/);
+  assert.equal(created[0]?.closed, false, 'old client must stay open while the rebuild failed');
+
+  const immediate = await getSharedMcpToolsForConfigPath(file, options());
+  assert.equal(created.length, 2, 'failure restores the entry; no retry within the backoff TTL');
+  assert.equal(immediate.tools.length, 1);
+
+  allowConnections();
+  clock = 12_000;
+  const recovered = await getSharedMcpToolsForConfigPath(file, options());
+  assert.equal(created.length, 3, 'rebuild is retried after the backoff TTL');
+  assert.match(recovered.status, /rebuilt/);
+  assert.equal(created[0]?.closed, true, 'old client is closed only after a successful rebuild');
 });

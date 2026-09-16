@@ -37,6 +37,8 @@ function agentEventToTrace(event: AgentEvent): PipelineEvent | null {
       return null;
     case 'usage.updated':
       return null;
+    case 'context.compressing':
+      return null;
     case 'retrieval.completed':
       return { ...base, stage: 'verify', status: 'success', title: '已完成知识检索', detail: `${event.citations.length} 条引用 · ${event.stats.durationMs}ms` };
     case 'run.started':
@@ -181,14 +183,20 @@ function createTrackedFetch(userId: string): typeof fetch {
     const observed = response.body.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
         transform(chunk, controller) {
+          // 第一优先级：必须把原始字节透传给下游，追踪逻辑绝不允许阻断主数据流。
           controller.enqueue(chunk);
-          pending += decoder.decode(chunk, { stream: true });
-          const boundary = pending.lastIndexOf('\n\n');
-          if (boundary === -1) return;
-          const complete = pending.slice(0, boundary + 2);
-          pending = pending.slice(boundary + 2);
-          cursor += countSseFrames(complete);
-          updatePersistedCursor(userId, runId, cursor);
+          // 旁路追踪：任何异常都吞掉，保证上面的 enqueue 已经执行。
+          try {
+            pending += decoder.decode(chunk, { stream: true });
+            const boundary = pending.lastIndexOf('\n\n');
+            if (boundary === -1) return;
+            const complete = pending.slice(0, boundary + 2);
+            pending = pending.slice(boundary + 2);
+            cursor += countSseFrames(complete);
+            updatePersistedCursor(userId, runId, cursor);
+          } catch {
+            // 追踪逻辑出错不影响主流程
+          }
         },
       }),
     );

@@ -1,4 +1,9 @@
 import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = dirname(scriptDirectory);
 
 const ports = [...new Set(['PORT', 'API_PORT'].map((name) => {
   const value = process.env[name];
@@ -36,3 +41,41 @@ for (const port of ports) {
 }
 
 console.log(`[dev] ports ready: ${ports.join(', ')}`);
+
+// Worker 不监听端口，端口清理管不到它；而多个 worker 同时连同一个 Redis 队列会
+// 随机瓜分任务（新旧代码/配置不一致时就出现"MCP 工具有时有时无"）。
+// 这里按"命令行匹配 + cwd 属于本仓库"精确收割残留 worker（含 tsx --watch 父子进程）。
+function matchingPids(pattern) {
+  try {
+    return execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' })
+      .split(/\s+/)
+      .map(Number)
+      .filter(Boolean)
+      .filter((pid) => pid !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
+function cwdOf(pid) {
+  try {
+    const output = execFileSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return output.split(/\r?\n/).find((line) => line.startsWith('n'))?.slice(1);
+  } catch {
+    return undefined;
+  }
+}
+
+const workerCwd = join(repositoryRoot, 'apps', 'worker');
+for (const pid of matchingPids('src/worker\\.ts')) {
+  if (cwdOf(pid) !== workerCwd) continue;
+  try {
+    process.kill(pid, 'SIGTERM');
+    console.log(`[dev] released stale worker PID ${pid} (${workerCwd})`);
+  } catch {
+    // 进程可能在 pgrep 与 kill 之间退出。
+  }
+}

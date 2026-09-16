@@ -87,8 +87,27 @@ const eventBase = {
   timestamp: z.string().datetime(),
 };
 
+/**
+ * run.started 携带的运行时能力快照：本次运行可调用的 MCP 工具与 skills、
+ * 上下文压缩阈值、沙箱模式与知识库关联状态，供前端观测面板展示。
+ */
+export const runCapabilitiesSchema = z.object({
+  tools: z.array(z.string().min(1).max(64)).max(120),
+  skills: z.array(z.string().min(1).max(128)).max(50),
+  backendMode: z.enum(['docker', 'e2b']),
+  /** 上下文摘要压缩触发阈值（tokens），0 表示未启用摘要压缩。 */
+  contextTriggerTokens: z.number().int().nonnegative(),
+  knowledgeEnabled: z.boolean(),
+});
+
+export type RunCapabilities = z.infer<typeof runCapabilitiesSchema>;
+
 export const agentEventSchema = z.discriminatedUnion('type', [
-  z.object({ ...eventBase, type: z.literal('run.started') }),
+  z.object({
+    ...eventBase,
+    type: z.literal('run.started'),
+    capabilities: runCapabilitiesSchema.optional(),
+  }),
   z.object({ ...eventBase, type: z.literal('assistant.delta'), text: z.string() }),
   /**
    * 模型的思考过程（reasoning_content）。推理模型在输出正式回复前会先输出
@@ -178,6 +197,12 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     code: z.string(),
     message: z.string(),
   }),
+  /**
+   * 上下文压缩进行中。deepagents 的 summarization middleware 在对话超长时
+   * 会调用模型生成摘要，该摘要只供后续模型调用使用，不应作为回复展示给用户。
+   * 前端收到此事件后显示「正在压缩上下文」指示器，忽略后续摘要文本。
+   */
+  z.object({ ...eventBase, type: z.literal('context.compressing') }),
 ]);
 
 export type AgentEvent = z.infer<typeof agentEventSchema>;

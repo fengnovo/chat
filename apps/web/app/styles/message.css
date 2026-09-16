@@ -277,6 +277,110 @@
   white-space: pre;
 }
 
+/* highlight.js 语法高亮 token 配色：与 pre 暗色背景（#191721）协调。 */
+.markdown-content .hljs {
+  color: #f4f1fa;
+}
+
+.markdown-content .hljs-comment,
+.markdown-content .hljs-quote {
+  color: #7a768a;
+  font-style: italic;
+}
+
+.markdown-content .hljs-keyword,
+.markdown-content .hljs-selector-tag,
+.markdown-content .hljs-built_in,
+.markdown-content .hljs-name,
+.markdown-content .hljs-tag {
+  color: #c792ea;
+}
+
+.markdown-content .hljs-string,
+.markdown-content .hljs-attr,
+.markdown-content .hljs-template-tag,
+.markdown-content .hljs-addition {
+  color: #c3e88d;
+}
+
+.markdown-content .hljs-number,
+.markdown-content .hljs-literal,
+.markdown-content .hljs-variable,
+.markdown-content .hljs-template-variable {
+  color: #f78c6c;
+}
+
+.markdown-content .hljs-title,
+.markdown-content .hljs-section,
+.markdown-content .hljs-selector-id,
+.markdown-content .hljs-selector-class {
+  color: #82aaff;
+}
+
+.markdown-content .hljs-type,
+.markdown-content .hljs-class .hljs-title,
+.markdown-content .hljs-function .hljs-title {
+  color: #ffcb6b;
+}
+
+.markdown-content .hljs-attribute,
+.markdown-content .hljs-meta,
+.markdown-content .hljs-symbol,
+.markdown-content .hljs-bullet,
+.markdown-content .hljs-link {
+  color: #89ddff;
+}
+
+.markdown-content .hljs-deletion {
+  color: #f07178;
+}
+
+.markdown-content .hljs-regexp,
+.markdown-content .hljs-emphasis {
+  color: #f78c6c;
+}
+
+.markdown-content .hljs-strong {
+  color: #f4f1fa;
+  font-weight: 600;
+}
+
+/* Mermaid 图表容器：居中、可横向滚动，避免溢出气泡。 */
+.markdown-content .mermaid-container {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  justify-content: center;
+  margin: 1em 0;
+  overflow-x: auto;
+  padding: 16px;
+}
+
+.markdown-content .mermaid-container svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-content .mermaid-loading {
+  color: var(--ink-muted);
+  font-size: 13px;
+  margin: 1em 0;
+  padding: 16px;
+  text-align: center;
+}
+
+.markdown-content .mermaid-error {
+  background: var(--red-soft);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  color: var(--red);
+  font-size: 13px;
+  margin: 1em 0;
+  padding: 10px 14px;
+}
+
 .markdown-content table {
   border-collapse: collapse;
   display: block;

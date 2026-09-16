@@ -2,6 +2,7 @@ import { AIBoundary } from '@cognicatch/react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 
 import { triggerAttachmentDownload } from './lightbox';
 import { Icon } from './icon';
@@ -9,10 +10,86 @@ import { messageText } from './utils';
 import type { AgentTodo, InsightCard, ResilientMessage } from './types';
 import { CitationList } from './citation-list';
 
+// Mermaid 仅在客户端动态加载，避免 SSR 报错与首屏体积膨胀。
+let mermaidInitialized = false;
+type MermaidApi = {
+  initialize: (config: Record<string, unknown>) => void;
+  render: (id: string, text: string) => Promise<{ svg: string }>;
+};
+
+async function getMermaid(): Promise<MermaidApi | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const mod = await import('mermaid');
+    const mermaid = (mod.default ?? mod) as unknown as MermaidApi;
+    if (!mermaidInitialized) {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'default',
+        securityLevel: 'loose',
+        fontFamily: 'inherit',
+      });
+      mermaidInitialized = true;
+    }
+    return mermaid;
+  } catch {
+    return null;
+  }
+}
+
+function MermaidDiagram({ chart }: { chart: string }) {
+  const [svg, setSvg] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getMermaid().then((mermaid) => {
+      if (!mermaid || cancelled) return;
+      const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`;
+      mermaid
+        .render(id, chart)
+        .then(({ svg: rendered }) => {
+          if (!cancelled) {
+            setSvg(rendered);
+            setError(null);
+          }
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : '图表演染失败');
+            setSvg('');
+          }
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [chart]);
+
+  if (error) {
+    return (
+      <div className="mermaid-error" role="alert">
+        <strong>图表解析失败：</strong>
+        {error}
+      </div>
+    );
+  }
+  if (!svg) {
+    return <div className="mermaid-loading" aria-live="polite">正在渲染图表…</div>;
+  }
+  return (
+    <div
+      className="mermaid-container"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}
+
 function Message({
   copied,
   dismissedCards,
   header,
+  highlight,
   liveLabel,
   message,
   onBoundaryError,
@@ -28,6 +105,8 @@ function Message({
   dismissedCards: Set<string>;
   /** 本轮执行面板：放在正文上方、与消息正文同列（不高于头像）。 */
   header?: ReactNode;
+  /** 是否启用代码语法高亮与 Mermaid 图表渲染。 */
+  highlight: boolean;
   /** 流式生成但还没有正文时，气泡内实时展示的当前动作/思考。 */
   liveLabel: string | null;
   message: ResilientMessage;
@@ -135,7 +214,7 @@ function Message({
             isUser ? (
               text
             ) : (
-              <MarkdownContent content={text} onPreviewImage={onPreviewImage} />
+              <MarkdownContent content={text} onPreviewImage={onPreviewImage} highlight={highlight} />
             )
           ) : streaming && showWaitingDots ? (
             <span className="streaming-live">
@@ -235,13 +314,17 @@ function safeExternalUrl(href: string | undefined): string | null {
 function MarkdownContent({
   content,
   onPreviewImage,
+  highlight,
 }: {
   content: string;
   onPreviewImage: (url: string, filename?: string) => void;
+  /** 开启后启用代码语法高亮与 Mermaid 图表渲染；关闭则退化为纯文本代码块。 */
+  highlight: boolean;
 }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      rehypePlugins={highlight ? [rehypeHighlight] : []}
       components={{
         a: ({ children, href }) => {
           const safe = safeExternalUrl(href);
@@ -261,6 +344,15 @@ function MarkdownContent({
               {children}
             </a>
           );
+        },
+        code: ({ className, children }) => {
+          // 仅在开启高亮时识别 mermaid 代码块并渲染为图表；
+          // 关闭时让代码以普通文本展示，便于对比"未增强"的渲染效果。
+          if (highlight && className && /language-mermaid/i.test(className)) {
+            const chart = String(children).replace(/\n$/, '');
+            return <MermaidDiagram chart={chart} />;
+          }
+          return <code className={className}>{children}</code>;
         },
         pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
         img: ({ src, alt }) => {

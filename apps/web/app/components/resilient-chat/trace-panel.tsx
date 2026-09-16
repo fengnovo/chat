@@ -1,4 +1,5 @@
 import { Icon } from './icon';
+import type { RunCapabilities } from '@repo/contracts';
 import type { PipelineEvent } from './types';
 
 function TracePanel({
@@ -6,12 +7,22 @@ function TracePanel({
   open,
   onClose,
   trace,
+  capabilities,
+  contextInputTokens,
+  generatedTokens,
+  compressing,
 }: {
   inactive: boolean;
   open: boolean;
   onClose: () => void;
   trace: PipelineEvent[];
+  capabilities: RunCapabilities | null;
+  contextInputTokens: number;
+  generatedTokens: number;
+  compressing: boolean;
 }) {
+  const formatTokens = (value: number) =>
+    value >= 10_000 ? `${(value / 1000).toFixed(1)}k` : String(value);
   return (
     <>
       {open && !inactive && (
@@ -80,17 +91,67 @@ function TracePanel({
           ))}
         </ol>
 
-        <div className="model-chain">
-          <span className="nav-label">模型降级链</span>
-          {['primary model', 'fallback 1', 'fallback 2', 'fallback 3'].map(
-            (model, index) => (
-              <div key={model}>
-                <span>{index + 1}</span>
-                <code>{model}</code>
-                {index === 0 && <small>PRIMARY</small>}
+        <div className="trace-capabilities">
+          <section>
+            <span className="nav-label">会话上下文</span>
+            <div className="cap-grid">
+              <div>
+                <span>输入 tokens</span>
+                <code>{formatTokens(contextInputTokens)}</code>
               </div>
-            ),
-          )}
+              <div>
+                <span>输出 tokens</span>
+                <code>{formatTokens(generatedTokens)}</code>
+              </div>
+              <div>
+                <span>压缩阈值</span>
+                <code>
+                  {capabilities
+                    ? capabilities.contextTriggerTokens > 0
+                      ? formatTokens(capabilities.contextTriggerTokens)
+                      : '未启用'
+                    : '--'}
+                </code>
+              </div>
+              <div>
+                <span>沙箱</span>
+                <code>{capabilities?.backendMode ?? '--'}</code>
+              </div>
+              <div>
+                <span>知识库</span>
+                <code>
+                  {capabilities
+                    ? capabilities.knowledgeEnabled
+                      ? '已关联'
+                      : '未关联'
+                    : '--'}
+                </code>
+              </div>
+              {compressing && (
+                <div className="cap-compressing">上下文压缩中…</div>
+              )}
+            </div>
+          </section>
+          <section>
+            <span className="nav-label">可调用 MCP 工具</span>
+            <div className="cap-chips">
+              {(capabilities?.tools.length ? capabilities.tools : ['无']).map(
+                (tool) => (
+                  <code key={tool}>{tool}</code>
+                ),
+              )}
+            </div>
+          </section>
+          <section>
+            <span className="nav-label">Skills</span>
+            <div className="cap-chips">
+              {(capabilities?.skills.length ? capabilities.skills : ['无']).map(
+                (skill) => (
+                  <code key={skill}>{skill}</code>
+                ),
+              )}
+            </div>
+          </section>
         </div>
       </aside>
     </>

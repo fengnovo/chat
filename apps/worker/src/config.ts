@@ -94,6 +94,10 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
       : value.DATABASE_URL);
   const workspaceRoot = path.resolve(value.WORKSPACE_ROOT);
   const sandboxSessionsRoot = path.resolve(value.DOCKER_SANDBOX_SESSIONS_ROOT);
+  // 相对路径一律按仓库根解析，同一份 .env 在本机（仓库目录）与生产（/opt/chat）都可用。
+  const mcpConfigPath = value.MCP_CONFIG_PATH
+    ? path.resolve(repositoryRoot, value.MCP_CONFIG_PATH)
+    : undefined;
   if (value.SANDBOX_RUNTIME === 'e2b-cloud' && !value.E2B_API_KEY) {
     throw new Error('E2B_API_KEY is required when SANDBOX_RUNTIME=e2b-cloud');
   }
@@ -106,6 +110,7 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
     DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: workspaceRoot,
     DOCKER_SANDBOX_SESSIONS_ROOT: sandboxSessionsRoot,
+    MCP_CONFIG_PATH: mcpConfigPath,
     models,
   };
 }

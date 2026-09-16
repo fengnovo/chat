@@ -33,10 +33,17 @@ export interface SharedMcpCacheOptions {
   clientFactory?: (config: Record<string, unknown>) => SharedMcpClientLike;
   /** 缓存条目存活时长，超龄后下次使用时懒重建（兜底 server 重启等静默死连接）。 */
   ttlMs?: number;
+  /**
+   * 建连 + 工具发现的最长等待。@langchain/mcp-adapters 1.x 不透传配置里的 timeout，
+   * SDK 对"TCP 可连但不响应"的黑洞端点默认要等 60s；这里用 Promise.race 自己兜底，
+   * 超时按连接失败处理（不缓存、可重试）。
+   */
+  connectTimeoutMs?: number;
   now?: () => number;
 }
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 
 // 缓存 Promise 本身实现 single-flight：并发请求共享同一次建连，不会重复握手。
 const sharedClients = new Map<string, Promise<SharedMcpEntry>>();
@@ -45,10 +52,26 @@ function buildEntry(
   raw: string,
   clientFactory: (config: Record<string, unknown>) => SharedMcpClientLike,
   now: () => number,
+  connectTimeoutMs: number,
 ): Promise<SharedMcpEntry> {
   const config = JSON.parse(raw) as Record<string, unknown>;
   const client = clientFactory(config);
-  return client.getTools().then((tools) => ({ client, tools, createdAt: now() }));
+  const deadline = new Promise<never>((_, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`MCP connect/tools discovery timed out after ${connectTimeoutMs}ms`)),
+      connectTimeoutMs,
+    );
+    // 底层握手可能仍在 pending（适配器不可取消）；unref 避免悬挂定时器拖住进程退出。
+    timer.unref?.();
+  });
+  return Promise.race([client.getTools(), deadline]).then(
+    (tools) => ({ client, tools, createdAt: now() }),
+    async (error: unknown) => {
+      // 连接/发现失败（含超时）时关闭可能半开的 client，再向上抛——调用方不缓存失败条目。
+      await client.close().catch(() => undefined);
+      throw error;
+    },
+  );
 }
 
 /**
@@ -62,6 +85,7 @@ export async function getSharedMcpToolsForConfigPath(
   const raw = await readFile(configPath, 'utf8');
   const key = createHash('sha256').update(raw).digest('hex');
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+  const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const now = options.now ?? Date.now;
   const factory = options.clientFactory ?? ((config) => new MultiServerMCPClient(config as never));
 
@@ -85,18 +109,27 @@ export async function getSharedMcpToolsForConfigPath(
     if (now() - entry.createdAt <= ttlMs) {
       return { tools: entry.tools, status: `${entry.tools.length} tools connected (shared)` };
     }
-    // 超龄懒重建：同步判断 + 替换，并发的其他请求会拿到新 promise，不会重复建连。
-    const replacement = buildEntry(raw, factory, now);
-    replacement.catch(() => {
-      if (sharedClients.get(key) === replacement) sharedClients.delete(key);
-    });
+    // 超龄懒重建（stale-while-revalidate）：新连接握手成功前不动旧 client。
+    // 重建失败时继续返回旧工具，并把旧条目时钟拨到当前、TTL 后再试，
+    // 避免一次公网抖动/限流直接让整轮对话没有 MCP 工具。
+    const replacement = buildEntry(raw, factory, now, connectTimeoutMs);
     if (sharedClients.get(key) === existing) {
       sharedClients.set(key, replacement);
-      void entry.client.close().catch(() => undefined);
-      return replacement.then((built) => ({
-        tools: built.tools,
-        status: `${built.tools.length} tools connected (shared, rebuilt)`,
-      }));
+      try {
+        const built = await replacement;
+        void entry.client.close().catch(() => undefined);
+        return {
+          tools: built.tools,
+          status: `${built.tools.length} tools connected (shared, rebuilt)`,
+        };
+      } catch {
+        const fallback: Promise<SharedMcpEntry> = Promise.resolve({ ...entry, createdAt: now() });
+        if (sharedClients.get(key) === replacement) sharedClients.set(key, fallback);
+        return {
+          tools: entry.tools,
+          status: `${entry.tools.length} tools connected (shared, stale)`,
+        };
+      }
     }
     return sharedClients.get(key)!.then((built) => ({
       tools: built.tools,
@@ -104,7 +137,7 @@ export async function getSharedMcpToolsForConfigPath(
     }));
   }
 
-  const promise = buildEntry(raw, factory, now);
+  const promise = buildEntry(raw, factory, now, connectTimeoutMs);
   promise.catch(() => {
     if (sharedClients.get(key) === promise) sharedClients.delete(key);
   });

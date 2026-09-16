@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import { loadWorkerConfig } from '../src/config.js';
@@ -66,4 +67,20 @@ test('GraphRAG MCP configuration has safe disabled defaults', () => {
 test('GraphRAG MCP enabled parses explicit environment strings', () => {
   assert.equal(loadWorkerConfig({ ...requiredKeys, KNOWLEDGE_MCP_ENABLED: 'false' }).KNOWLEDGE_MCP_ENABLED, false);
   assert.equal(loadWorkerConfig({ ...requiredKeys, KNOWLEDGE_MCP_ENABLED: 'true' }).KNOWLEDGE_MCP_ENABLED, true);
+});
+
+test('MCP_CONFIG_PATH relative paths resolve against the repository root', () => {
+  const config = loadWorkerConfig({
+    ...requiredKeys,
+    MCP_CONFIG_PATH: 'packages/ai-cli/mcp/mcp.json',
+  });
+  assert.ok(config.MCP_CONFIG_PATH, 'MCP_CONFIG_PATH must be present');
+  assert.ok(path.isAbsolute(config.MCP_CONFIG_PATH), 'relative env value must become absolute');
+  assert.ok(
+    config.MCP_CONFIG_PATH?.endsWith('/packages/ai-cli/mcp/mcp.json'),
+    `unexpected resolved path: ${config.MCP_CONFIG_PATH}`,
+  );
+
+  const absolute = loadWorkerConfig({ ...requiredKeys, MCP_CONFIG_PATH: '/etc/mcp/mcp.json' });
+  assert.equal(absolute.MCP_CONFIG_PATH, '/etc/mcp/mcp.json');
 });

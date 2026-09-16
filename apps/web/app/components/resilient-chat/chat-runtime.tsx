@@ -1,5 +1,6 @@
 import { useChat } from '@ai-sdk/react';
 import { WorkflowChatTransport } from '@ai-sdk/workflow';
+import type { RunCapabilities } from '@repo/contracts';
 import type { FileUIPart } from 'ai';
 import Link from 'next/link';
 import {
@@ -133,12 +134,20 @@ function ChatRuntime() {
   const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
   const [historyFiles, setHistoryFiles] = useState<TouchedFile[]>([]);
   const [generatedTokens, setGeneratedTokens] = useState(0);
+  /** 本次运行累计输入 tokens（近似当前上下文占用），随 usage.updated 累加。 */
+  const [contextInputTokens, setContextInputTokens] = useState(0);
+  /** run.started 携带的运行时能力快照：可调用 MCP 工具、skills 与上下文配置。 */
+  const [runCapabilities, setRunCapabilities] = useState<RunCapabilities | null>(
+    null,
+  );
   /** 模型思考过程，按 runId 独立存储，避免被 AI SDK 流式 text-delta 更新覆盖。 */
   const [reasoningByRunId, setReasoningByRunId] = useState<Map<string, string>>(new Map());
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
   const [runFailure, setRunFailure] = useState<TaskFailure | null>(null);
+  /** 上下文压缩进行中：deepagents 摘要阶段显示流光指示器，不展示摘要正文。 */
+  const [contextCompressing, setContextCompressing] = useState(false);
   /** 续跑占位 user 消息的 id 集合：运行期间隐藏，run 结束后从 store 中移除。 */
   const [hiddenContinuationIds, setHiddenContinuationIds] =
     useState<ReadonlySet<string>>(new Set());
@@ -164,6 +173,26 @@ function ChatRuntime() {
   const [sessionDialogError, setSessionDialogError] = useState<string | null>(null);
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Markdown 渲染增强开关：语法高亮 + Mermaid 图表，默认开启；持久化到 localStorage。
+  const [highlightMarkdown, setHighlightMarkdown] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const stored = window.localStorage.getItem('chat:highlight-markdown');
+      return stored === null ? true : stored !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'chat:highlight-markdown',
+        highlightMarkdown ? 'true' : 'false',
+      );
+    } catch {
+      /* localStorage 不可用时静默，仅本会话生效 */
+    }
+  }, [highlightMarkdown]);
   const [knowledgeBases, setKnowledgeBases] = useState<Array<{ id: string; name: string; status?: string }>>([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>(() =>
     typeof window === 'undefined' ? [] : knowledgeBaseIdsForChat(conversation.chatId) ?? [],
@@ -379,10 +408,18 @@ function ChatRuntime() {
             lastEventAt: Date.now(),
           });
           setGeneratedTokens(0);
+          setContextInputTokens(0);
+          setRunCapabilities(event.capabilities ?? null);
+          setContextCompressing(false);
+        }
+        if (event.type === 'context.compressing') {
+          // 摘要阶段：只展示流光指示器，不渲染摘要正文。
+          setContextCompressing(true);
         }
         if (event.type === 'assistant.reasoning') {
           // 推理模型的思考过程：按 runId 独立存储，不写入消息 parts，
           // 避免被 AI SDK 流式 text-delta 更新覆盖。run 结束后仍保留。
+          setContextCompressing(false);
           setReasoningByRunId((current) => {
             const next = new Map(current);
             next.set(event.runId, (next.get(event.runId) ?? '') + event.text);
@@ -392,6 +429,8 @@ function ChatRuntime() {
         if (event.type === 'usage.updated') {
           // 真实用量：每次模型调用报一条增量，按 run 累加即为本轮生成量。
           setGeneratedTokens((current) => current + event.outputTokens);
+          // 输入 tokens 累计近似当前上下文占用，供观测面板展示。
+          setContextInputTokens((current) => current + event.inputTokens);
         }
         if (event.type === 'assistant.narration') {
           // 过程旁白只进过程区，不进消息正文。
@@ -412,6 +451,7 @@ function ChatRuntime() {
         }
         if (event.type === 'tool.started' || event.type === 'tool.completed') {
           const phase = event.type === 'tool.started' ? 'start' : 'end';
+          setContextCompressing(false);
           const at = Date.parse(event.timestamp) || Date.now();
           const input = event.type === 'tool.started' ? event.input : null;
           const output = event.type === 'tool.completed' ? event.output : null;
@@ -447,6 +487,7 @@ function ChatRuntime() {
           event.type === 'run.failed'
         ) {
           setPendingInterrupt(null);
+          setContextCompressing(false);
           // 本轮结束：把这一轮写过的文件并入历史文件记录，
           // 后续新一轮运行清空实时记录时文件面板仍然完整。
           void refreshHistoryFiles();
@@ -1369,6 +1410,24 @@ function ChatRuntime() {
             <button
               className="icon-button"
               type="button"
+              aria-pressed={highlightMarkdown}
+              aria-label={
+                highlightMarkdown
+                  ? '关闭代码高亮与 Mermaid 图表（切换为纯文本）'
+                  : '开启代码高亮与 Mermaid 图表'
+              }
+              title={
+                highlightMarkdown
+                  ? '代码高亮与 Mermaid：已开启（点击关闭以对比纯文本）'
+                  : '代码高亮与 Mermaid：已关闭（点击开启）'
+              }
+              onClick={() => setHighlightMarkdown((current) => !current)}
+            >
+              <Icon name="highlight" size={16} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
               aria-label={filesOpen ? '隐藏文件浏览器' : '显示文件浏览器'}
               aria-expanded={filesOpen}
               title={filesOpen ? '隐藏文件浏览器' : '文件浏览器'}
@@ -1405,6 +1464,7 @@ function ChatRuntime() {
                   header={
                     index === lastAssistantIndex ? processPanel : null
                   }
+                  highlight={highlightMarkdown}
                   key={message.id}
                   message={message}
                   onBoundaryError={() => {
@@ -1476,6 +1536,12 @@ function ChatRuntime() {
                   onContinue={() => void continueAfterFailure()}
                 />
               )}
+              {contextCompressing && (
+                <div className="context-compressing" role="status" aria-live="polite">
+                  <span className="context-compressing-shimmer" />
+                  <span className="context-compressing-text">正在压缩上下文…</span>
+                </div>
+              )}
               {error && (
                 <div className="error-banner" role="alert">
                   <div className="error-icon">
@@ -1539,6 +1605,10 @@ function ChatRuntime() {
       </section>
 
       <TracePanel
+        capabilities={runCapabilities}
+        contextInputTokens={contextInputTokens}
+        generatedTokens={generatedTokens}
+        compressing={contextCompressing}
         inactive={sidebarOpen || Boolean(sessionDialog)}
         open={traceOpen}
         onClose={() => setTraceOpen(false)}

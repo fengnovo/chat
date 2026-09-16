@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs';
+
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
-import { closeSharedMcpClients } from '@repo/agent-core';
+import { closeSharedMcpClients, getSharedMcpToolsForConfigPath } from '@repo/agent-core';
 import { S3ArtifactStore } from '@repo/artifacts';
 import { RUN_QUEUE_NAME, runCancellationChannel } from '@repo/contracts';
 import { createDatabase, migrateDatabase } from '@repo/db';
@@ -23,6 +25,36 @@ const langfuse = createWorkerLangfuse({
 });
 
 const config = loadWorkerConfig();
+// MCP 配置文件不存在属于部署/配置错误，不会自愈——直接启动失败，避免"跑着一个没有工具的 worker"。
+if (config.MCP_CONFIG_PATH && !existsSync(config.MCP_CONFIG_PATH)) {
+  throw new Error(
+    `MCP_CONFIG_PATH points to a missing file: ${config.MCP_CONFIG_PATH}. ` +
+      'Set a repo-relative path (e.g. packages/ai-cli/mcp/mcp.json) or an absolute path that exists.',
+  );
+}
+
+// 启动时预热 base MCP 共享连接，把公网握手成本移出首个对话；失败只告警不退出，
+// 缓存条目会被清理，之后每轮对话自动重试，恢复后无需重启 worker。
+if (config.MCP_CONFIG_PATH) {
+  try {
+    const shared = await getSharedMcpToolsForConfigPath(config.MCP_CONFIG_PATH);
+    logger.info(
+      { operation: 'worker.mcp.warmup', reason: 'ready', tools: shared.tools.length },
+      `base MCP ready (${shared.status}): ${config.MCP_CONFIG_PATH}`,
+    );
+  } catch (error) {
+    logger.error(
+      { error: redactTelemetryValue(error), operation: 'worker.mcp.warmup', reason: 'failed' },
+      `base MCP warmup failed: ${config.MCP_CONFIG_PATH}; runs will start without MCP tools and retry connecting each turn`,
+    );
+  }
+} else {
+  logger.warn(
+    { operation: 'worker.mcp.warmup', reason: 'not-configured' },
+    'MCP_CONFIG_PATH is not set; worker runs without base MCP tools',
+  );
+}
+
 const database = createDatabase(config.DATABASE_URL);
 await migrateDatabase(database.pool);
 
