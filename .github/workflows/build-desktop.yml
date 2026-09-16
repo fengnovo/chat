@@ -58,32 +58,12 @@ jobs:
       - name: Build TypeScript
         run: pnpm --filter @repo/desktop build
 
-      - name: Require macOS signing for releases
-        if: matrix.platform == 'mac' && (startsWith(github.ref, 'refs/tags/desktop-v') || inputs.tag != '')
-        env:
-          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          test -n "$CSC_LINK" || { echo "Missing MAC_CERTIFICATE_BASE64"; exit 1; }
-          test -n "$CSC_KEY_PASSWORD" || { echo "Missing MAC_CERTIFICATE_PASSWORD"; exit 1; }
-          test -n "$APPLE_ID" || { echo "Missing APPLE_ID"; exit 1; }
-          test -n "$APPLE_APP_SPECIFIC_PASSWORD" || { echo "Missing APPLE_APP_SPECIFIC_PASSWORD"; exit 1; }
-          test -n "$APPLE_TEAM_ID" || { echo "Missing APPLE_TEAM_ID"; exit 1; }
-
       - name: Build Electron (macOS)
         if: matrix.platform == 'mac'
         working-directory: apps/desktop
         run: npx electron-builder --config electron-builder.config.mjs --mac --publish=never
         env:
           ELECTRON_WEB_URL: ${{ env.ELECTRON_WEB_URL }}
-          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Build Electron (Windows)
         if: matrix.platform == 'win'
@@ -143,6 +123,8 @@ jobs:
             ## Keen AI Desktop Client
 
             连接至 ${{ env.ELECTRON_WEB_URL }}
+
+            > 当前 macOS 包未签名。首次打开请在 Finder 中右键应用，选择“打开”并确认；如果 macOS 仍提示应用已损坏，请执行：`xattr -dr com.apple.quarantine "Keen AI.app"`。
 
             ### 下载
 

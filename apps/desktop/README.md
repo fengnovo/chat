@@ -45,6 +45,6 @@ ELECTRON_WEB_URL=https://chat.example.com pnpm desktop:dist:win
 
 打包产物写入 `apps/desktop/release/`。`ELECTRON_WEB_URL` 会在构建时写入应用包，因此用户启动已打包应用时不需要再设置环境变量。直接运行 `pnpm desktop:start` 时会读取项目根目录 `.env`，并使用其中的 `PORT` 连接本地 Web。
 
-macOS 发布包必须使用 Developer ID 证书签名并完成 notarization，否则从浏览器下载后可能显示“应用已损坏，无法打开”。CI 发布需要配置以下 GitHub Actions Secrets：`MAC_CERTIFICATE_BASE64`、`MAC_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD` 和 `APPLE_TEAM_ID`。未签名包只适合本机调试；临时打开本机未签名包可执行 `xattr -dr com.apple.quarantine "Keen AI.app"`。
+当前 CI 发布的是未签名 macOS 包。首次打开请在 Finder 中右键应用，选择“打开”并确认；如果 macOS 仍提示“应用已损坏”，请执行 `xattr -dr com.apple.quarantine "Keen AI.app"`。未签名包不需要 Apple Developer 账号，但不适合无提示地分发给大量用户。
 
 Electron 窗口关闭了 Node 集成、启用 context isolation 和 sandbox；站外 HTTP(S) 链接交给系统浏览器打开。
