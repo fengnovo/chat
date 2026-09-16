@@ -5,6 +5,13 @@
   "description": "Keen AI Electron client",
   "type": "module",
   "main": "dist/main.js",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test"
+  },
   "devDependencies": {
     "concurrently": "^9.0.0",
     "turbo": "^2.10.12",
