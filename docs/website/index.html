@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#6d4aff">
+    <meta
+      name="description"
+      content="Keen Agent 是一个面向真实任务的 Headless AI Agent 平台，支持自主规划、断线续接、全链路可观测、GraphRAG 与隔离沙箱。"
+    >
+    <title>Keen Agent — 会对话，更会完成任务</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Keen Agent 首页">
+        <img src="https://chat.keen-tech.top/keen-ai-logo.png" width="36" height="36" alt="">
+        <strong>Keen Agent</strong>
+      </a>
+
+      <nav class="nav" aria-label="主导航">
+        <a href="#capabilities">产品能力</a>
+        <a href="#headless">Headless</a>
+        <a href="#observability">可观测性</a>
+      </nav>
+
+      <a class="header-cta" href="https://chat.keen-tech.top" target="_blank" rel="noopener noreferrer">
+        打开 Keen Agent <span aria-hidden="true">→</span>
+      </a>
+    </header>
+
+    <main id="main-content">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span aria-hidden="true"></span> HEADLESS AGENT PLATFORM</p>
+          <h1 id="hero-title">会对话，<br><em>更会完成任务。</em></h1>
+          <p class="hero-lead">
+            Keen Agent 把自主规划、工具调用、知识检索和安全执行带进熟悉的对话界面。
+            你只管描述目标，Agent 负责把任务推进到结果。
+          </p>
+          <div class="hero-actions">
+            <a class="primary-cta" href="https://chat.keen-tech.top" target="_blank" rel="noopener noreferrer">
+              立即体验 Keen Agent <span aria-hidden="true">→</span>
+            </a>
+            <a class="secondary-cta" href="#capabilities">了解平台能力</a>
+          </div>
+          <ul class="hero-tags" aria-label="平台特性摘要">
+            <li><i aria-hidden="true">✓</i> 自主规划</li>
+            <li><i aria-hidden="true">✓</i> 断线续接</li>
+            <li><i aria-hidden="true">✓</i> 全链路观测</li>
+          </ul>
+        </div>
+
+        <div class="hero-note" aria-label="平台定位">
+          <span>01</span>
+          <p>不是套在模型外的一层聊天壳，而是一套能持续执行真实任务的 Agent 运行平台。</p>
+        </div>
+
+        <div class="app-preview" aria-label="Keen Agent 真实产品界面示意">
+          <aside class="preview-sidebar">
+            <div class="preview-brand">
+              <img src="https://chat.keen-tech.top/keen-ai-logo.png" width="30" height="30" alt="">
+              <strong>Keen Agent</strong>
+              <span aria-hidden="true">‹</span>
+            </div>
+            <div class="new-chat"><b aria-hidden="true">＋</b> 新建对话</div>
+            <div class="session-list" aria-hidden="true">
+              <div class="session active"><i>✓</i><span><b>重构项目并完成测试</b><small>刚刚</small></span></div>
+              <div class="session"><i>✓</i><span><b>分析知识库文档</b><small>32 分钟前</small></span></div>
+              <div class="session"><i>✓</i><span><b>实现 API 可靠性升级</b><small>2 小时前</small></span></div>
+              <div class="session"><i>✓</i><span><b>检查系统可观测性</b><small>昨天</small></span></div>
+            </div>
+            <div class="preview-user" aria-hidden="true"><i>U</i><span><b>niubi001</b><small>成员</small></span></div>
+          </aside>
+
+          <div class="preview-chat">
+            <div class="preview-topbar">
+              <span>重构项目并完成测试</span>
+              <div aria-hidden="true"><i>□</i><i>◫</i><b>U</b></div>
+            </div>
+            <div class="conversation">
+              <div class="message user-message"><p>分析这个项目，规划任务并完成可靠性升级</p><span aria-hidden="true">U</span></div>
+              <div class="message agent-message">
+                <span class="agent-avatar" aria-hidden="true">✓</span>
+                <div>
+                  <p>我会先理解仓库结构和现有约束，再制定可验证的执行计划。</p>
+                  <div class="plan-card">
+                    <div><i>✓</i><span><small>已完成</small><b>分析代码与依赖</b></span></div>
+                    <div><i>✓</i><span><small>已完成</small><b>制定执行计划</b></span></div>
+                    <div class="running"><i></i><span><small>正在执行</small><b>在隔离沙箱中实施与测试</b></span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="composer">
+              <span>描述要在项目中完成的任务，可附带图片或文件...</span>
+              <div><i aria-hidden="true">⌕</i><b aria-hidden="true">↑</b></div>
+            </div>
+          </div>
+
+          <div class="preview-status" aria-hidden="true">
+            <span><i></i> Agent 正在执行</span>
+            <span>事件流已连接 · #184</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="proof-strip" aria-label="技术能力">
+        <span>DEEP AGENTS</span><span>MCP</span><span>GRAPHRAG</span><span>DOCKER / E2B</span>
+        <span>OPENTELEMETRY</span><span>LANGFUSE</span>
+      </section>
+
+      <section class="section capabilities" id="capabilities" aria-labelledby="capabilities-title">
+        <div class="section-heading">
+          <p class="section-kicker">为什么是 Keen Agent</p>
+          <h2 id="capabilities-title">从一句话，到真正交付。</h2>
+          <p>每一次对话背后，都是可规划、可恢复、可治理的完整任务执行链路。</p>
+        </div>
+
+        <div class="capability-grid">
+          <article class="capability-card planning-card">
+            <span class="card-number">01</span>
+            <div class="mini-plan" aria-hidden="true">
+              <div><i>✓</i><span>理解目标</span></div>
+              <div><i>✓</i><span>拆解任务</span></div>
+              <div class="active"><i></i><span>执行与验证</span></div>
+            </div>
+            <h3>自主规划与持续执行</h3>
+            <p>理解目标、拆分步骤、选择工具，并根据执行结果持续调整，直到任务真正完成。</p>
+          </article>
+
+          <article class="capability-card reconnect-card">
+            <span class="card-number">02</span>
+            <div class="stream-visual" aria-hidden="true">
+              <div><span>#181</span><span>#182</span><span>#183</span><b>#184</b></div>
+              <p><i></i> RECONNECTED</p>
+            </div>
+            <h3>断线重连，任务不重跑</h3>
+            <p>事件持久化后再推送。网络中断时从最后序号续接，不丢结果，也不会重复执行 Agent。</p>
+          </article>
+
+          <article class="capability-card approval-card">
+            <span class="card-number">03</span>
+            <div class="approval-box" aria-hidden="true">
+              <small>AGENT REQUEST</small><b>允许写入项目文件？</b>
+              <div><span>拒绝</span><span>批准执行</span></div>
+            </div>
+            <h3>关键操作人工审批</h3>
+            <p>写文件、执行命令等敏感操作可触发审批；用户始终拥有最终控制权。</p>
+          </article>
+
+          <article class="capability-card knowledge-card">
+            <span class="card-number">04</span>
+            <div class="knowledge-results" aria-hidden="true">
+              <span><i>PDF</i><b>系统架构说明</b><small>相关度 96%</small></span>
+              <span><i>DOC</i><b>产品需求文档</b><small>相关度 91%</small></span>
+            </div>
+            <h3>GraphRAG 企业知识</h3>
+            <p>融合向量检索与知识图谱，通过 MCP 为 Agent 提供有出处、可授权的内部知识。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section headless" id="headless" aria-labelledby="headless-title">
+        <div class="headless-copy">
+          <p class="section-kicker">HEADLESS BY DESIGN</p>
+          <h2 id="headless-title">一个 Agent Core，<br>连接所有使用方式。</h2>
+          <p>
+            核心运行时与 UI、HTTP、队列解耦。Web、桌面、CLI、API 使用同一套规划、工具、审批与恢复能力，
+            也能嵌入你的业务流程。
+          </p>
+          <a class="inline-link" href="https://chat.keen-tech.top" target="_blank" rel="noopener noreferrer">
+            开始使用 <span aria-hidden="true">→</span>
+          </a>
+        </div>
+
+        <div class="headless-map" role="img" aria-label="多个客户端连接同一 Headless Agent Core，再连接模型、知识和沙箱">
+          <div class="map-side map-clients"><span>Web</span><span>Desktop</span><span>CLI</span><span>API</span></div>
+          <div class="map-line" aria-hidden="true"></div>
+          <div class="map-core">
+            <img src="https://chat.keen-tech.top/keen-ai-logo.png" width="58" height="58" loading="lazy" alt="">
+            <strong>Agent Core</strong><small>PLAN · ACT · RESUME</small>
+          </div>
+          <div class="map-line" aria-hidden="true"></div>
+          <div class="map-side map-services"><span>LLM</span><span>MCP</span><span>GraphRAG</span><span>Sandbox</span></div>
+        </div>
+      </section>
+
+      <section class="section observability" id="observability" aria-labelledby="observability-title">
+        <div class="section-heading">
+          <p class="section-kicker">BUILT TO BE OBSERVED</p>
+          <h2 id="observability-title">Agent 做了什么，<br>你始终看得见。</h2>
+          <p>从 API 请求、队列等待到模型和工具调用，用同一个 run_id 串起完整执行链路。</p>
+        </div>
+
+        <div class="observability-panel">
+          <div class="metric-rail">
+            <span><small>RUN STATUS</small><b><i></i> Running</b></span>
+            <span><small>EVENT CURSOR</small><b>#184</b></span>
+            <span><small>TRACE</small><b>Connected</b></span>
+            <span><small>MODEL ROUTE</small><b>Primary</b></span>
+          </div>
+          <div class="trace-flow" aria-hidden="true">
+            <span><i></i><b>API</b><small>32ms</small></span><em></em>
+            <span><i></i><b>Outbox</b><small>18ms</small></span><em></em>
+            <span><i></i><b>Worker</b><small>76ms</small></span><em></em>
+            <span class="current"><i></i><b>Agent</b><small>executing</small></span>
+          </div>
+          <div class="observability-copy">
+            <div><b>OpenTelemetry</b><p>Traces、Metrics 与结构化日志贯穿全部服务。</p></div>
+            <div><b>Langfuse</b><p>按运行追踪模型、工具调用、token 与延迟。</p></div>
+            <div><b>Fail-open</b><p>观测系统异常不阻塞业务，敏感字段默认脱敏。</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section more-capabilities" aria-labelledby="more-title">
+        <div class="section-heading compact">
+          <p class="section-kicker">MORE THAN CHAT</p>
+          <h2 id="more-title">生产级 Agent 所需的，不止这些。</h2>
+        </div>
+        <div class="more-grid">
+          <article><span>01</span><h3>隔离沙箱</h3><p>Docker 与 E2B Cloud 双模式，每个任务拥有独立工作空间。</p></article>
+          <article><span>02</span><h3>模型韧性</h3><p>重试、熔断与多模型 fallback，应对上游波动。</p></article>
+          <article><span>03</span><h3>可靠调度</h3><p>事务 Outbox、分布式锁与任务自动对账。</p></article>
+          <article><span>04</span><h3>多租户权限</h3><p>RBAC、租户隔离与细粒度知识库授权。</p></article>
+          <article><span>05</span><h3>持久化会话</h3><p>历史消息、运行事件与 checkpoint 全部可恢复。</p></article>
+          <article><span>06</span><h3>多端一致</h3><p>Web、Electron、CLI 与 API 共享统一运行能力。</p></article>
+        </div>
+      </section>
+
+      <section class="final-cta" aria-labelledby="final-title">
+        <img src="https://chat.keen-tech.top/keen-ai-logo.png" width="74" height="74" loading="lazy" alt="">
+        <p>KEEN AGENT</p>
+        <h2 id="final-title">现在，把任务交给 Agent。</h2>
+        <a href="https://chat.keen-tech.top" target="_blank" rel="noopener noreferrer">
+          进入 Keen Agent <span aria-hidden="true">→</span>
+        </a>
+        <code>chat.keen-tech.top</code>
+      </section>
+    </main>
+
+    <footer>
+      <a class="brand" href="#top">
+        <img src="https://chat.keen-tech.top/keen-ai-logo.png" width="30" height="30" loading="lazy" alt="">
+        <strong>Keen Agent</strong>
+      </a>
+      <p>Headless Agent Platform for real work.</p>
+      <p>© 2026 KEEN TECH</p>
+    </footer>
+  </body>
+</html>
