@@ -233,6 +233,15 @@
   text-underline-offset: 3px;
 }
 
+.markdown-content img {
+  border-radius: 10px;
+  cursor: zoom-in;
+  display: block;
+  height: auto;
+  margin: 0.6em 0;
+  max-width: 100%;
+}
+
 .markdown-content :not(pre) > code {
   background: #f0edf7;
   border: 1px solid #e2ddec;

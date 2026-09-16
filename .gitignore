@@ -16,6 +16,7 @@ workspace/
 sessions/
 skills/
 test/
+apps/worker/data/
 !apps/web/test/
 !apps/web/test/**
 !apps/desktop/test/

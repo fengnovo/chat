@@ -51,15 +51,43 @@ function timestamp() {
   return new Date().toISOString();
 }
 
+/**
+ * 从模型输出的内容块里提取图片地址。
+ * 兼容两种形状：
+ * - OpenAI 兼容：{ type: 'image_url', image_url: { url } }
+ * - MCP/标准块：{ type: 'image', source_type: 'base64', data, mime_type }
+ *   或 { type: 'image', url }
+ */
+function imageUrlOf(block: Record<string, unknown>): string | null {
+  if (block.type === 'image_url') {
+    const imageUrl = block.image_url as { url?: unknown } | undefined;
+    return typeof imageUrl?.url === 'string' ? imageUrl.url : null;
+  }
+  if (block.type === 'image') {
+    if (block.source_type === 'base64') {
+      const data = block.data;
+      const mimeType = (block.mime_type ?? block.mimeType ?? 'image/png') as string;
+      if (typeof data === 'string') return `data:${mimeType};base64,${data}`;
+    }
+    const url = block.url;
+    if (typeof url === 'string') return url;
+  }
+  return null;
+}
+
 function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content
-    .map((block) =>
-      typeof block === 'object' && block !== null && 'text' in block
-        ? String((block as { text: unknown }).text)
-        : '',
-    )
+    .map((block) => {
+      if (typeof block !== 'object' || block === null) return '';
+      if ('text' in block) return String((block as { text: unknown }).text);
+      // 模型多模态输出的图片块：转成 markdown 图片语法，前端 MarkdownContent 统一渲染，
+      // 这样无论模型直接返回图片还是工具产出图片被模型引用，聊天结果都能展示。
+      const url = imageUrlOf(block as Record<string, unknown>);
+      if (url) return `\n![image](${url})\n`;
+      return '';
+    })
     .join('');
 }
 

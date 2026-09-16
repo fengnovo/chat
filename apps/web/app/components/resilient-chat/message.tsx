@@ -135,7 +135,7 @@ function Message({
             isUser ? (
               text
             ) : (
-              <MarkdownContent content={text} />
+              <MarkdownContent content={text} onPreviewImage={onPreviewImage} />
             )
           ) : streaming && showWaitingDots ? (
             <span className="streaming-live">
@@ -213,17 +213,68 @@ function GeneratedInsightCard({ data }: { data: InsightCard }) {
   );
 }
 
-function MarkdownContent({ content }: { content: string }) {
+/**
+ * 校验大模型返回的链接是否安全：只允许 http/https/mailto 协议，
+ * 拒绝 javascript:/data:/vbscript: 等可执行或可注入的危险协议。
+ * 通过后才渲染为可点击链接，否则降级为纯文本。
+ */
+function safeExternalUrl(href: string | undefined): string | null {
+  if (!href) return null;
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  if (url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:') {
+    return href;
+  }
+  return null;
+}
+
+function MarkdownContent({
+  content,
+  onPreviewImage,
+}: {
+  content: string;
+  onPreviewImage: (url: string, filename?: string) => void;
+}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        a: ({ children, href }) => (
-          <a href={href} rel="noreferrer" target="_blank">
-            {children}
-          </a>
-        ),
+        a: ({ children, href }) => {
+          const safe = safeExternalUrl(href);
+          if (!safe) {
+            // 危险链接降级为纯文本，避免 javascript: 等协议在本站上下文执行。
+            return <span>{children}</span>;
+          }
+          return (
+            <a
+              href={safe}
+              // noopener：新标签页无法通过 window.opener 反向操作本页；
+              // noreferrer：不发送 Referer 头，避免泄露当前页面 URL。
+              // 二者共同确保跳转不携带本站点的任何上下文信息。
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              {children}
+            </a>
+          );
+        },
         pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
+        img: ({ src, alt }) => {
+          if (!src) return null;
+          const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+          return (
+            <img
+              src={url}
+              alt={alt ?? ''}
+              loading="lazy"
+              onClick={() => onPreviewImage(url, alt ?? undefined)}
+            />
+          );
+        },
       }}
     >
       {content}

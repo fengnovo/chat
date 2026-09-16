@@ -956,7 +956,7 @@ function ChatRuntime() {
     setHiddenContinuationIds(new Set());
   }, [status, messages, hiddenContinuationIds, setMessages]);
 
-  // 「继续对话」：等价于替用户发起一次“继续”，但不留下任何用户消息记录。
+  // 「继续对话」：等价于替用户发起一次"继续"，但不留下任何用户消息记录。
   // 真正发给模型的内容由服务端合成（continuation 标记），前端这条占位
   // user 消息全程隐藏，并在 run 结束后从本地 store 删除。
   async function continueAfterFailure() {
@@ -981,8 +981,16 @@ function ChatRuntime() {
         '基于会话已有进度创建续跑请求',
       ),
     ]);
+    // AI SDK 的 sendMessage 有两条路径：
+    // 1) 传 messageId → 语义是"替换已存在的消息"，找不到就抛 "message with id X not found"；
+    // 2) 不传 messageId、直接传 { id, role, parts } → 用指定 id 新建消息。
+    // 这里走路径 2，避免先 setMessages 再 sendMessage 的时序竞态。
     await sendMessage(
-      { text: CONTINUATION_PLACEHOLDER, messageId: continuationId },
+      {
+        id: continuationId,
+        role: 'user',
+        parts: [{ type: 'text', text: CONTINUATION_PLACEHOLDER }],
+      },
       { body: { continuation: true } },
     );
   }
