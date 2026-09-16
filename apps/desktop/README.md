@@ -33,7 +33,7 @@ pnpm desktop:test
 pnpm desktop:typecheck
 pnpm desktop:build
 
-# 当前平台未签名安装包
+# 当前平台安装包（必须提供构建时的线上 Web 地址）
 ELECTRON_WEB_URL=https://chat.example.com pnpm desktop:dist
 
 # macOS DMG/ZIP
@@ -43,6 +43,8 @@ ELECTRON_WEB_URL=https://chat.example.com pnpm desktop:dist:mac
 ELECTRON_WEB_URL=https://chat.example.com pnpm desktop:dist:win
 ```
 
-打包产物写入 `apps/desktop/release/`。打包应用启动时也需要提供 `ELECTRON_WEB_URL`；如果没有配置，应用会显示启动错误并退出。当前产物未包含 macOS Developer ID 公证或 Windows 代码签名。
+打包产物写入 `apps/desktop/release/`。`ELECTRON_WEB_URL` 会在构建时写入应用包，因此用户启动已打包应用时不需要再设置环境变量。直接运行 `pnpm desktop:start` 时会读取项目根目录 `.env`，并使用其中的 `PORT` 连接本地 Web。
+
+macOS 发布包必须使用 Developer ID 证书签名并完成 notarization，否则从浏览器下载后可能显示“应用已损坏，无法打开”。CI 发布需要配置以下 GitHub Actions Secrets：`MAC_CERTIFICATE_BASE64`、`MAC_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD` 和 `APPLE_TEAM_ID`。未签名包只适合本机调试；临时打开本机未签名包可执行 `xattr -dr com.apple.quarantine "Keen AI.app"`。
 
 Electron 窗口关闭了 Node 集成、启用 context isolation 和 sandbox；站外 HTTP(S) 链接交给系统浏览器打开。

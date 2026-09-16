@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import { resolveWebUrl } from './config.js';
 import { createLoadErrorGate, type LoadErrorGate } from './load-error.js';
+import { resolveLocalWebUrl } from './local-runtime.js';
 import { classifyNavigation } from './navigation.js';
 import { createWindowOptions } from './window-options.js';
 
@@ -133,9 +134,27 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
+async function readPackagedWebUrl(): Promise<string | undefined> {
+  if (!app.isPackaged) {
+    return undefined;
+  }
+
+  try {
+    const packagePath = join(app.getAppPath(), 'package.json');
+    const packageJson = JSON.parse(await readFile(packagePath, 'utf8')) as { electronWebUrl?: unknown };
+    return typeof packageJson.electronWebUrl === 'string' ? packageJson.electronWebUrl : undefined;
+  } catch (error: unknown) {
+    console.error('Unable to read the packaged Web URL', error);
+    return undefined;
+  }
+}
+
 async function startApplication(): Promise<void> {
   try {
-    configuredUrl = resolveWebUrl(process.env.ELECTRON_WEB_URL, app.isPackaged);
+    const fallbackUrl = app.isPackaged
+      ? await readPackagedWebUrl()
+      : resolveLocalWebUrl(process.env.PORT).href;
+    configuredUrl = resolveWebUrl(process.env.ELECTRON_WEB_URL, app.isPackaged, fallbackUrl);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     dialog.showErrorBox('Keen AI could not start', message);

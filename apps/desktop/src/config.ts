@@ -2,8 +2,12 @@ export const DEFAULT_DEVELOPMENT_URL = 'http://localhost:3000';
 
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:']);
 
-export function resolveWebUrl(rawValue: string | undefined, isPackaged: boolean): URL {
-  const value = rawValue?.trim() || (!isPackaged ? DEFAULT_DEVELOPMENT_URL : '');
+export function resolveWebUrl(
+  rawValue: string | undefined,
+  isPackaged: boolean,
+  fallbackValue?: string,
+): URL {
+  const value = rawValue?.trim() || fallbackValue?.trim() || (!isPackaged ? DEFAULT_DEVELOPMENT_URL : '');
 
   if (!value) {
     throw new Error('ELECTRON_WEB_URL is required for packaged applications.');
