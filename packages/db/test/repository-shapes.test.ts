@@ -47,7 +47,8 @@ test('createRun persists the authorized knowledge-base snapshot into its dispatc
                   session_id: values?.[3],
                   status: 'queued',
                   user_message: values?.[4],
-                  knowledge_base_ids: values?.[5],
+                  continuation: values?.[5],
+                  knowledge_base_ids: values?.[6],
                   last_event_seq: 0,
                   cancel_requested_at: null,
                   error_code: null,
@@ -83,6 +84,7 @@ test('createRun persists the authorized knowledge-base snapshot into its dispatc
   });
 
   assert.deepEqual(created.run.knowledgeBaseIds, [knowledgeBaseId]);
+  assert.equal(created.run.continuation, false);
   assert.deepEqual(dispatched, [
     {
       kind: 'start',

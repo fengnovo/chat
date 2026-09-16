@@ -27,7 +27,9 @@ type IconName =
   | 'triangle'
   | 'user'
   | 'wrench'
-  | 'x';
+  | 'x'
+  | 'zoom-in'
+  | 'zoom-out';
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
@@ -58,6 +60,20 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     user: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>,
     wrench: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />,
     x: <path d="m6 6 12 12M18 6 6 18" />,
+    'zoom-in': (
+      <>
+        <circle cx="11" cy="11" r="8" />
+        <path d="m21 21-4.3-4.3" />
+        <path d="M11 8v6M8 11h6" />
+      </>
+    ),
+    'zoom-out': (
+      <>
+        <circle cx="11" cy="11" r="8" />
+        <path d="m21 21-4.3-4.3" />
+        <path d="M8 11h6" />
+      </>
+    ),
   };
 
   return (

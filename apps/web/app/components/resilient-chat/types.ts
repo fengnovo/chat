@@ -104,6 +104,16 @@ type SessionPage = {
   nextCursor: string | null;
 };
 
+type HistoryAttachment = {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  kind: 'image' | 'text' | 'file';
+  /** 鉴权重定向地址，由后端换发新鲜预签名 URL。 */
+  url: string;
+};
+
 type HistoryMessage = {
   id: string;
   runId: string;
@@ -111,6 +121,8 @@ type HistoryMessage = {
   text: string;
   createdAt: string;
   citations?: Citation[];
+  /** 用户随消息发送的附件；续跑 run 的合成消息不带附件。 */
+  attachments?: HistoryAttachment[];
   /** 模型思考过程（reasoning_content），持久化保留。 */
   reasoning?: string;
 };
@@ -159,6 +171,7 @@ export type {
   AgentStatus,
   AgentTodo,
   ConversationSeed,
+  HistoryAttachment,
   HistoryMessage,
   Citation,
   InsightCard,

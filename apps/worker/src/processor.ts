@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import {
@@ -12,6 +13,7 @@ import {
 import {
   createDeepAgentRuntime,
   type AgentTelemetry,
+  type ChatImageAttachment,
   DockerSandboxBackend,
   E2BSandbox,
   type HeadlessAgentRuntime,
@@ -23,6 +25,7 @@ import {
   runEventsChannel,
   runJobSchema,
   type AgentEvent,
+  type RunAttachmentRef,
   type RunJob,
 } from '@repo/contracts';
 import { extractObservabilityContext, type JobKind } from '@repo/observability';
@@ -37,7 +40,14 @@ import { withSessionLock } from './lock.js';
 import type { WorkerObservability } from './observability.js';
 import type { WorkerLangfuse } from './langfuse.js';
 import { RedisCircuitBreakerStore } from './redis-circuit-breaker.js';
-import { prepareWorkspace, remoteWorkspacePath, uploadAgentResources, type AgentResources } from './workspace.js';
+import {
+  prepareWorkspace,
+  remoteWorkspacePath,
+  safeRelativePath,
+  uploadAgentResources,
+  type AgentResources,
+  type RemoteWorkspaceSandbox,
+} from './workspace.js';
 
 interface ProcessorServices {
   config: WorkerConfig;
@@ -241,6 +251,69 @@ export async function createKnowledgeRunToken(job: RunJob, secret: string): Prom
     .sign(new TextEncoder().encode(secret));
 }
 
+const IMAGE_ATTACHMENT_MEDIA_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
+
+/**
+ * run 开始前按引用取回用户附件，按类型分流：
+ * - image：转 data URL 交给视觉模型；
+ * - text：UTF-8 解码后内联拼进用户消息（契约已限制 ≤200KB）；
+ * - file：投进沙箱工作区根目录，Agent 可直接读写。
+ * 对象存储只在 worker 内部访问，浏览器全程只拿鉴权重定向链接。
+ */
+async function prepareRunAttachments(
+  services: ProcessorServices,
+  sandbox: RemoteWorkspaceSandbox,
+  remotePath: string,
+  attachments: RunAttachmentRef[],
+): Promise<{ appendedMessage: string; images: ChatImageAttachment[] }> {
+  const images: ChatImageAttachment[] = [];
+  let appendedMessage = '';
+  const sandboxFiles: Array<[string, Uint8Array]> = [];
+  const uploadedNames: string[] = [];
+
+  for (const attachment of attachments) {
+    const bytes = await services.artifacts.getObjectBytes(attachment.objectKey);
+    if (attachment.kind === 'image') {
+      if (!IMAGE_ATTACHMENT_MEDIA_TYPES.has(attachment.contentType)) {
+        throw new Error(`Unsupported image attachment type: ${attachment.contentType}`);
+      }
+      images.push({
+        mediaType: attachment.contentType as ChatImageAttachment['mediaType'],
+        dataUrl: `data:${attachment.contentType};base64,${Buffer.from(bytes).toString('base64')}`,
+        ...(attachment.filename ? { filename: attachment.filename } : {}),
+      });
+    } else if (attachment.kind === 'text') {
+      appendedMessage += `\n\n[附件 ${attachment.filename}]\n${new TextDecoder('utf-8').decode(bytes)}`;
+    } else {
+      // safeRelativePath 拒绝绝对路径与 .. 穿越；允许带子目录的文件名。
+      const relativePath = safeRelativePath(attachment.filename);
+      sandboxFiles.push([path.posix.join(remotePath, relativePath), bytes]);
+      uploadedNames.push(relativePath);
+    }
+  }
+
+  if (sandboxFiles.length > 0) {
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const directories = [...new Set(sandboxFiles.map(([target]) => path.posix.dirname(target)))];
+    await sandbox.execute(`mkdir -p ${directories.map(quote).join(' ')}`);
+    const results = await sandbox.uploadFiles(sandboxFiles);
+    const failure = results.find((result) => result.error);
+    if (failure) {
+      throw new Error(`Failed to upload attachment ${failure.path}: ${failure.error}`);
+    }
+    appendedMessage += `\n\n以下附件已上传到工作区根目录：${uploadedNames
+      .map((name) => `\`${name}\``)
+      .join('、')}。请直接在工作区中读取使用。`;
+  }
+
+  return { appendedMessage, images };
+}
+
 /**
  * 取消或失败时清理沙箱。
  * docker 模式删除宿主会话目录；e2b-cloud 模式 kill 远程沙箱并清除持久化标识。
@@ -400,6 +473,18 @@ export function createRunProcessor(
             job.kind === 'start',
           ),
         );
+        // 用户附件按引用取回：图片→视觉输入，文本→内联正文，二进制→工作区文件。
+        const preparedAttachments =
+          job.kind === 'start' && job.attachments.length > 0
+            ? await observed('attachments.prepare', () =>
+                prepareRunAttachments(
+                  services,
+                  acquiredSandbox,
+                  remotePath,
+                  job.attachments,
+                ),
+              )
+            : { appendedMessage: '', images: [] as ChatImageAttachment[] };
         // 上传 DeepAgents memory/skills 到沙箱（宿主机路径由环境变量配置）。
         const agentResources = await observed('agent.resources.upload', () =>
           uploadAgentResources(
@@ -449,12 +534,8 @@ export function createRunProcessor(
           const events =
             job.kind === 'start'
               ? runtime!.run(
-                  job.message,
-                  job.attachments.map((attachment) => ({
-                    mediaType: attachment.mediaType,
-                    dataUrl: attachment.dataUrl,
-                    ...(attachment.filename ? { filename: attachment.filename } : {}),
-                  })),
+                  `${job.message}${preparedAttachments.appendedMessage}`,
+                  preparedAttachments.images,
                 )
               : job.kind === 'resume-approval'
                 ? runtime!.resume({

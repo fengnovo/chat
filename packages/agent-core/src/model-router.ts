@@ -1,8 +1,58 @@
+import type { BaseMessage } from '@langchain/core/messages';
+import { mapStoredMessageToChatMessage } from '@langchain/core/messages';
 import { initChatModel } from 'langchain/chat_models/universal';
 import { createMiddleware } from 'langchain';
 
 import { InMemoryCircuitBreakerStore } from './circuit-breaker.js';
 import type { AgentTelemetry, CircuitBreakerStore, ModelRouterEvent, ModelSpec } from './types.js';
+
+/**
+ * MCP 工具（如沙箱 read_file 读取 PNG）可能返回图片内容块。mcp-adapters 在
+ * useStandardContentBlocks 下产出 LangChain 标准块
+ * `{ type: 'image', source_type: 'base64', data, mime_type }`，旧版/直接透传时
+ * 还可能是 MCP 原始形状 `{ type: 'image', data, mimeType }`。OpenAI 兼容接口
+ * （DeepSeek 等）只认 `{ type: 'image_url' }`，原样发送会被服务端以
+ * `unknown variant 'image'` 返回 400，导致整轮 run 失败。
+ * 在模型调用边界统一转成 data URL 形式的 image_url。
+ */
+function toOpenAIImageBlock(block: unknown): unknown | null {
+  if (!block || typeof block !== 'object') return null;
+  const record = block as Record<string, unknown>;
+  if (record.type !== 'image') return null;
+  // 标准块带 source_type；只处理 base64 图片，URL 等其他来源不转换。
+  if (record.source_type !== undefined && record.source_type !== 'base64') return null;
+  const data = typeof record.data === 'string' ? record.data : null;
+  if (!data) return null;
+  const mimeType =
+    (typeof record.mime_type === 'string' && record.mime_type) ||
+    (typeof record.mimeType === 'string' && record.mimeType) ||
+    'image/png';
+  return { type: 'image_url', image_url: { url: `data:${mimeType};base64,${data}` } };
+}
+
+export function normalizeImageBlocksForOpenAI(messages: BaseMessage[] | undefined): BaseMessage[] | undefined {
+  if (!Array.isArray(messages)) return messages;
+  let changed = false;
+  const normalized = messages.map((message) => {
+    const { content } = message;
+    if (!Array.isArray(content)) return message;
+    let messageChanged = false;
+    const nextContent = content.map((block) => {
+      const replacement = toOpenAIImageBlock(block);
+      if (!replacement) return block;
+      messageChanged = true;
+      return replacement;
+    });
+    if (!messageChanged) return message;
+    changed = true;
+    // toDict + mapStoredMessageToChatMessage 保留原消息类型（ToolMessage 等）
+    // 及 tool_calls / tool_call_id 等全部字段，避免 instanceof 语义丢失。
+    const stored = message.toDict();
+    stored.data.content = nextContent as never;
+    return mapStoredMessageToChatMessage(stored) as BaseMessage;
+  });
+  return changed ? normalized : messages;
+}
 
 interface RouterOptions {
   models: ModelSpec[];
@@ -73,6 +123,8 @@ export async function createResilientModelRouter(options: RouterOptions) {
   const middleware = createMiddleware({
     name: 'ResilientModelRouter',
     wrapModelCall: async (request, handler) => {
+      // 归一化在重试/降级之外只做一次（转换幂等），覆盖历史消息里所有图片块。
+      const requestMessages = normalizeImageBlocksForOpenAI(request.messages);
       let lastError: unknown;
       let lastSpec: ModelSpec = primary.spec;
       const callStartedAt = Date.now();
@@ -96,7 +148,7 @@ export async function createResilientModelRouter(options: RouterOptions) {
         for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
           try {
             const attemptStartedAt = Date.now();
-            const response = await handler({ ...request, model: candidate.instance });
+            const response = await handler({ ...request, messages: requestMessages ?? request.messages, model: candidate.instance });
             options.telemetry?.modelCall({
               provider: candidate.spec.provider,
               model: candidate.spec.model,

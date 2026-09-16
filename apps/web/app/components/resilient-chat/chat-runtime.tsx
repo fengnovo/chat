@@ -25,6 +25,7 @@ import { ResilientSession } from '@/app/lib/session';
 import { AgentStatusPanel } from './agent-status';
 import { fetchKnowledgeBases, fetchSessionFiles, fetchSessionPage, responseError } from './api';
 import { Composer } from './composer';
+import { Lightbox, type LightboxImage } from './lightbox';
 import { initialTrace } from './constants';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
 import { TaskFailureNotice, friendlyError } from './failure-notice';
@@ -76,6 +77,13 @@ const emptyActivity: AgentActivityState = {
   startedAt: null,
   lastEventAt: null,
 };
+
+/**
+ * 「继续对话」续跑时，前端仍需通过 useChat 发出一条 user 消息来驱动请求，
+ * 但它只是占位：界面不渲染、结束后从 store 移除，真正发给模型的是服务端
+ * 合成的内部续跑指令（见 API 的 CONTINUATION_INSTRUCTION）。
+ */
+const CONTINUATION_PLACEHOLDER = '继续';
 
 function AppSkeleton() {
   return (
@@ -131,6 +139,10 @@ function ChatRuntime() {
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
   const [runFailure, setRunFailure] = useState<TaskFailure | null>(null);
+  /** 续跑占位 user 消息的 id 集合：运行期间隐藏，run 结束后从 store 中移除。 */
+  const [hiddenContinuationIds, setHiddenContinuationIds] =
+    useState<ReadonlySet<string>>(new Set());
+  const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(null);
   const [restoredSessions] = useState(() =>
     readSessionCache<WebSessionSummary>(userId),
   );
@@ -277,11 +289,15 @@ function ChatRuntime() {
         fetch: createTrackedFetch(userId),
         maxConsecutiveErrors: 3,
         initialStartIndex: 0,
-        prepareSendMessagesRequest: ({ id, messages, trigger }) => ({
+        prepareSendMessagesRequest: ({ id, messages, trigger, body }) => ({
           body: {
             messages,
             chat_id: id,
             trigger,
+            ...(body?.continuation === true ? { continuation: true } : {}),
+            ...(Array.isArray(body?.attachment_ids) && body.attachment_ids.length > 0
+              ? { attachment_ids: body.attachment_ids }
+              : {}),
             ...(knowledgeBaseIds.length ? { knowledge_base_ids: knowledgeBaseIds } : {}),
           },
           headers: { 'Content-Type': 'application/json' },
@@ -895,6 +911,7 @@ function ChatRuntime() {
       setGeneratedTokens(0);
       setInteractionError(null);
       setRunFailure(failureFromRun(latestRun));
+      setHiddenContinuationIds(new Set());
       sessionRef.current = new ResilientSession();
     } catch {
       setSessionsError('无法打开这条历史记录');
@@ -903,7 +920,11 @@ function ChatRuntime() {
     }
   }
 
-  async function submitText(value: string, files: FileUIPart[] = []) {
+  async function submitText(
+    value: string,
+    files: FileUIPart[] = [],
+    attachmentIds: string[] = [],
+  ) {
     const trimmed = value.trim();
     if ((!trimmed && files.length === 0) || isBusy || error) return;
     stickToBottomRef.current = true;
@@ -920,12 +941,59 @@ function ChatRuntime() {
     ]);
     await sendMessage(
       files.length > 0 ? { text: trimmed, files } : { text: trimmed },
+      attachmentIds.length > 0 ? { body: { attachment_ids: attachmentIds } } : undefined,
     );
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>, files: FileUIPart[]) {
+  // 续跑 run 落定后（成功或再次失败），把仅用于驱动请求的占位 user 消息
+  // 从 useChat store 移除；它从未进入会话持久化，历史接口也不会返回它。
+  useEffect(() => {
+    if (status !== 'ready' && status !== 'error') return;
+    if (hiddenContinuationIds.size === 0) return;
+    setMessages(
+      messages.filter((message) => !hiddenContinuationIds.has(message.id)),
+    );
+    setHiddenContinuationIds(new Set());
+  }, [status, messages, hiddenContinuationIds, setMessages]);
+
+  // 「继续对话」：等价于替用户发起一次“继续”，但不留下任何用户消息记录。
+  // 真正发给模型的内容由服务端合成（continuation 标记），前端这条占位
+  // user 消息全程隐藏，并在 run 结束后从本地 store 删除。
+  async function continueAfterFailure() {
+    if (isBusy || error) return;
+    const continuationId = crypto.randomUUID();
+    setHiddenContinuationIds((current) => {
+      const next = new Set(current);
+      next.add(continuationId);
+      return next;
+    });
+    stickToBottomRef.current = true;
+    // 发起即消失：若新 run 再次失败，run.failed 事件会重新拉起横幅。
+    setRunFailure(null);
+    setActivity(emptyActivity);
+    setAgentTodos([]);
+    setGeneratedTokens(0);
+    setTrace([
+      localEvent(
+        'request',
+        'running',
+        '正在续跑上一轮任务',
+        '基于会话已有进度创建续跑请求',
+      ),
+    ]);
+    await sendMessage(
+      { text: CONTINUATION_PLACEHOLDER, messageId: continuationId },
+      { body: { continuation: true } },
+    );
+  }
+
+  function handleSubmit(
+    event: FormEvent<HTMLFormElement>,
+    files: FileUIPart[],
+    attachmentIds: string[],
+  ) {
     event.preventDefault();
-    void submitText(input, files);
+    void submitText(input, files, attachmentIds);
   }
 
   async function handleConnectionRecovery() {
@@ -982,6 +1050,7 @@ function ChatRuntime() {
     setGeneratedTokens(0);
     setInteractionError(null);
     setRunFailure(null);
+    setHiddenContinuationIds(new Set());
     sessionRef.current = new ResilientSession();
   }
 
@@ -1320,7 +1389,8 @@ function ChatRuntime() {
         >
           {hasConversation && (
             <div className="message-list" ref={messageListRef}>
-              {messages.map((message, index) => (
+              {messages.map((message, index) =>
+                hiddenContinuationIds.has(message.id) ? null : (
                 <Message
                   copied={copiedMessage === message.id}
                   dismissedCards={dismissedCards}
@@ -1341,6 +1411,7 @@ function ChatRuntime() {
                     ]);
                   }}
                   onCopy={copyMessage}
+                  onPreviewImage={(url, filename) => setLightboxImage({ url, filename })}
                   onDismissCard={(messageId) => {
                     setDismissedCards((current) =>
                       new Set(current).add(messageId),
@@ -1370,7 +1441,8 @@ function ChatRuntime() {
                   }
                   reasoning={reasoningByRunId.get(message.metadata?.runId ?? '') ?? ''}
                 />
-              ))}
+                ),
+              )}
               {status === 'submitted' && !hasAssistantPlaceholder && (
                 <ThinkingRow>
                   {processPanelVisible ? processPanel : null}
@@ -1393,7 +1465,7 @@ function ChatRuntime() {
               {runFailure && (
                 <TaskFailureNotice
                   failure={runFailure}
-                  onDismiss={() => setRunFailure(null)}
+                  onContinue={() => void continueAfterFailure()}
                 />
               )}
               {error && (
@@ -1447,6 +1519,7 @@ function ChatRuntime() {
           knowledgeBaseIds={knowledgeBaseIds}
           onChange={setInput}
           onChangeKnowledgeBases={handleChangeKnowledgeBases}
+          onPreviewImage={(url, filename) => setLightboxImage({ url, filename })}
           onStop={() => void handleStop()}
           onSubmit={handleSubmit}
           onSuggestion={submitText}
@@ -1492,6 +1565,8 @@ function ChatRuntime() {
           {notice}
         </div>
       )}
+
+      <Lightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
     </main>
   );
 }

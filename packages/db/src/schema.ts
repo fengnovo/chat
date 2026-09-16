@@ -110,6 +110,7 @@ export const agentRuns = pgTable(
     sessionId: uuid('session_id').notNull().references(() => agentSessions.id),
     status: text('status').notNull(),
     userMessage: text('user_message').notNull(),
+    continuation: boolean('continuation').notNull().default(false),
     knowledgeBaseIds: uuid('knowledge_base_ids').array().notNull().default([]),
     idempotencyKey: text('idempotency_key'),
     lastEventSeq: integer('last_event_seq').notNull().default(0),
@@ -346,6 +347,30 @@ export const artifacts = pgTable(
   (table) => [
     uniqueIndex('artifacts_tenant_object_key_idx').on(table.tenantId, table.objectKey),
     index('artifacts_tenant_status_idx').on(table.tenantId, table.status, table.createdAt),
+  ],
+);
+
+export const chatAttachments = pgTable(
+  'chat_attachments',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+    userId: uuid('user_id').notNull().references(() => users.id),
+    runId: uuid('run_id'),
+    objectKey: text('object_key').notNull(),
+    filename: text('filename').notNull(),
+    contentType: text('content_type').notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    sha256: text('sha256').notNull(),
+    kind: text('kind').notNull(),
+    status: text('status').notNull().default('pending'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    uploadedAt: timestamp('uploaded_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('chat_attachments_tenant_object_key_idx').on(table.tenantId, table.objectKey),
+    index('chat_attachments_user_idx').on(table.tenantId, table.userId, table.createdAt),
+    index('chat_attachments_run_idx').on(table.runId),
   ],
 );
 

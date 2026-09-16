@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { triggerAttachmentDownload } from './lightbox';
 import { Icon } from './icon';
 import { messageText } from './utils';
 import type { AgentTodo, InsightCard, ResilientMessage } from './types';
@@ -17,6 +18,7 @@ function Message({
   onBoundaryError,
   onCopy,
   onDismissCard,
+  onPreviewImage,
   reasoning,
   runTokens,
   showWaitingDots,
@@ -32,6 +34,8 @@ function Message({
   onBoundaryError: () => void;
   onCopy: (id: string, text: string) => Promise<void>;
   onDismissCard: (id: string) => void;
+  /** 点击聊天图片时在当前页弹出大图（输入框缩略图与历史消息共用）。 */
+  onPreviewImage: (url: string, filename?: string) => void;
   /** 模型思考过程（reasoning_content），按 runId 独立存储，持久化保留。 */
   reasoning: string;
   /** 本轮运行结束后的 token 用量，展示在最后一条 assistant 消息的复制按钮后。 */
@@ -96,25 +100,32 @@ function Message({
           <div className="message-attachments">
             {fileParts.map((part, index) =>
               part.mediaType.startsWith('image/') ? (
-                <a
+                <button
+                  type="button"
                   className="message-attachment-image"
-                  href={part.url}
                   key={`${message.id}-file-${index}`}
-                  rel="noreferrer"
-                  target="_blank"
+                  onClick={() => onPreviewImage(part.url, part.filename)}
                   title={part.filename ? `查看大图：${part.filename}` : '查看大图'}
                 >
                   <img alt={part.filename ?? '聊天图片'} src={part.url} />
-                </a>
+                </button>
               ) : (
-                <span
+                <button
+                  type="button"
                   className="message-attachment-file"
                   key={`${message.id}-file-${index}`}
-                  title={part.filename}
+                  title={part.filename ? `下载附件：${part.filename}` : '下载附件'}
+                  onClick={async () => {
+                    try {
+                      await triggerAttachmentDownload(part.url, part.filename);
+                    } catch {
+                      /* 下载失败静默；用户可重试或点击浏览器 Network 排查 401/404 */
+                    }
+                  }}
                 >
                   <Icon name="paperclip" size={14} />
                   {part.filename ?? '附件'}
-                </span>
+                </button>
               ),
             )}
           </div>

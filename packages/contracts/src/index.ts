@@ -275,16 +275,36 @@ export const createArtifactUploadSchema = z.object({
 });
 
 /**
- * 聊天消息附带的图片（多模态视觉输入）。
- * 以 data URL 内联在 run 派发任务中，模型按 OpenAI 兼容 image_url 结构消费。
+ * 聊天附件的处理类型。
+ * - image：多模态视觉输入（data URL 在 worker 侧从对象存储下载后生成）；
+ * - text：小体积文本，worker 下载后内联进消息正文；
+ * - file：其他二进制，run 启动前投进沙箱工作区，由 agent 工具读取。
  */
-export const runImageAttachmentSchema = z.object({
-  kind: z.literal('image'),
-  mediaType: z.enum(['image/jpeg', 'image/png', 'image/gif', 'image/webp']),
-  filename: z.string().trim().min(1).max(255).optional(),
-  dataUrl: z.string().startsWith('data:').max(14_000_000),
+export const runAttachmentKindSchema = z.enum(['image', 'text', 'file']);
+export type RunAttachmentKind = z.infer<typeof runAttachmentKindSchema>;
+
+/**
+ * 随 run 派发任务持久化的附件**引用**（对象存储键），不再内联 base64：
+ * worker 按引用下载并按 kind 决定喂给模型 / 内联正文 / 投进沙箱。
+ */
+export const runAttachmentRefSchema = z.object({
+  id: z.uuid(),
+  kind: runAttachmentKindSchema,
+  objectKey: z.string().min(1).max(600),
+  filename: z.string().trim().min(1).max(255),
+  contentType: z.string().trim().min(1).max(200),
+  sizeBytes: z.number().int().nonnegative(),
 });
-export type RunImageAttachment = z.infer<typeof runImageAttachmentSchema>;
+export type RunAttachmentRef = z.infer<typeof runAttachmentRefSchema>;
+
+/** 前端初始化聊天附件直传时的请求体。 */
+export const createChatAttachmentSchema = z.object({
+  filename: z.string().trim().min(1).max(255),
+  contentType: z.string().trim().min(1).max(200),
+  sizeBytes: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+});
+export type CreateChatAttachmentInput = z.infer<typeof createChatAttachmentSchema>;
 
 /**
  * 随 Outbox/BullMQ payload 持久化的最小观测上下文。
@@ -309,7 +329,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
     workspaceSource: workspaceSourceSchema.optional(),
     approvalMode: z.enum(['manual', 'session']).optional(),
     knowledgeBaseIds: knowledgeBaseIdsSchema,
-    attachments: z.array(runImageAttachmentSchema).max(5).default([]),
+    attachments: z.array(runAttachmentRefSchema).max(5).default([]),
     observability: observabilityContextSchema.optional(),
   }),
   z.object({

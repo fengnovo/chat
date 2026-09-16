@@ -67,6 +67,15 @@ function messagesFromHistory(messages: HistoryMessage[]): ResilientMessage[] {
       runId: message.runId,
     },
     parts: [
+      // 附件放在正文前：与发送时的乐观渲染顺序一致，切换会话后仍可见。
+      ...(message.attachments?.length
+        ? message.attachments.map((attachment) => ({
+            type: 'file' as const,
+            mediaType: attachment.contentType,
+            filename: attachment.filename,
+            url: attachment.url,
+          }))
+        : []),
       { type: 'text', text: message.text },
       ...(message.citations?.length ? [{ type: 'data-citations' as const, data: { citations: message.citations } }] : []),
     ],

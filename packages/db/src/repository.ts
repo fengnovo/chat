@@ -5,7 +5,8 @@ import type {
   AuthContext,
   ObservabilityContextPayload,
   PersistedAgentEvent,
-  RunImageAttachment,
+  RunAttachmentKind,
+  RunAttachmentRef,
   RunJob,
   RunStatus,
   WorkspaceSource,
@@ -55,6 +56,7 @@ export interface RunRecord {
   sessionId: string;
   status: RunStatus;
   userMessage: string;
+  continuation: boolean;
   knowledgeBaseIds: string[];
   lastEventSeq: number;
   cancelRequestedAt: string | null;
@@ -86,6 +88,22 @@ export interface ArtifactRecord {
   contentType: string;
   sizeBytes: number;
   sha256: string;
+  status: 'pending' | 'ready';
+  createdAt: string;
+  uploadedAt: string | null;
+}
+
+export interface ChatAttachmentRecord {
+  id: string;
+  tenantId: string;
+  userId: string;
+  runId: string | null;
+  objectKey: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256: string;
+  kind: RunAttachmentKind;
   status: 'pending' | 'ready';
   createdAt: string;
   uploadedAt: string | null;
@@ -159,6 +177,7 @@ function runOf(row: QueryResultRow): RunRecord {
     sessionId: String(row.session_id),
     status: row.status as RunStatus,
     userMessage: String(row.user_message),
+    continuation: Boolean(row.continuation),
     knowledgeBaseIds: Array.isArray(row.knowledge_base_ids)
       ? row.knowledge_base_ids.map(String)
       : [],
@@ -181,6 +200,24 @@ function artifactOf(row: QueryResultRow): ArtifactRecord {
     contentType: String(row.content_type),
     sizeBytes: Number(row.size_bytes),
     sha256: String(row.sha256),
+    status: row.status as 'pending' | 'ready',
+    createdAt: iso(row.created_at as Date),
+    uploadedAt: row.uploaded_at ? iso(row.uploaded_at as Date) : null,
+  };
+}
+
+function chatAttachmentOf(row: QueryResultRow): ChatAttachmentRecord {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    userId: String(row.user_id),
+    runId: row.run_id ? String(row.run_id) : null,
+    objectKey: String(row.object_key),
+    filename: String(row.filename),
+    contentType: String(row.content_type),
+    sizeBytes: Number(row.size_bytes),
+    sha256: String(row.sha256),
+    kind: row.kind as RunAttachmentKind,
     status: row.status as 'pending' | 'ready',
     createdAt: iso(row.created_at as Date),
     uploadedAt: row.uploaded_at ? iso(row.uploaded_at as Date) : null,
@@ -450,6 +487,25 @@ export class AgentRepository {
     return result.rows[0] ? sessionOf(result.rows[0]) : null;
   }
 
+  /**
+   * 按外部会话键（前端 chat_id）查询**已存在**的会话；不存在时返回 null，
+   * 绝不隐式创建。供「继续对话」等必须依附于既有会话的入口使用。
+   */
+  async getSessionByExternalKey(
+    context: AuthContext,
+    externalKey: string,
+  ): Promise<SessionRecord | null> {
+    const result = await this.pool.query(
+      `SELECT s.*, w.path AS workspace_path
+       FROM agent_sessions s
+       JOIN workspaces w ON w.id = s.workspace_id
+       WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.external_key = $3
+         AND s.deleted_at IS NULL`,
+      [context.tenantId, context.userId, externalKey],
+    );
+    return result.rows[0] ? sessionOf(result.rows[0]) : null;
+  }
+
   async renameSession(
     context: AuthContext,
     sessionId: string,
@@ -517,7 +573,8 @@ export class AgentRepository {
       sessionId: string;
       message: string;
       knowledgeBaseIds?: string[];
-      attachments?: RunImageAttachment[];
+      attachments?: RunAttachmentRef[];
+      continuation?: boolean;
       idempotencyKey?: string;
       observabilityContext?: ObservabilityContextPayload;
     },
@@ -563,8 +620,8 @@ export class AgentRepository {
       const id = randomUUID();
       const result = await client.query(
         `INSERT INTO agent_runs
-           (id, tenant_id, user_id, session_id, status, user_message, knowledge_base_ids, idempotency_key)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6::uuid[], $7)
+           (id, tenant_id, user_id, session_id, status, user_message, continuation, knowledge_base_ids, idempotency_key)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7::uuid[], $8)
          RETURNING *`,
         [
           id,
@@ -572,6 +629,7 @@ export class AgentRepository {
           context.userId,
           input.sessionId,
           input.message,
+          input.continuation ?? false,
           knowledgeBaseIds,
           input.idempotencyKey ?? null,
         ],
@@ -579,6 +637,21 @@ export class AgentRepository {
       await client.query('UPDATE agent_sessions SET updated_at = now() WHERE id = $1', [
         input.sessionId,
       ]);
+      if (input.attachments && input.attachments.length > 0) {
+        // 原子关联：只有「本人、本租户、已上传就绪、尚未关联其他 run」的附件才能被占用，
+        // 行数不匹配说明附件不存在/未就绪/被复用，直接让整个创建事务失败。
+        const attachmentIds = input.attachments.map((attachment) => attachment.id);
+        const linked = await client.query(
+          `UPDATE chat_attachments
+           SET run_id = $1
+           WHERE tenant_id = $2 AND user_id = $3 AND status = 'ready'
+             AND run_id IS NULL AND id = ANY($4::uuid[])`,
+          [id, context.tenantId, context.userId, attachmentIds],
+        );
+        if (linked.rowCount !== attachmentIds.length) {
+          throw new RepositoryNotFoundError('chat_attachment');
+        }
+      }
       const run = runOf(result.rows[0]);
       const workspaceSource = workspaceSourceOf(session.rows[0]);
       const outboxId = await insertDispatch(client, {
@@ -1055,6 +1128,135 @@ export class AgentRepository {
     );
     if (result.rows[0]) return artifactOf(result.rows[0]);
     return this.getArtifact(context, artifactId);
+  }
+
+  // ── 聊天附件 ─────────────────────────────────────────────────────────
+
+  async createChatAttachment(
+    context: AuthContext,
+    input: {
+      id: string;
+      objectKey: string;
+      filename: string;
+      contentType: string;
+      sizeBytes: number;
+      sha256: string;
+      kind: RunAttachmentKind;
+    },
+  ): Promise<ChatAttachmentRecord> {
+    const result = await this.pool.query(
+      `INSERT INTO chat_attachments
+         (id, tenant_id, user_id, object_key, filename, content_type, size_bytes, sha256, kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        input.id,
+        context.tenantId,
+        context.userId,
+        input.objectKey,
+        input.filename,
+        input.contentType,
+        input.sizeBytes,
+        input.sha256,
+        input.kind,
+      ],
+    );
+    return chatAttachmentOf(result.rows[0]);
+  }
+
+  async getChatAttachment(
+    context: AuthContext,
+    attachmentId: string,
+  ): Promise<ChatAttachmentRecord | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM chat_attachments WHERE tenant_id = $1 AND user_id = $2 AND id = $3',
+      [context.tenantId, context.userId, attachmentId],
+    );
+    return result.rows[0] ? chatAttachmentOf(result.rows[0]) : null;
+  }
+
+  /**
+   * 按 id 批量取出**本人、本租户、已就绪**的附件，保持与入参相同的顺序。
+   * 返回数量少于入参即说明存在不存在/未就绪/他人的附件，由调用方拒绝。
+   */
+  async getReadyChatAttachments(
+    context: AuthContext,
+    attachmentIds: string[],
+  ): Promise<ChatAttachmentRecord[]> {
+    if (attachmentIds.length === 0) return [];
+    const result = await this.pool.query(
+      `SELECT * FROM chat_attachments
+       WHERE tenant_id = $1 AND user_id = $2 AND status = 'ready'
+         AND id = ANY($3::uuid[])`,
+      [context.tenantId, context.userId, attachmentIds],
+    );
+    const byId = new Map(result.rows.map((row) => [String(row.id), chatAttachmentOf(row)]));
+    return attachmentIds
+      .map((id) => byId.get(id))
+      .filter((attachment): attachment is ChatAttachmentRecord => Boolean(attachment));
+  }
+
+  async markChatAttachmentReady(
+    context: AuthContext,
+    attachmentId: string,
+  ): Promise<ChatAttachmentRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE chat_attachments
+       SET status = 'ready', uploaded_at = COALESCE(uploaded_at, now())
+       WHERE tenant_id = $1 AND user_id = $2 AND id = $3 AND status = 'pending'
+       RETURNING *`,
+      [context.tenantId, context.userId, attachmentId],
+    );
+    if (result.rows[0]) return chatAttachmentOf(result.rows[0]);
+    return this.getChatAttachment(context, attachmentId);
+  }
+
+  /** 历史会话还原：一次取多个 run 的附件，按 runId 分组。 */
+  async listChatAttachmentsByRuns(
+    context: AuthContext,
+    runIds: string[],
+  ): Promise<Map<string, ChatAttachmentRecord[]>> {
+    const map = new Map<string, ChatAttachmentRecord[]>();
+    if (runIds.length === 0) return map;
+    const result = await this.pool.query(
+      `SELECT * FROM chat_attachments
+       WHERE tenant_id = $1 AND run_id = ANY($2::uuid[])
+       ORDER BY created_at ASC`,
+      [context.tenantId, runIds],
+    );
+    for (const row of result.rows) {
+      const attachment = chatAttachmentOf(row);
+      if (!attachment.runId) continue;
+      const group = map.get(attachment.runId) ?? [];
+      group.push(attachment);
+      map.set(attachment.runId, group);
+    }
+    return map;
+  }
+
+  /**
+   * 孤儿清理（worker 维护任务，无请求上下文）：取超过 cutoff 仍未关联 run
+   * 的附件（传到一半放弃 / 传完没点发送），返回对象键供删除存储后再删行。
+   */
+  async listStaleUnlinkedAttachments(
+    cutoff: Date,
+    limit: number,
+  ): Promise<Array<Pick<ChatAttachmentRecord, 'id' | 'objectKey'>>> {
+    const result = await this.pool.query(
+      `SELECT id, object_key FROM chat_attachments
+       WHERE run_id IS NULL AND created_at < $1
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [cutoff, limit],
+    );
+    return result.rows.map((row) => ({
+      id: String(row.id),
+      objectKey: String(row.object_key),
+    }));
+  }
+
+  async deleteChatAttachment(attachmentId: string): Promise<void> {
+    await this.pool.query('DELETE FROM chat_attachments WHERE id = $1', [attachmentId]);
   }
 
   async close(): Promise<void> {

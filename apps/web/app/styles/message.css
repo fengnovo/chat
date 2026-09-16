@@ -102,10 +102,13 @@
 }
 
 .message-attachment-image {
+  background: none;
   border: 1px solid var(--line);
   border-radius: 12px;
   display: block;
+  cursor: zoom-in;
   overflow: hidden;
+  padding: 0;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
@@ -134,6 +137,12 @@
   gap: 6px;
   max-width: 100%;
   padding: 7px 13px;
+  text-decoration: none;
+}
+
+.message-attachment-file:hover {
+  border-color: #b6aaf2;
+  color: #4a3b8f;
 }
 
 .message-attachment-file {

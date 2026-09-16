@@ -108,6 +108,45 @@ logger.info(
   `agent worker ready: driver=${config.AGENT_DRIVER}, sandbox=${config.SANDBOX_RUNTIME}${sandboxDetail}, concurrency=${config.WORKER_CONCURRENCY}`,
 );
 
+// 孤儿聊天附件清理：选中即传但最终没点发送（或传到一半放弃）的附件
+// 超过 24h 仍未关联 run 时，先删对象存储再删数据库行。每小时扫一批（100 个）。
+const ORPHAN_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const ORPHAN_ATTACHMENT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const ORPHAN_ATTACHMENT_BATCH = 100;
+
+async function cleanupOrphanAttachments(): Promise<void> {
+  const cutoff = new Date(Date.now() - ORPHAN_ATTACHMENT_MAX_AGE_MS);
+  const stale = await database.repository.listStaleUnlinkedAttachments(
+    cutoff,
+    ORPHAN_ATTACHMENT_BATCH,
+  );
+  for (const item of stale) {
+    await artifacts.deleteObject(item.objectKey).catch(() => undefined);
+    await database.repository.deleteChatAttachment(item.id).catch(() => undefined);
+  }
+  if (stale.length > 0) {
+    logger.info(
+      { count: stale.length, operation: 'worker.attachments.cleanup' },
+      `removed ${stale.length} orphan chat attachments`,
+    );
+  }
+}
+
+const orphanCleanupTimer = setInterval(() => {
+  cleanupOrphanAttachments().catch((error) =>
+    logger.error(
+      { error: redactTelemetryValue(error), operation: 'worker.attachments.cleanup' },
+      'orphan attachment cleanup failed',
+    ),
+  );
+}, ORPHAN_ATTACHMENT_CLEANUP_INTERVAL_MS);
+orphanCleanupTimer.unref();
+// 启动 1 分钟后先跑一次，避免长期没重启时上一批孤儿要多等一个周期。
+const orphanCleanupKickoff = setTimeout(() => {
+  cleanupOrphanAttachments().catch(() => undefined);
+}, 60_000);
+orphanCleanupKickoff.unref();
+
 let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;

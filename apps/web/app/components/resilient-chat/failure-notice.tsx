@@ -44,10 +44,10 @@ function taskFailureCopy(failure: TaskFailure) {
 
 function TaskFailureNotice({
   failure,
-  onDismiss,
+  onContinue,
 }: {
   failure: TaskFailure;
-  onDismiss: () => void;
+  onContinue: () => void;
 }) {
   const copy = taskFailureCopy(failure);
   return (
@@ -59,7 +59,7 @@ function TaskFailureNotice({
         <strong>{copy.title}</strong>
         <p>{copy.detail}</p>
       </div>
-      <button type="button" onClick={onDismiss}>
+      <button type="button" onClick={onContinue}>
         继续对话
       </button>
     </section>

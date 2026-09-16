@@ -42,6 +42,24 @@ export function projectSnapshotObjectKey(tenantId: string, projectId: string) {
   return `tenants/${tenantId}/projects/${projectId}/snapshot-v1.json`;
 }
 
+/**
+ * 用户聊天附件的对象键。发送前 run 尚不存在，因此按「租户/用户」暂存，
+ * run 创建后只在数据库里关联 run_id，对象本身不移动。
+ */
+export function chatAttachmentObjectKey(
+  tenantId: string,
+  userId: string,
+  attachmentId: string,
+  filename: string,
+): string {
+  const safeName = filename
+    .normalize('NFKC')
+    .replace(/[^a-zA-Z0-9._一-龥-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 120) || 'attachment';
+  return `tenants/${tenantId}/users/${userId}/chat-attachments/${attachmentId}/${safeName}`;
+}
+
 function isMissingBucket(error: unknown): boolean {
   const candidate = error as {
     name?: string;

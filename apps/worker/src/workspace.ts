@@ -27,7 +27,7 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function safeRelativePath(relativePath: string): string {
+export function safeRelativePath(relativePath: string): string {
   const normalized = relativePath.replaceAll('\\', '/');
   if (
     normalized.startsWith('/') ||

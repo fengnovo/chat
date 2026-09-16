@@ -139,6 +139,19 @@
   position: relative;
 }
 
+.composer-attachment.is-error {
+  border-color: var(--red);
+}
+
+.composer-attachment-thumb-button {
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  cursor: zoom-in;
+  line-height: 0;
+  padding: 0;
+}
+
 .composer-attachment-thumb {
   border-radius: 7px;
   height: 48px;
@@ -161,6 +174,53 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-attachment-size {
+  color: var(--ink-faint, #9d97a8);
+  flex: none;
+  font-size: 11px;
+}
+
+/* 上传中/失败遮罩：盖在缩略图或文件条中间 */
+.composer-attachment-overlay {
+  align-items: center;
+  background: rgb(30 25 43 / 42%);
+  border-radius: 7px;
+  bottom: 5px;
+  display: flex;
+  justify-content: center;
+  left: 5px;
+  position: absolute;
+  top: 5px;
+  width: 48px;
+}
+
+.composer-attachment-file ~ .composer-attachment-overlay {
+  width: auto;
+  right: 22px;
+}
+
+.composer-attachment-overlay.is-error {
+  background: rgb(30 25 43 / 68%);
+}
+
+.composer-attachment-retry {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: white;
+  cursor: pointer;
+  display: inline-flex;
+  flex-direction: column;
+  font-size: 10px;
+  gap: 2px;
+  line-height: 1.2;
+  padding: 0;
+}
+
+.composer-attachment-retry:hover {
+  color: #cfc6ff;
 }
 
 .composer-attachment-remove {

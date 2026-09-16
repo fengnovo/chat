@@ -5,12 +5,14 @@ import path from 'node:path';
 import {
   artifactObjectKey,
   ArtifactVerificationError,
+  chatAttachmentObjectKey,
   projectSnapshotObjectKey,
 } from '@repo/artifacts';
 import {
   approvalDecisionSchema,
   createProjectSchema,
   createArtifactUploadSchema,
+  createChatAttachmentSchema,
   createRunSchema,
   createSessionSchema,
   questionAnswerSchema,
@@ -19,7 +21,8 @@ import {
   updateSessionSchema,
   uploadProjectSchema,
   knowledgeBaseIdsSchema,
-  type RunImageAttachment,
+  type RunAttachmentKind,
+  type RunAttachmentRef,
 } from '@repo/contracts';
 import { RepositoryNotFoundError } from '@repo/db';
 import { redactTelemetryValue } from '@repo/observability';
@@ -38,8 +41,21 @@ function idempotencyKey(value: string | string[] | undefined): string | undefine
 }
 
 const MAX_CHAT_ATTACHMENTS = 5;
+const MAX_IMAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_BYTES = 200_000;
-const IMAGE_ATTACHMENT_RE = /^data:image\/(jpeg|png|gif|webp);base64,[a-z0-9+/=\r\n]+$/i;
+const MAX_FILE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+/** 浏览器对 .md/.csv 等常见文本扩展名常给空 MIME，按扩展名兜底识别为文本。 */
+const TEXT_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'json', 'csv', 'log', 'yaml', 'yml',
+  'xml', 'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'tsx',
+  'jsx', 'py', 'sh', 'sql', 'ini', 'conf', 'toml',
+]);
 
 class AttachmentError extends Error {
   constructor(readonly code: string) {
@@ -48,74 +64,54 @@ class AttachmentError extends Error {
 }
 
 /**
- * 从用户消息的 file parts 中拆出：
- * - 图片附件（image/* data URL）→ 交给视觉模型做多模态输入；
- * - 文本附件（text/* data URL，≤200KB）→ 解码后以内联文本拼进消息正文。
- * 其他类型直接拒绝，避免把模型读不了的二进制静默吞掉。
+ * 服务端独立判定附件处理类型与大小上限（不信任前端传入的 kind）：
+ * image → 视觉模型；text → 内联正文；file → 投进沙箱工作区。
  */
-function extractChatAttachments(
-  parts: unknown[],
-  text: string,
-): { message: string; images: RunImageAttachment[] } {
-  const fileParts = parts.filter(
-    (part): part is Record<string, unknown> =>
-      typeof part === 'object' &&
-      part !== null &&
-      (part as { type?: unknown }).type === 'file',
-  );
-  if (fileParts.length > MAX_CHAT_ATTACHMENTS) {
-    throw new AttachmentError('too_many_attachments');
-  }
-
-  const images: RunImageAttachment[] = [];
-  let appendedText = '';
-  for (const part of fileParts) {
-    const mediaType = String(part.mediaType ?? '');
-    const filename =
-      typeof part.filename === 'string' && part.filename.trim()
-        ? part.filename.trim().slice(0, 255)
-        : undefined;
-    const url = String(part.url ?? '');
-
-    if (mediaType.startsWith('image/')) {
-      if (!IMAGE_ATTACHMENT_RE.test(url) || url.length > 14_000_000) {
-        throw new AttachmentError('invalid_image_attachment');
-      }
-      images.push({
-        kind: 'image',
-        mediaType: `image/${mediaType.slice(6).toLowerCase()}` as RunImageAttachment['mediaType'],
-        ...(filename ? { filename } : {}),
-        dataUrl: url,
-      });
-      continue;
+function resolveAttachmentKind(
+  filename: string,
+  contentType: string,
+  sizeBytes: number,
+): RunAttachmentKind {
+  if (ALLOWED_IMAGE_TYPES.has(contentType)) {
+    if (sizeBytes > MAX_IMAGE_ATTACHMENT_BYTES) {
+      throw new AttachmentError('image_attachment_too_large');
     }
-
-    if (mediaType.startsWith('text/')) {
-      const comma = url.indexOf(',');
-      const meta = comma >= 0 ? url.slice(0, comma) : '';
-      const payload = comma >= 0 ? url.slice(comma + 1) : '';
-      let decoded: string;
-      try {
-        decoded = meta.includes(';base64')
-          ? Buffer.from(payload, 'base64').toString('utf8')
-          : decodeURIComponent(payload);
-      } catch {
-        throw new AttachmentError('invalid_text_attachment');
-      }
-      if (Buffer.byteLength(decoded, 'utf8') > MAX_TEXT_ATTACHMENT_BYTES) {
-        throw new AttachmentError('attachment_too_large');
-      }
-      appendedText += `\n\n[附件 ${filename ?? '文本文件'}]\n${decoded}`;
-      continue;
-    }
-
-    throw new AttachmentError('unsupported_attachment_type');
+    return 'image';
   }
+  const extension = filename.includes('.')
+    ? filename.split('.').pop()!.toLowerCase()
+    : '';
+  if (contentType.startsWith('text/') || TEXT_EXTENSIONS.has(extension)) {
+    if (sizeBytes > MAX_TEXT_ATTACHMENT_BYTES) {
+      throw new AttachmentError('text_attachment_too_large');
+    }
+    return 'text';
+  }
+  if (sizeBytes > MAX_FILE_ATTACHMENT_BYTES) {
+    throw new AttachmentError('file_attachment_too_large');
+  }
+  return 'file';
+}
 
-  const merged = `${text}${appendedText}`.trim();
+/** 历史消息里的附件：前端用此相对 URL 经鉴权重定向取原始内容。 */
+function attachmentContentUrl(attachmentId: string) {
+  return `/api/agent/chat-attachments/${encodeURIComponent(attachmentId)}/content`;
+}
+
+function attachmentHistoryView(attachment: {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  kind: RunAttachmentKind;
+}) {
   return {
-    message: merged || (images.length > 0 ? '（用户发送了图片，请结合图片内容回答）' : ''),
-    images,
+    id: attachment.id,
+    filename: attachment.filename,
+    contentType: attachment.contentType,
+    sizeBytes: attachment.sizeBytes,
+    kind: attachment.kind,
+    url: attachmentContentUrl(attachment.id),
   };
 }
 
@@ -369,6 +365,10 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     const eventGroups = await Promise.all(
       runs.map((run) => services.repository.listEvents(request.auth, run.id, 0, 100_000)),
     );
+    const attachmentsByRun = await services.repository.listChatAttachmentsByRuns(
+      request.auth,
+      runs.map((run) => run.id),
+    );
     const messages = runs.flatMap((run, index) => {
       const events = eventGroups[index] ?? [];
       const assistantText = events
@@ -382,14 +382,22 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       const citations = events
         .filter((event) => event.type === 'retrieval.completed')
         .flatMap((event) => event.citations);
+      const attachments = (attachmentsByRun.get(run.id) ?? []).map(attachmentHistoryView);
       return [
-        {
-          id: `user-${run.id}`,
-          runId: run.id,
-          role: 'user' as const,
-          text: run.userMessage,
-          createdAt: run.createdAt,
-        },
+        // 续跑 run 的 user_message 是服务端合成的内部指令，不来自用户，
+        // 不渲染成用户气泡；若续跑产出了正文，只追加 assistant 消息。
+        ...(run.continuation
+          ? []
+          : [
+              {
+                id: `user-${run.id}`,
+                runId: run.id,
+                role: 'user' as const,
+                text: run.userMessage,
+                createdAt: run.createdAt,
+                ...(attachments.length ? { attachments } : {}),
+              },
+            ]),
         ...(assistantText
           ? [
               {
@@ -675,60 +683,203 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     };
   });
 
+  // ── 聊天附件（选中即传，发送时只带 id 引用） ─────────────────────────
+
+  app.post('/api/agent/chat-attachments', async (request, reply) => {
+    const input = createChatAttachmentSchema.parse(request.body);
+    const filename = input.filename.trim().slice(0, 255) || 'attachment';
+    const contentType = input.contentType.trim().toLowerCase().slice(0, 200) || 'application/octet-stream';
+    const sha256 = input.sha256.toLowerCase();
+
+    let kind: RunAttachmentKind;
+    try {
+      kind = resolveAttachmentKind(filename, contentType, input.sizeBytes);
+    } catch (error) {
+      if (error instanceof AttachmentError) {
+        return reply.code(413).send({ error: error.code });
+      }
+      throw error;
+    }
+
+    const attachmentId = randomUUID();
+    const objectKey = chatAttachmentObjectKey(
+      request.auth.tenantId,
+      request.auth.userId,
+      attachmentId,
+      filename,
+    );
+    const attachment = await services.repository.createChatAttachment(request.auth, {
+      id: attachmentId,
+      objectKey,
+      filename,
+      contentType,
+      sizeBytes: input.sizeBytes,
+      sha256,
+      kind,
+    });
+    const upload = await services.artifacts.createUpload(
+      objectKey,
+      contentType,
+      sha256,
+      300,
+    );
+    return reply.code(201).send({
+      attachment: attachmentHistoryView(attachment),
+      ...upload,
+    });
+  });
+
+  app.post('/api/agent/chat-attachments/:id/complete', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const attachment = await services.repository.getChatAttachment(request.auth, id);
+    if (!attachment) return reply.code(404).send({ error: 'attachment_not_found' });
+    if (attachment.status !== 'ready') {
+      try {
+        await services.artifacts.verifyObject(attachment.objectKey, {
+          sizeBytes: attachment.sizeBytes,
+          sha256: attachment.sha256,
+        });
+      } catch (error) {
+        if (error instanceof ArtifactVerificationError) {
+          return reply.code(409).send({
+            error: 'attachment_verification_failed',
+            message: error.message,
+          });
+        }
+        throw error;
+      }
+      await services.repository.markChatAttachmentReady(request.auth, id);
+    }
+    return { attachment: attachmentHistoryView(attachment) };
+  });
+
+  app.delete('/api/agent/chat-attachments/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const attachment = await services.repository.getChatAttachment(request.auth, id);
+    if (!attachment) return reply.code(404).send({ error: 'attachment_not_found' });
+    // 已关联 run 的附件属于聊天历史，不允许删除。
+    if (attachment.runId) {
+      return reply.code(409).send({ error: 'attachment_in_use' });
+    }
+    await services.artifacts.deleteObject(attachment.objectKey);
+    await services.repository.deleteChatAttachment(id);
+    return reply.code(204).send();
+  });
+
+  /** 附件内容统一入口：校验归属后 302 到新鲜的预签名下载地址，不向前端暴露长期 URL。 */
+  app.get('/api/agent/chat-attachments/:id/content', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const attachment = await services.repository.getChatAttachment(request.auth, id);
+    if (!attachment) return reply.code(404).send({ error: 'attachment_not_found' });
+    if (attachment.status !== 'ready') {
+      return reply.code(409).send({ error: 'attachment_not_ready' });
+    }
+    const downloadUrl = await services.artifacts.createDownloadUrl(
+      attachment.objectKey,
+      120,
+    );
+    return reply.redirect(downloadUrl, 302);
+  });
+
   const chatRequestSchema = z.object({
     chat_id: z.string().min(1).max(200).optional(),
     project_id: z.uuid().optional(),
     knowledge_base_ids: knowledgeBaseIdsSchema.default([]),
     messages: z.array(z.record(z.string(), z.unknown())),
+    attachment_ids: z.array(z.uuid()).max(MAX_CHAT_ATTACHMENTS).default([]),
+    continuation: z.boolean().optional(),
   });
+
+  /**
+   * 「继续对话」时发给模型的内部续跑指令。不是用户说的话：
+   * 前端不显示气泡，历史接口也会跳过该 run 的用户消息。
+   */
+  const CONTINUATION_INSTRUCTION =
+    '上一轮任务因执行错误中断了。请基于上方对话和已完成的工作，继续完成上一条用户消息所要求的任务；先检查当前进度，不要重复已经完成的步骤。';
 
   app.post('/api/chat', async (request, reply) => {
     const input = chatRequestSchema.parse(request.body);
-    const lastUser = [...input.messages]
-      .reverse()
-      .find((message) => message.role === 'user');
-    const parts = Array.isArray(lastUser?.parts) ? lastUser.parts : [];
-    const text =
-      typeof lastUser?.content === 'string'
-        ? lastUser.content
-        : parts
-            .map((part) =>
-              typeof part === 'object' && part !== null && 'text' in part
-                ? String((part as { text: unknown }).text)
-                : '',
-            )
-            .join('');
-
-    let attachments: RunImageAttachment[];
-    let message: string;
-    try {
-      const extracted = extractChatAttachments(parts, text);
-      attachments = extracted.images;
-      message = extracted.message;
-    } catch (error) {
-      if (error instanceof AttachmentError) {
-        return reply.code(400).send({ error: error.code });
-      }
-      throw error;
+    const continuation = input.continuation === true;
+    if (continuation && !input.chat_id) {
+      // 续跑必须依附于一个已存在的会话，不允许凭空创建。
+      return reply.code(400).send({ error: 'continuation_requires_session' });
     }
-    if (!message.trim()) return reply.code(400).send({ error: 'message_required' });
+
+    let attachmentRefs: RunAttachmentRef[] = [];
+    let message: string;
+    if (continuation) {
+      // 续跑忽略客户端消息内容，统一使用服务端合成的内部指令，防止被伪造。
+      message = CONTINUATION_INSTRUCTION;
+    } else {
+      const lastUser = [...input.messages]
+        .reverse()
+        .find((message) => message.role === 'user');
+      const parts = Array.isArray(lastUser?.parts) ? lastUser.parts : [];
+      message =
+        typeof lastUser?.content === 'string'
+          ? lastUser.content
+          : parts
+              .map((part) =>
+                typeof part === 'object' && part !== null && 'text' in part
+                  ? String((part as { text: unknown }).text)
+                  : '',
+              )
+              .join('');
+
+      // 附件按引用校验：必须是本人、已上传就绪、且尚未被其他 run 使用的。
+      if (input.attachment_ids.length > 0) {
+        const records = await services.repository.getReadyChatAttachments(
+          request.auth,
+          input.attachment_ids,
+        );
+        if (records.length !== new Set(input.attachment_ids).size) {
+          return reply.code(400).send({ error: 'invalid_attachment' });
+        }
+        attachmentRefs = records.map((record) => ({
+          id: record.id,
+          kind: record.kind,
+          objectKey: record.objectKey,
+          filename: record.filename,
+          contentType: record.contentType,
+          sizeBytes: record.sizeBytes,
+        }));
+      }
+
+      if (!message.trim()) {
+        if (attachmentRefs.length === 0) {
+          return reply.code(400).send({ error: 'message_required' });
+        }
+        message = '（用户发送了附件，请结合附件内容完成任务）';
+      }
+    }
 
     const externalKey = input.chat_id ?? randomUUID();
     const workspaceToken = randomUUID();
     try {
-      const session = await services.repository.getOrCreateExternalSession(
-        request.auth,
-        {
+      let session;
+      if (continuation) {
+        // 只查询，不隐式创建：会话不存在直接 404。
+        const existing = await services.repository.getSessionByExternalKey(
+          request.auth,
           externalKey,
-          title: message.trim().split('\n')[0]?.slice(0, 120) || '新会话',
-          workspacePath: path.join(
-            services.config.WORKSPACE_ROOT,
-            request.auth.tenantId,
-            workspaceToken,
-          ),
-          ...(input.project_id ? { projectId: input.project_id } : {}),
-        },
-      );
+        );
+        if (!existing) return reply.code(404).send({ error: 'session_not_found' });
+        session = existing;
+      } else {
+        session = await services.repository.getOrCreateExternalSession(
+          request.auth,
+          {
+            externalKey,
+            title: message.trim().split('\n')[0]?.slice(0, 120) || '新会话',
+            workspacePath: path.join(
+              services.config.WORKSPACE_ROOT,
+              request.auth.tenantId,
+              workspaceToken,
+            ),
+            ...(input.project_id ? { projectId: input.project_id } : {}),
+          },
+        );
+      }
       const enqueue = services.observability
         ? startRunEnqueue(services.observability, { requestId: request.id, jobKind: 'start' })
         : null;
@@ -738,7 +889,8 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
           sessionId: session.id,
           message: message.trim(),
           knowledgeBaseIds: input.knowledge_base_ids,
-          attachments,
+          attachments: attachmentRefs,
+          continuation,
           ...(enqueue ? { observabilityContext: enqueue.observabilityContext } : {}),
         });
       } catch (error) {
