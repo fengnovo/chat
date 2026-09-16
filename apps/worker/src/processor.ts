@@ -122,10 +122,46 @@ async function persistEvent(
 
 type SandboxInstance = DockerSandboxBackend | E2BSandbox;
 
+/** 进程级沙箱缓存：按 workspaceId 复用活跃连接，跳过重复的 E2B connect/create 网络往返。 */
+const sandboxCache = new Map<
+  string,
+  { sandbox: SandboxInstance; lastUsedAt: number; timeoutMs: number }
+>();
+
+function sandboxCacheTTLMs(configTimeoutMs?: number): number {
+  // 缓存有效期略短于沙箱自身超时，留出安全余量。
+  return (configTimeoutMs ?? 600_000) * 0.8;
+}
+
+function getCachedSandbox(workspaceId: string, timeoutMs: number): SandboxInstance | null {
+  const entry = sandboxCache.get(workspaceId);
+  if (!entry) return null;
+  const age = Date.now() - entry.lastUsedAt;
+  if (age > sandboxCacheTTLMs(entry.timeoutMs)) {
+    sandboxCache.delete(workspaceId);
+    if (entry.sandbox instanceof E2BSandbox) {
+      entry.sandbox.pause().catch(() => undefined);
+    }
+    return null;
+  }
+  return entry.sandbox;
+}
+
+function putCachedSandbox(workspaceId: string, sandbox: SandboxInstance, timeoutMs: number): void {
+  sandboxCache.set(workspaceId, { sandbox, lastUsedAt: Date.now(), timeoutMs });
+}
+
+function evictCachedSandbox(workspaceId: string): SandboxInstance | null {
+  const entry = sandboxCache.get(workspaceId);
+  if (!entry) return null;
+  sandboxCache.delete(workspaceId);
+  return entry.sandbox;
+}
+
 /**
  * 按配置创建本轮沙箱。
  * docker 模式下每次 run 复用同一宿主会话目录，因此不需要持久化沙箱 ID；
- * e2b-cloud 模式仍复用 E2B 的沙箱标识。
+ * e2b-cloud 仍复用 E2B 的沙箱标识，进程级缓存进一步跳过重复 connect。
  */
 async function acquireSandbox(
   services: ProcessorServices,
@@ -134,48 +170,71 @@ async function acquireSandbox(
   signal: AbortSignal,
 ): Promise<SandboxInstance> {
   const config = services.config;
+  // 进程级缓存命中直接跳过 E2B connect/create 网络往返。
+  const cached = getCachedSandbox(workspace.workspaceId, config.E2B_TIMEOUT_MS ?? 600_000);
+  if (cached) {
+    if (cached instanceof E2BSandbox && config.E2B_TIMEOUT_MS) {
+      // 续租超时，确保长 run 不会在执行中过期。
+      await cached.setTimeout(config.E2B_TIMEOUT_MS).catch(() => undefined);
+    }
+    return cached;
+  }
+
+  let sandbox: SandboxInstance;
   if (config.SANDBOX_RUNTIME === 'docker') {
-    return DockerSandboxBackend.create({
+    sandbox = await DockerSandboxBackend.create({
       sessionId: workspace.workspaceId,
       rootDirectory: config.DOCKER_SANDBOX_SESSIONS_ROOT,
       image: config.DOCKER_SANDBOX_IMAGE,
       commandTimeoutMs: config.DOCKER_SANDBOX_COMMAND_TIMEOUT_MS,
     });
-  }
-
-  const apiKey = config.E2B_API_KEY;
-  if (!apiKey) throw new Error('E2B_API_KEY is required for e2b-cloud');
-  const sandboxOptions = {
-    apiKey,
-    ...(config.E2B_API_URL ? { apiUrl: config.E2B_API_URL } : {}),
-    ...(config.E2B_SANDBOX_URL ? { sandboxUrl: config.E2B_SANDBOX_URL } : {}),
-    template: config.E2B_TEMPLATE,
-    timeoutMs: config.E2B_TIMEOUT_MS,
-    signal,
-  };
-  if (workspace.sandboxId) {
-    try {
-      return await E2BSandbox.connect(workspace.sandboxId, sandboxOptions);
-    } catch {
-      await services.repository
-        .clearWorkspaceSandboxId(
+  } else {
+    const apiKey = config.E2B_API_KEY;
+    if (!apiKey) throw new Error('E2B_API_KEY is required for e2b-cloud');
+    const sandboxOptions = {
+      apiKey,
+      ...(config.E2B_API_URL ? { apiUrl: config.E2B_API_URL } : {}),
+      ...(config.E2B_SANDBOX_URL ? { sandboxUrl: config.E2B_SANDBOX_URL } : {}),
+      template: config.E2B_TEMPLATE,
+      timeoutMs: config.E2B_TIMEOUT_MS,
+      signal,
+    };
+    if (workspace.sandboxId) {
+      try {
+        sandbox = await E2BSandbox.connect(workspace.sandboxId, sandboxOptions);
+      } catch {
+        await services.repository
+          .clearWorkspaceSandboxId(
+            job.tenantId,
+            workspace.workspaceId,
+            workspace.sandboxId,
+          )
+          .catch(() => undefined);
+        sandbox = await E2BSandbox.create(sandboxOptions);
+        const saved = await services.repository.saveWorkspaceSandboxId(
           job.tenantId,
           workspace.workspaceId,
-          workspace.sandboxId,
-        )
-        .catch(() => undefined);
+          sandbox.id,
+        );
+        if (!saved) {
+          await sandbox.kill().catch(() => undefined);
+          throw new Error('Workspace sandbox identity changed concurrently');
+        }
+      }
+    } else {
+      sandbox = await E2BSandbox.create(sandboxOptions);
+      const saved = await services.repository.saveWorkspaceSandboxId(
+        job.tenantId,
+        workspace.workspaceId,
+        sandbox.id,
+      );
+      if (!saved) {
+        await sandbox.kill().catch(() => undefined);
+        throw new Error('Workspace sandbox identity changed concurrently');
+      }
     }
   }
-  const sandbox = await E2BSandbox.create(sandboxOptions);
-  const saved = await services.repository.saveWorkspaceSandboxId(
-    job.tenantId,
-    workspace.workspaceId,
-    sandbox.id,
-  );
-  if (!saved) {
-    await sandbox.kill().catch(() => undefined);
-    throw new Error('Workspace sandbox identity changed concurrently');
-  }
+  putCachedSandbox(workspace.workspaceId, sandbox, config.E2B_TIMEOUT_MS ?? 600_000);
   return sandbox;
 }
 
@@ -464,35 +523,41 @@ export function createRunProcessor(
         const remotePath = services.config.SANDBOX_RUNTIME === 'docker'
           ? remoteWorkspacePath(services.config.DOCKER_SANDBOX_WORKSPACE_PATH)
           : remoteWorkspacePath(services.config.E2B_WORKSPACE_PATH);
-        await observed('workspace.prepare', () =>
-          prepareWorkspace(
-            acquiredSandbox,
-            remotePath,
-            job.kind === 'start' ? job.workspaceSource : undefined,
-            (objectKey) => services.artifacts.getObjectBytes(objectKey),
-            job.kind === 'start',
-          ),
-        );
-        // 用户附件按引用取回：图片→视觉输入，文本→内联正文，二进制→工作区文件。
-        const preparedAttachments =
-          job.kind === 'start' && job.attachments.length > 0
-            ? await observed('attachments.prepare', () =>
-                prepareRunAttachments(
-                  services,
+        // 三个独立准备步骤并行执行——都只依赖 sandbox/remotePath，互不阻塞。
+        const [, preparedAttachments, agentResources] = await observed(
+          'preparation.parallel',
+          () =>
+            Promise.all([
+              observed('workspace.prepare', () =>
+                prepareWorkspace(
                   acquiredSandbox,
                   remotePath,
-                  job.attachments,
+                  job.kind === 'start' ? job.workspaceSource : undefined,
+                  (objectKey) => services.artifacts.getObjectBytes(objectKey),
+                  job.kind === 'start',
                 ),
-              )
-            : { appendedMessage: '', images: [] as ChatImageAttachment[] };
-        // 上传 DeepAgents memory/skills 到沙箱（宿主机路径由环境变量配置）。
-        const agentResources = await observed('agent.resources.upload', () =>
-          uploadAgentResources(
-            acquiredSandbox,
-            remotePath,
-            services.config.AGENT_MEMORY_FILE,
-            services.config.AGENT_SKILLS_DIR,
-          ),
+              ),
+              // 用户附件按引用取回：图片→视觉输入，文本→内联正文，二进制→工作区文件。
+              job.kind === 'start' && job.attachments.length > 0
+                ? observed('attachments.prepare', () =>
+                    prepareRunAttachments(
+                      services,
+                      acquiredSandbox,
+                      remotePath,
+                      job.attachments,
+                    ),
+                  )
+                : Promise.resolve({ appendedMessage: '', images: [] as ChatImageAttachment[] }),
+              // 上传 DeepAgents memory/skills 到沙箱（宿主机路径由环境变量配置）。
+              observed('agent.resources.upload', () =>
+                uploadAgentResources(
+                  acquiredSandbox,
+                  remotePath,
+                  services.config.AGENT_MEMORY_FILE,
+                  services.config.AGENT_SKILLS_DIR,
+                ),
+              ),
+            ]),
         );
         // Langfuse 按 run 采样：命中则在当前 job span 上下文内建一个 LangChain
         // callback（trace 上会带 tempo_trace_id）；任何异常退化为不写 Langfuse。
@@ -608,25 +673,33 @@ export function createRunProcessor(
         await runtime?.dispose().catch(() => undefined);
         await observed('cleanup', async () => {
           if (sandbox) {
-            if (sandbox instanceof DockerSandboxBackend) {
-              // 容器本身是 --rm 短生命周期，无需 kill/pause；
-              // 仅在取消或失败时删除宿主会话目录。
-              if (shouldKill) {
+            if (shouldKill) {
+              // 强制销毁：从缓存移除后 kill/destroy + 清 DB 记录。
+              if (workspaceId) evictCachedSandbox(workspaceId);
+              if (sandbox instanceof E2BSandbox) {
+                await sandbox.kill().catch(() => undefined);
+                if (workspaceId) {
+                  await services.repository.clearWorkspaceSandboxId(
+                    job.tenantId,
+                    workspaceId,
+                    sandbox.id,
+                  ).catch(() => undefined);
+                }
+              } else if (sandbox instanceof DockerSandboxBackend) {
                 await sandbox.destroy().catch(() => undefined);
-              } else {
-                await sandbox.close().catch(() => undefined);
               }
-            } else if (shouldKill) {
-              await sandbox.kill().catch(() => undefined);
-              if (workspaceId) {
-                await services.repository.clearWorkspaceSandboxId(
-                  job.tenantId,
-                  workspaceId,
-                  sandbox.id,
-                ).catch(() => undefined);
-              }
+            } else if (workspaceId) {
+              // 正常结束放回进程级缓存，跳过下次 run 的 E2B connect 网络往返。
+              putCachedSandbox(
+                workspaceId,
+                sandbox,
+                services.config.E2B_TIMEOUT_MS ?? 600_000,
+              );
             } else {
-              await sandbox.pause().catch(() => undefined);
+              // 没有 workspaceId 兜底时保守 pause，让 E2B 自己管理生命周期。
+              if (sandbox instanceof E2BSandbox) {
+                await sandbox.pause().catch(() => undefined);
+              }
             }
           }
         });

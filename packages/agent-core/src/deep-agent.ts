@@ -374,33 +374,36 @@ export async function createDeepAgentRuntime(
     options.models.map((spec) => [spec.id, spec]),
   );
   let activeSpec = options.models[0];
-  const router = await createResilientModelRouter({
-    models: options.models,
-    ...(options.circuitBreaker ? { circuitBreaker: options.circuitBreaker } : {}),
-    ...(telemetry
-      ? {
-          telemetry: {
-            modelCall: (meta) => safeTelemetry((sink) => sink.modelCall(meta)),
-            event: (name, attributes) =>
-              safeTelemetry((sink) => sink.event(name, attributes)),
-          },
+  // 三个完全独立的初始化步骤并行执行——互相之间没有数据依赖。
+  const [router, baseMcp, knowledgeMcp] = await Promise.all([
+    createResilientModelRouter({
+      models: options.models,
+      ...(options.circuitBreaker ? { circuitBreaker: options.circuitBreaker } : {}),
+      ...(telemetry
+        ? {
+            telemetry: {
+              modelCall: (meta) => safeTelemetry((sink) => sink.modelCall(meta)),
+              event: (name, attributes) =>
+                safeTelemetry((sink) => sink.event(name, attributes)),
+            },
+          }
+        : {}),
+      onEvent: (event) => {
+        const normalized = routerEvent(options.runId, event);
+        if (normalized) pendingRouterEvents.push(normalized);
+        if (event.type === 'model.fallback' && event.to) {
+          const fallbackSpec = specsById.get(event.to);
+          if (fallbackSpec) activeSpec = fallbackSpec;
         }
-      : {}),
-    onEvent: (event) => {
-      const normalized = routerEvent(options.runId, event);
-      if (normalized) pendingRouterEvents.push(normalized);
-      if (event.type === 'model.fallback' && event.to) {
-        const fallbackSpec = specsById.get(event.to);
-        if (fallbackSpec) activeSpec = fallbackSpec;
-      }
-    },
-  });
+      },
+    }),
+    loadMcpTools(options.mcpConfigPath),
+    options.knowledgeMcp?.enabled
+      ? loadMcpTools(undefined, options.knowledgeMcp)
+      : Promise.resolve({ tools: [], status: 'not configured', client: null }),
+  ]);
   if (!options.backend) throw new Error('DeepAgent requires an external sandbox backend');
   const backendMode = options.backendMode ?? 'e2b';
-  const baseMcp = await loadMcpTools(options.mcpConfigPath);
-  const knowledgeMcp = options.knowledgeMcp?.enabled
-    ? await loadMcpTools(undefined, options.knowledgeMcp)
-    : { tools: [], status: 'not configured', client: null };
   const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools];
   const protectedToolApproval = { allowedDecisions: ['approve', 'reject'] };
   // 会话级自动批准（用户点过“本会话都允许”）时，所有工具一律放行；
