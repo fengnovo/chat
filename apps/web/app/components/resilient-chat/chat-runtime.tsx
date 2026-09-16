@@ -702,6 +702,10 @@ function ChatRuntime() {
         }
         if (!response.ok) return;
         const run = (await response.json()) as RunSummary;
+        // 竞态保护：若会话加载（loadSession）已把持久化 run 更新成本会话更新的 run
+        // （例如用户已成功续跑），这里拿到的旧 run 状态已过期，不能再据此设置失败横幅，
+        // 否则会覆盖 loadSession 里 setRunFailure(null) 的正确结果，导致刷新后横幅常驻。
+        if (readPersistedRun(userId)?.runId !== run.id) return;
         setRunFailure(failureFromRun(run));
         const pending = isPendingStatus(run.status);
         writePersistedRun({ ...persisted, pending }, userId);
@@ -1410,24 +1414,6 @@ function ChatRuntime() {
             <button
               className="icon-button"
               type="button"
-              aria-pressed={highlightMarkdown}
-              aria-label={
-                highlightMarkdown
-                  ? '关闭代码高亮与 Mermaid 图表（切换为纯文本）'
-                  : '开启代码高亮与 Mermaid 图表'
-              }
-              title={
-                highlightMarkdown
-                  ? '代码高亮与 Mermaid：已开启（点击关闭以对比纯文本）'
-                  : '代码高亮与 Mermaid：已关闭（点击开启）'
-              }
-              onClick={() => setHighlightMarkdown((current) => !current)}
-            >
-              <Icon name="highlight" size={16} />
-            </button>
-            <button
-              className="icon-button"
-              type="button"
               aria-label={filesOpen ? '隐藏文件浏览器' : '显示文件浏览器'}
               aria-expanded={filesOpen}
               title={filesOpen ? '隐藏文件浏览器' : '文件浏览器'}
@@ -1479,6 +1465,9 @@ function ChatRuntime() {
                     ]);
                   }}
                   onCopy={copyMessage}
+                  onPreviewDiagram={(svg) =>
+                    setLightboxImage({ svg, filename: '图表预览' })
+                  }
                   onPreviewImage={(url, filename) => setLightboxImage({ url, filename })}
                   onDismissCard={(messageId) => {
                     setDismissedCards((current) =>

@@ -375,21 +375,13 @@ async function prepareRunAttachments(
 
 /**
  * 取消或失败时清理沙箱。
- * docker 模式删除宿主会话目录；e2b-cloud 模式 kill 远程沙箱并清除持久化标识。
+ * e2b-cloud 模式 kill 远程沙箱并清除持久化标识；docker 模式无需处理：
+ * 容器是每次 execute 的 --rm 短命容器、没有常驻进程，中止由 AbortController 负责，
+ * 宿主工作区目录必须保留（删除后重建同名目录会让该会话后续 run 在 Docker Desktop 上
+ * 永久挂载失败，且会丢掉用户上一轮文件）。
  */
 async function killPersistedSandbox(services: ProcessorServices, job: RunJob): Promise<void> {
   if (services.config.SANDBOX_RUNTIME === 'docker') {
-    const workspace = await services.repository
-      .getWorkspaceSandboxForWorker(job.tenantId, job.sessionId)
-      .catch(() => null);
-    if (!workspace) return;
-    const sandbox = await DockerSandboxBackend.create({
-      sessionId: workspace.workspaceId,
-      rootDirectory: services.config.DOCKER_SANDBOX_SESSIONS_ROOT,
-      image: services.config.DOCKER_SANDBOX_IMAGE,
-      commandTimeoutMs: services.config.DOCKER_SANDBOX_COMMAND_TIMEOUT_MS,
-    }).catch(() => null);
-    await sandbox?.destroy().catch(() => undefined);
     return;
   }
 
@@ -686,7 +678,11 @@ export function createRunProcessor(
                   ).catch(() => undefined);
                 }
               } else if (sandbox instanceof DockerSandboxBackend) {
-                await sandbox.destroy().catch(() => undefined);
+                // 只释放句柄，绝不 rm -rf 宿主工作区：
+                // 1) 续跑要复用同一工作区目录，上一轮写出的文件必须保留；
+                // 2) Docker Desktop(macOS) 上，删除被 bind 过的宿主目录后再重建同名路径，
+                //    VM 共享层会永久判定该路径不存在，导致该会话后续所有 run 都无法挂载。
+                await sandbox.close().catch(() => undefined);
               }
             } else if (workspaceId) {
               // 正常结束放回进程级缓存，跳过下次 run 的 E2B connect 网络往返。

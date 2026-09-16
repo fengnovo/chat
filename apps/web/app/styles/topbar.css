@@ -88,19 +88,6 @@
   color: var(--ink);
 }
 
-/* 处于"已激活/按下"状态的图标按钮（如 Markdown 高亮开关）。 */
-.icon-button[aria-pressed="true"] {
-  background: var(--violet-soft);
-  border-color: var(--violet);
-  color: var(--violet-dark);
-}
-
-.icon-button[aria-pressed="true"]:hover {
-  background: var(--violet-soft);
-  border-color: var(--violet-dark);
-  color: var(--violet-dark);
-}
-
 .mobile-icon-button {
   display: none;
 }

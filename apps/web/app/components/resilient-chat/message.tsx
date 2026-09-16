@@ -1,5 +1,5 @@
 import { AIBoundary } from '@cognicatch/react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { isValidElement, useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -37,7 +37,14 @@ async function getMermaid(): Promise<MermaidApi | null> {
   }
 }
 
-function MermaidDiagram({ chart }: { chart: string }) {
+function MermaidDiagram({
+  chart,
+  onPreview,
+}: {
+  chart: string;
+  /** 传入后图表可点击，弹出与图片一致的浮层进行缩放查看。 */
+  onPreview?: (svg: string) => void;
+}) {
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
@@ -77,10 +84,28 @@ function MermaidDiagram({ chart }: { chart: string }) {
   if (!svg) {
     return <div className="mermaid-loading" aria-live="polite">正在渲染图表…</div>;
   }
+  const zoomable = Boolean(onPreview);
+  const openPreview = () => onPreview?.(svg);
+
   return (
     <div
-      className="mermaid-container"
+      className={`mermaid-container${zoomable ? ' is-zoomable' : ''}`}
       dangerouslySetInnerHTML={{ __html: svg }}
+      role={zoomable ? 'button' : undefined}
+      tabIndex={zoomable ? 0 : undefined}
+      title={zoomable ? '点击放大查看图表' : undefined}
+      aria-label={zoomable ? '放大查看 Mermaid 图表' : undefined}
+      onClick={zoomable ? openPreview : undefined}
+      onKeyDown={
+        zoomable
+          ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openPreview();
+              }
+            }
+          : undefined
+      }
     />
   );
 }
@@ -95,6 +120,7 @@ function Message({
   onBoundaryError,
   onCopy,
   onDismissCard,
+  onPreviewDiagram,
   onPreviewImage,
   reasoning,
   runTokens,
@@ -113,6 +139,8 @@ function Message({
   onBoundaryError: () => void;
   onCopy: (id: string, text: string) => Promise<void>;
   onDismissCard: (id: string) => void;
+  /** 点击 Mermaid 图表时弹出浮层，支持缩放查看。 */
+  onPreviewDiagram: (svg: string) => void;
   /** 点击聊天图片时在当前页弹出大图（输入框缩略图与历史消息共用）。 */
   onPreviewImage: (url: string, filename?: string) => void;
   /** 模型思考过程（reasoning_content），按 runId 独立存储，持久化保留。 */
@@ -214,7 +242,12 @@ function Message({
             isUser ? (
               text
             ) : (
-              <MarkdownContent content={text} onPreviewImage={onPreviewImage} highlight={highlight} />
+              <MarkdownContent
+                content={text}
+                onPreviewDiagram={onPreviewDiagram}
+                onPreviewImage={onPreviewImage}
+                highlight={highlight}
+              />
             )
           ) : streaming && showWaitingDots ? (
             <span className="streaming-live">
@@ -313,10 +346,12 @@ function safeExternalUrl(href: string | undefined): string | null {
 
 function MarkdownContent({
   content,
+  onPreviewDiagram,
   onPreviewImage,
   highlight,
 }: {
   content: string;
+  onPreviewDiagram?: (svg: string) => void;
   onPreviewImage: (url: string, filename?: string) => void;
   /** 开启后启用代码语法高亮与 Mermaid 图表渲染；关闭则退化为纯文本代码块。 */
   highlight: boolean;
@@ -350,11 +385,30 @@ function MarkdownContent({
           // 关闭时让代码以普通文本展示，便于对比"未增强"的渲染效果。
           if (highlight && className && /language-mermaid/i.test(className)) {
             const chart = String(children).replace(/\n$/, '');
-            return <MermaidDiagram chart={chart} />;
+            return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
           }
           return <code className={className}>{children}</code>;
         },
-        pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
+        pre: ({ children }) => {
+          // react-markdown 传给 pre 的是尚未执行的 code 渲染器元素，
+          // 无法用 child.type === MermaidDiagram 判断（图表组件此时还没创建）；
+          // 只能读它身上的原始 hast props：className 与代码文本。
+          // Mermaid 图表自带浅色容器，若再套暗色 <pre> 会出现一圈黑色边框，
+          // 命中时直接渲染图表组件，其余代码块保持暗色 pre 样式。
+          const child = Array.isArray(children) ? children[0] : children;
+          const codeProps = isValidElement(child)
+            ? (child.props as { className?: string; children?: unknown })
+            : null;
+          if (
+            highlight &&
+            codeProps?.className &&
+            /language-mermaid/i.test(codeProps.className)
+          ) {
+            const chart = String(codeProps.children ?? '').replace(/\n$/, '');
+            return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+          }
+          return <pre tabIndex={0}>{children}</pre>;
+        },
         img: ({ src, alt }) => {
           if (!src) return null;
           const url = typeof src === 'string' ? src : URL.createObjectURL(src);

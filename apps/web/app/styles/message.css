@@ -363,6 +363,20 @@
   height: auto;
 }
 
+/* 可点击放大的图表：与图片一致的 zoom-in 光标、hover/focus 反馈。 */
+.markdown-content .mermaid-container.is-zoomable {
+  cursor: zoom-in;
+}
+
+.markdown-content .mermaid-container.is-zoomable:hover {
+  border-color: #b6aaf2;
+}
+
+.markdown-content .mermaid-container.is-zoomable:focus-visible {
+  outline: 3px solid rgb(109 74 255 / 24%);
+  outline-offset: 2px;
+}
+
 .markdown-content .mermaid-loading {
   color: var(--ink-muted);
   font-size: 13px;

@@ -1,50 +1,8 @@
 {
-  "name": "chat",
-  "version": "1.0.0",
+  "name": "@repo/desktop",
+  "version": "0.1.0",
   "private": true,
-  "description": "",
-  "scripts": {
-    "setup": "pnpm install",
-    "dev": "node --env-file-if-exists=.env scripts/free-dev-ports.mjs && node --env-file-if-exists=.env node_modules/concurrently/dist/bin/concurrently.js -n web,api,worker -c blue,green,magenta \"pnpm --filter web dev\" \"pnpm --filter @repo/agent-api dev\" \"pnpm --filter @repo/agent-worker dev\"",
-    "dev:api": "pnpm --filter @repo/agent-api dev",
-    "dev:worker": "pnpm --filter @repo/agent-worker dev",
-    "desktop:dev": "pnpm --filter @repo/desktop dev",
-    "desktop:start": "pnpm --filter @repo/desktop start",
-    "desktop:typecheck": "pnpm --filter @repo/desktop typecheck",
-    "desktop:test": "pnpm --filter @repo/desktop test",
-    "desktop:build": "pnpm --filter @repo/desktop build",
-    "desktop:dist": "pnpm --filter @repo/desktop dist",
-    "desktop:dist:mac": "pnpm --filter @repo/desktop dist:mac",
-    "desktop:dist:win": "pnpm --filter @repo/desktop dist:win",
-    "cli": "pnpm --filter ai-cli start --",
-    "build": "turbo run build",
-    "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck",
-    "test:llm": "node --env-file=.env scripts/llm-test.mjs",
-    "test": "turbo run test",
-    "test:integration": "pnpm infra:up && pnpm db:migrate:test && RUN_INTEGRATION_TESTS=1 DATABASE_URL=${DATABASE_TEST_URL:-postgresql://agent:agent@127.0.0.1:55433/agent_test} pnpm --filter @repo/db test",
-    "dev:web": "turbo run dev --filter=web",
-    "infra:up": "docker compose -f infra/compose.yaml up -d --wait",
-    "infra:down": "docker compose -f infra/compose.yaml down",
-    "db:migrate": "pnpm --filter @repo/db migrate",
-    "db:seed": "pnpm --filter @repo/db seed",
-    "db:migrate:test": "DATABASE_URL=${DATABASE_TEST_URL:-postgresql://agent:agent@127.0.0.1:55433/agent_test} pnpm --filter @repo/db migrate"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "11.24.0",
-      "onFail": "download"
-    }
-  },
-  "devDependencies": {
-    "concurrently": "^9.0.0",
-    "turbo": "^2.10.12",
-    "typescript": "^5.9.2"
-  },
-  "packageManager": "pnpm@11.24.0",
-  "type": "module"
+  "description": "Keen AI Electron client",
+  "type": "module",
+  "main": "dist/main.js"
 }

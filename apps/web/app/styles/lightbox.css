@@ -24,6 +24,32 @@
   -webkit-user-drag: none;
 }
 
+/* Mermaid 图表浮层：白底卡片 + 内部 SVG 填满，由 SVG 自带
+   preserveAspectRatio=meet 等比居中。卡片的精确像素尺寸由 JS 读取
+   viewBox 宽高比后以内联样式写入；这里的 vw/vh 仅作首帧兜底。 */
+.lightbox-svg {
+  align-items: center;
+  background: #ffffff;
+  border-radius: 12px;
+  display: flex;
+  height: 82vh;
+  justify-content: center;
+  max-height: 82vh;
+  max-width: 88vw;
+  padding: 22px;
+  width: 88vw;
+}
+
+/* mermaid 产物带 width="100%" 和内联 max-width，必须 !important 放开，
+   否则在不定宽容器里会解析成 0 尺寸。 */
+.lightbox-svg svg {
+  display: block;
+  height: 100% !important;
+  max-height: none !important;
+  max-width: none !important;
+  width: 100% !important;
+}
+
 .lightbox-toolbar {
   align-items: center;
   background: rgb(30 25 43 / 72%);
@@ -37,6 +63,8 @@
   position: absolute;
   top: 18px;
   transform: translateX(-50%);
+  /* 放大后媒体从中心生长会盖住工具栏，需要固定在其上层可点。 */
+  z-index: 2;
 }
 
 .lightbox-filename {

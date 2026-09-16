@@ -15,6 +15,20 @@ test('requires an explicit URL for a packaged app', () => {
   assert.throws(() => resolveWebUrl(undefined, true), /ELECTRON_WEB_URL/);
 });
 
+test('uses the packaged URL embedded by the desktop builder', () => {
+  assert.equal(
+    resolveWebUrl(undefined, true, 'https://chat.example.com').href,
+    'https://chat.example.com/',
+  );
+});
+
+test('uses the configured local Web port when no explicit URL is set', () => {
+  assert.equal(
+    resolveWebUrl(undefined, false, 'http://localhost:3020').href,
+    'http://localhost:3020/',
+  );
+});
+
 test('rejects non HTTP(S) protocols', () => {
   assert.throws(() => resolveWebUrl('file:///tmp/index.html', false), /http/);
 });

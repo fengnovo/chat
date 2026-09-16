@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
-import { tool } from '@langchain/core/tools';
+import { DynamicStructuredTool, tool, type StructuredToolInterface } from '@langchain/core/tools';
 import { Command, interrupt, type Interrupt } from '@langchain/langgraph';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import { agentEventSchema, type AgentEvent } from '@repo/contracts';
@@ -370,6 +370,48 @@ async function loadMcpTools(configPath?: string, server?: McpServerConfig) {
   }
 }
 
+/**
+ * 把 MCP 工具的「业务执行错误」转成可恢复的工具结果，而不是让它终结整个 run。
+ *
+ * 背景：@langchain/mcp-adapters 在服务端返回 isError（例如 firecrawl 抓不到页面）时，
+ * 抛出的是适配器自定义的普通 Error（name='ToolException'），并不是 langchain 认定的
+ * ToolInvocationError（后者只覆盖入参 schema 校验失败）。而 deepagents 默认装配的
+ * wrapToolCall 中间件（filesystem 等）会包裹每一次工具调用，新一代 ToolNode 对
+ * 「经过中间件、且不是 ToolInvocationError」的错误一律按 fatal 重新抛出——于是单个
+ * 外部工具的一次失败（网页 404 / 被反爬 / 超时 / MCP 5xx）会直接 run.failed，
+ * 前端表现为「执行环境未能完成任务」。
+ *
+ * 这里在工具自身兜住业务错误并转成文本结果交回模型：模型可以改参数、换工具或如实告知
+ * 用户该资源暂不可用，整轮不再被外部工具拖垮。人工审批中断与用户取消必须照常透传。
+ */
+function wrapMcpToolAsRecoverable(original: StructuredToolInterface): StructuredToolInterface {
+  return new DynamicStructuredTool({
+    name: original.name,
+    description: original.description,
+    // 原样透传入参 schema，模型看到的工具签名与真实 MCP 工具完全一致。
+    schema: original.schema,
+    func: async (input, config) => {
+      try {
+        return await original.invoke(input, config as never);
+      } catch (error) {
+        const name = (error as { name?: string } | null)?.name ?? '';
+        const aborted = (config as { signal?: AbortSignal } | undefined)?.signal?.aborted ?? false;
+        // 人工审批中断（GraphInterrupt/NodeInterrupt）与用户主动取消：不是工具失败，
+        // 必须继续向上抛，否则会绕过审批流程或无法中止。
+        if (name === 'GraphInterrupt' || name === 'NodeInterrupt' || aborted) {
+          throw error;
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        return (
+          `工具执行失败：${detail}。` +
+          '这是该工具本次调用的返回结果，任务并未中断：请改用其他可行方式（换参数、换工具或基于已有信息作答）；' +
+          '若确认无法完成，直接如实告知用户该工具暂时不可用即可，不要因为这个错误中止整个任务。'
+        );
+      }
+    },
+  });
+}
+
 export function extractRetrievalEvent(runId: string, toolCallId: string, toolName: string, output: unknown): AgentEvent | null {
   if (toolName !== 'graphrag_search' || !output || typeof output !== 'object') return null;
   const root = output as Record<string, unknown>;
@@ -466,7 +508,9 @@ export async function createDeepAgentRuntime(
   ]);
   if (!options.backend) throw new Error('DeepAgent requires an external sandbox backend');
   const backendMode = options.backendMode ?? 'e2b';
-  const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools];
+  // 逐个包一层：MCP 工具的业务错误（抓不到页面、超时、5xx 等）转成可恢复结果，
+  // 不再让单个外部工具失败冒泡成 run.failed。name/schema 保持不变，审批规则不受影响。
+  const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools].map(wrapMcpToolAsRecoverable);
   const protectedToolApproval = { allowedDecisions: ['approve', 'reject'] };
   // 会话级自动批准（用户点过“本会话都允许”）时，所有工具一律放行；
   // 否则写操作、命令、MCP 工具都要逐项审批（graphrag_search 只读，始终免批）。
