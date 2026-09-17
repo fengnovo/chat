@@ -470,7 +470,7 @@ export async function reviewSubagentOutput(
             new SystemMessage(REVIEW_SYSTEM_PROMPT),
             new HumanMessage(buildReviewUserPrompt(input, summary)),
           ],
-          { signal: controller.signal },
+          { signal: controller.signal, callbacks: [], tags: ['nostream'] },
         );
         const parsed = reviewVerdictLenientSchema.safeParse(raw);
         if (!parsed.success) {
@@ -795,7 +795,9 @@ export function createSpawnSubagentTool(
         'role_prompt 写清角色职责边界、工作方法与输出要求；task 必须写清目标与可核对的验收标准（评审器据此自动验收）；关键背景/文件路径放 context。' +
         '同步模式（默认）：等待完成后继续，内部自动评审、不达标带整改意见重派（最多 3 轮），返回即通过评审；' +
         'background=true（异步模式）：工具立即返回 taskId，你先给用户阶段性回复，任务在后台并行执行，完成后系统自动续轮把摘要交回做最终汇总——适合耗时较长、希望先响应用户的任务。' +
-        '适用：可独立交付的调研、检索、分析、验证类子任务；需要用户确认的事项不要派发。',
+        '适用：可独立交付的调研、检索、分析、验证类子任务；需要用户确认的事项不要派发。' +
+        '不适用：简单事实查询（如单车型参数查取）或 2-3 项直接对比——主 Agent 用 firecrawl_search 搜 1-2 次更高效；spawn 的开销只在任务有多源、可并行、需隔离或篇幅明显较长时才值得。' +
+        'task 里的验收标准应关注信息完整性、来源可靠性和结论准确性，不要写硬性字数上限、格式模板或措辞风格等机械指标。',
       schema: spawnSubagentSchema,
     },
   );

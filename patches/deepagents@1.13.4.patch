@@ -1,8 +1,16 @@
 diff --git a/dist/langsmith-BAO_h4J6.js b/dist/langsmith-BAO_h4J6.js
-index 1fae1ff1ae83f4d3ebf4f1792fc438a44cf95a22..dc8347cc6f45b83935339fa40f4956cc25f62288 100644
 --- a/dist/langsmith-BAO_h4J6.js
 +++ b/dist/langsmith-BAO_h4J6.js
-@@ -2807,7 +2807,7 @@ const SummarizationStateSchema = z$1.object({
+@@ -2789,7 +2789,7 @@
+ 	* Messages before this index have been summarized. */
+ 	cutoffIndex: z$1.number(),
+ 	/** The HumanMessage containing the summary. */
+-	summaryMessage: z$1.instanceof(HumanMessage),
++	summaryMessage: z$1.union([z$1.instanceof(HumanMessage), z$1.instanceof(SystemMessage)]),
+ 	/** Path where the conversation history was offloaded, or null if offload failed. */
+ 	filePath: z$1.string().nullable()
+ });
+@@ -2807,7 +2807,7 @@
  * Summary messages are HumanMessage objects with lc_source='summarization' in additional_kwargs.
  */
  function isSummaryMessage(msg) {
@@ -11,13 +19,22 @@ index 1fae1ff1ae83f4d3ebf4f1792fc438a44cf95a22..dc8347cc6f45b83935339fa40f4956cc
  	return msg.additional_kwargs?.lc_source === "summarization";
  }
  /**
-@@ -3221,8 +3221,8 @@ function createSummarizationMiddleware(options) {
+@@ -3203,7 +3203,7 @@
+ 		}
+ 		const conversation = getBufferString(messagesToSummarize);
+ 		const prompt = summaryPrompt.replace("{conversation}", conversation);
+-		return (await chatModel.invoke([new HumanMessage({ content: prompt })])).text;
++		return (await chatModel.invoke([new HumanMessage({ content: prompt })], { callbacks: [], tags: ["nostream"] })).text;
+ 	}
+ 	/**
+ 	* Build the summary message with file path reference.
+@@ -3221,8 +3221,8 @@
          ${summary}
          </summary>
        `;
 -		else content = `Here is a summary of the conversation to date:\n\n${summary}`;
 -		return new HumanMessage({
-+               else content = `以下为对话压缩摘要，仅供上下文参考，请勿提及或复述：\n\n${summary}`;
++		else content = `以下为对话压缩摘要，仅供上下文参考，请勿提及或复述：\n\n${summary}`;
 +		return new SystemMessage({
  			content,
  			additional_kwargs: { lc_source: "summarization" }
