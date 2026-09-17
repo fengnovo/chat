@@ -80,7 +80,7 @@ system prompt 明确图片输出规范（必须 `![alt](https://…)`，禁止�
 2. B（Streamdown）随后，纯 web 内部替换
 3. 验证：
    - 单测：chunksFrom 映射（对齐现有 `apps/api/test/chat-stream.test.ts` 的 data-citations 断言风格）、图片提取函数、历史消息重建
-   - 手工：真实 firecrawl 场景回归（图片画廊完整展示）；流式过程中断/未闭合语法表现
+   - 手工：真实 ANYSEARCH 场景回归（图片画廊完整展示）；流式过程中断/未闭合语法表现
    - `pnpm test` / `pnpm typecheck` 全绿
 
 ## 五、风险

@@ -7,6 +7,13 @@
       "headers": {
         "Authorization": "Bearer ${FIRECRAWL_API_KEY}"
       }
+    },
+    "mcpServers": {
+      "firecrawl": {
+        "type": "http",
+        "url": "http://localhost:3089/mcp",
+        "defaultToolTimeout": 45000
+      }
     }
   }
 }

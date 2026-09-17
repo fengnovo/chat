@@ -116,8 +116,8 @@ test('rejects a hung endpoint after connectTimeoutMs instead of waiting for the 
   await closeSharedMcpClients();
 
   const hungFactory = (): SharedMcpClientLike => ({
-    getTools: () => new Promise(() => {}), // TCP 可连但永不响应（黑洞）
-    close: async () => {},
+    getTools: () => new Promise(() => { }), // TCP 可连但永不响应（黑洞）
+    close: async () => { },
   });
 
   const started = Date.now();
@@ -228,18 +228,19 @@ test('keeps serving stale tools when a TTL rebuild fails, then rebuilds after an
 
 test('expandEnvPlaceholders drops headers whose env var is unset or empty', () => {
   const config = {
-    mcpServers: {
-      firecrawl: {
-        type: 'http',
-        headers: { Authorization: 'Bearer ${FIRECRAWL_API_KEY}', 'X-Trace': 'kept' },
-      },
+    "anysearch": {
+      "type": "streamable-http",
+      "url": "https://api.anysearch.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANYSEARCH_API_KEY}"
+      }
     },
   };
   const unset = expandEnvPlaceholders(config, {}) as typeof config;
-  assert.deepEqual(unset.mcpServers.firecrawl.headers, { 'X-Trace': 'kept' });
+  assert.deepEqual(unset.anysearch.headers, { });
 
   const empty = expandEnvPlaceholders(config, {
-    FIRECRAWL_API_KEY: '   ',
+    ANYSEARCH_API_KEY: '   ',
   }) as typeof config;
-  assert.deepEqual(empty.mcpServers.firecrawl.headers, { 'X-Trace': 'kept' });
+  assert.deepEqual(empty.anysearch.headers, { });
 });
