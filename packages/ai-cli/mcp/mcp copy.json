@@ -8,7 +8,14 @@
         "Authorization": "Bearer ${FIRECRAWL_API_KEY}"
       }
     },
-    "mcpServers": {
+    "anysearch": {
+      "type": "http",
+      "url": "https://api.anysearch.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANYSEARCH_API_KEY}"
+      }
+    },
+    "dev": {
       "firecrawl": {
         "type": "http",
         "url": "http://localhost:3089/mcp",
