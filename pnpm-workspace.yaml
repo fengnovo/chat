@@ -14,3 +14,4 @@ allowBuilds:
   unrs-resolver: true
 patchedDependencies:
   '@ai-sdk/workflow@2.0.28': patches/@ai-sdk__workflow@2.0.28.patch
+  deepagents@1.13.4: patches/deepagents@1.13.4.patch

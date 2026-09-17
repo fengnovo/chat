@@ -191,32 +191,6 @@ function isQuestion(value: AgentInterruptRequest): value is UserQuestionRequest 
   return 'kind' in value && value.kind === 'ask_user';
 }
 
-/**
- * deepagents 的 summarization middleware 在上下文超长时会调用模型生成摘要。
- * 摘要只供后续模型调用使用，不能作为回复展示。摘要文本来自固定的摘要提示词，
- * 输出格式有稳定特征（"Conversation Summary" 标题、"Main Topic" / "Key Actions"
- * 等小节），通过这些特征识别并过滤，避免用户看到一大段压缩总结。
- */
-function isSummaryText(text: string): boolean {
-  const trimmed = text.trimStart();
-  if (trimmed.length === 0) return false;
-  if (/^conversation summary\b/i.test(trimmed)) return true;
-  if (/^here is a summary of the conversation\b/i.test(trimmed)) return true;
-  if (/^summary of (the )?conversation\b/i.test(trimmed)) return true;
-  if (/<summary>/i.test(trimmed)) return true;
-  // 典型摘要结构：Main Topic + Key Actions/Decisions/Conclusions 同时出现
-  if (
-    /main topic/i.test(trimmed) &&
-    /(key actions|key decisions|conclusions|key conclusions)/i.test(trimmed)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-/** 摘要检测缓冲上限：超过该长度仍未命中摘要特征则视为正常正文，立即放行。 */
-const SUMMARY_DETECT_THRESHOLD = 200;
-
 /** 单条工具事件里单个字符串字段的上限；超长输出会进 run_events 并走 SSE。 */
 const MAX_TOOL_TEXT_CHARS = 2_000;
 /** 单条工具事件最多保留的数组元素/对象字段数。 */
@@ -876,10 +850,6 @@ export async function createDeepAgentRuntime(
       // 本轮已经作为 assistant.delta 实时流出的字符数；用于在「先出正文、后出工具调用」
       // 这种少见情况下补发旁白时去掉已流出的前缀，避免重复。
       let turnEmittedLen = 0;
-      // 摘要检测：每轮开头先缓冲一小段文本，命中摘要特征则整轮丢弃，
-      // 并发出 context.compressing 通知前端显示「正在压缩上下文」。
-      let turnIsSummary = false;
-      let turnBuffer = '';
       // 单次 run 内只发一次 context.compressing，避免重复闪烁。
       let summaryNotified = false;
       for await (const [mode, payload] of stream) {
@@ -907,43 +877,14 @@ export async function createDeepAgentRuntime(
           if (text) {
             turnText += text;
             if (!turnHasToolCalls) {
-              if (turnIsSummary) {
-                // 已确认是摘要：直接丢弃，不流向前端。
-              } else if (turnEmittedLen === 0) {
-                // 检测阶段：缓冲本轮开头文本，判断是否为摘要。
-                turnBuffer += text;
-                if (isSummaryText(turnBuffer)) {
-                  turnIsSummary = true;
-                  turnBuffer = '';
-                  if (!summaryNotified) {
-                    summaryNotified = true;
-                    yield {
-                      runId: options.runId,
-                      timestamp: timestamp(),
-                      type: 'context.compressing',
-                    };
-                  }
-                } else if (turnBuffer.length >= SUMMARY_DETECT_THRESHOLD) {
-                  // 超过阈值仍未命中摘要特征，判定为正常正文，一次性放行缓冲内容。
-                  turnEmittedLen += turnBuffer.length;
-                  yield {
-                    runId: options.runId,
-                    timestamp: timestamp(),
-                    type: 'assistant.delta',
-                    text: turnBuffer,
-                  };
-                  turnBuffer = '';
-                }
-              } else {
-                // 已确认是正常正文：逐 token 实时流出。
-                turnEmittedLen += text.length;
-                yield {
-                  runId: options.runId,
-                  timestamp: timestamp(),
-                  type: 'assistant.delta',
-                  text,
-                };
-              }
+              // 正常正文：逐 token 实时流出。
+              turnEmittedLen += text.length;
+              yield {
+                runId: options.runId,
+                timestamp: timestamp(),
+                type: 'assistant.delta',
+                text,
+              };
             }
           }
           // 真实用量只在该次模型调用的最后一个 chunk 上出现；
@@ -960,22 +901,9 @@ export async function createDeepAgentRuntime(
                 text: turnText.slice(turnEmittedLen),
               };
             }
-            // 本轮结束时若仍有未放行的检测缓冲（短文本未达阈值），作为正文发出。
-            if (!turnIsSummary && turnBuffer.length > 0 && turnEmittedLen === 0) {
-              turnEmittedLen += turnBuffer.length;
-              yield {
-                runId: options.runId,
-                timestamp: timestamp(),
-                type: 'assistant.delta',
-                text: turnBuffer,
-              };
-              turnBuffer = '';
-            }
             turnText = '';
             turnEmittedLen = 0;
             turnHasToolCalls = false;
-            turnIsSummary = false;
-            turnBuffer = '';
             yield {
               runId: options.runId,
               timestamp: timestamp(),
@@ -994,6 +922,22 @@ export async function createDeepAgentRuntime(
                 }),
               );
             }
+          }
+          continue;
+        }
+        if (mode === 'values') {
+          // 检测 summarization 发生：deepagents 的 SummarizationMiddleware
+          // 通过 Command.update 写 _summarizationEvent，values 模式里能看到新 state。
+          // 之前靠文本正则匹配模型输出是拍脑袋方案；现在用 middleware 注入的
+          // StateEvent 做确定性检测，语言无关。
+          const state = payload as Record<string, unknown>;
+          if (!summaryNotified && state._summarizationEvent) {
+            summaryNotified = true;
+            yield {
+              runId: options.runId,
+              timestamp: timestamp(),
+              type: 'context.compressing' as const,
+            };
           }
           continue;
         }
@@ -1078,18 +1022,20 @@ export async function createDeepAgentRuntime(
           continue;
         }
 
-        if (Array.isArray(payload.todos)) {
-          const serialized = JSON.stringify(payload.todos);
+        if (Array.isArray((payload as Record<string, unknown>).todos)) {
+          const state = payload as Record<string, unknown>;
+          const todos = state.todos as Array<{
+            content: string;
+            status: 'pending' | 'in_progress' | 'completed';
+          }>;
+          const serialized = JSON.stringify(todos);
           if (serialized !== lastTodos) {
             lastTodos = serialized;
             yield {
               runId: options.runId,
               timestamp: timestamp(),
-              type: 'todo.updated',
-              todos: payload.todos as Array<{
-                content: string;
-                status: 'pending' | 'in_progress' | 'completed';
-              }>,
+              type: 'todo.updated' as const,
+              todos,
             };
           }
         }

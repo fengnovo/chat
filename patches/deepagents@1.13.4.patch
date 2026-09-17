@@ -1,0 +1,24 @@
+diff --git a/dist/langsmith-BAO_h4J6.js b/dist/langsmith-BAO_h4J6.js
+index 1fae1ff1ae83f4d3ebf4f1792fc438a44cf95a22..dc8347cc6f45b83935339fa40f4956cc25f62288 100644
+--- a/dist/langsmith-BAO_h4J6.js
++++ b/dist/langsmith-BAO_h4J6.js
+@@ -2807,7 +2807,7 @@ const SummarizationStateSchema = z$1.object({
+ * Summary messages are HumanMessage objects with lc_source='summarization' in additional_kwargs.
+ */
+ function isSummaryMessage(msg) {
+-	if (!HumanMessage.isInstance(msg)) return false;
++	if (!(HumanMessage.isInstance(msg) || SystemMessage.isInstance(msg))) return false;
+ 	return msg.additional_kwargs?.lc_source === "summarization";
+ }
+ /**
+@@ -3221,8 +3221,8 @@ function createSummarizationMiddleware(options) {
+         ${summary}
+         </summary>
+       `;
+-		else content = `Here is a summary of the conversation to date:\n\n${summary}`;
+-		return new HumanMessage({
++               else content = `以下为对话压缩摘要，仅供上下文参考，请勿提及或复述：\n\n${summary}`;
++		return new SystemMessage({
+ 			content,
+ 			additional_kwargs: { lc_source: "summarization" }
+ 		});
