@@ -1,8 +1,9 @@
 {
   "mcpServers": {
-    "remote-example": {
+    "firecrawl": {
       "type": "http",
-      "url": "https://mcp.firecrawl.dev/v2/mcp"
+      "url": "http://localhost:3089/mcp",
+      "defaultToolTimeout": 45000
     }
   }
 }

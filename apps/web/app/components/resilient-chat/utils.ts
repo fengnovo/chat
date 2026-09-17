@@ -6,6 +6,8 @@ import type {
   HistoryMessage,
   ResilientMessage,
   RunSummary,
+  SubagentCard,
+  SubagentEvent,
   TaskFailure,
 } from './types';
 
@@ -80,6 +82,96 @@ function messagesFromHistory(messages: HistoryMessage[]): ResilientMessage[] {
       ...(message.citations?.length ? [{ type: 'data-citations' as const, data: { citations: message.citations } }] : []),
     ],
   }));
+}
+
+/**
+ * 把子 Agent 事件折叠进卡片列表：
+ * - started：首轮创建 running 卡片；评审不达标后的重派（attempt 递增）把同一张卡片
+ *   重置为 running 并保留历史 reviews，重派轨迹不丢失；
+ * - completed：按 subagentId 更新该轮结果；
+ * - reviewed：按 attempt 记录评审结论（同一轮重复事件幂等覆盖）。
+ * 找不到对应 started 的孤立 completed/reviewed 事件忽略。
+ */
+function foldSubagentCard(cards: SubagentCard[], event: SubagentEvent): SubagentCard[] {
+  if (event.type === 'subagent.started') {
+    const existing = cards.find((item) => item.subagentId === event.subagentId);
+    if (existing && event.attempt > existing.attempt) {
+      // 评审不达标后的重派：回到运行中，保留历轮评审，清空该轮结果字段。
+      return cards.map((card) =>
+        card.subagentId === event.subagentId
+          ? {
+              ...card,
+              attempt: event.attempt,
+              role: event.role,
+              description: event.description,
+              status: 'running',
+              summary: null,
+              toolCalls: 0,
+              durationMs: null,
+            }
+          : card,
+      );
+    }
+    const card: SubagentCard = {
+      subagentId: event.subagentId,
+      role: event.role,
+      description: event.description,
+      attempt: event.attempt,
+      background: event.background ?? false,
+      status: 'running',
+      summary: null,
+      toolCalls: 0,
+      durationMs: null,
+      reviews: [],
+    };
+    if (!existing) return [...cards, card];
+    // 同轮 started 重放（如重连）：幂等覆盖但保留已收到的评审。
+    return cards.map((item) =>
+      item.subagentId === event.subagentId
+        ? { ...card, reviews: item.reviews.filter((review) => review.attempt < event.attempt) }
+        : item,
+    );
+  }
+  if (event.type === 'subagent.completed') {
+    return cards.map((card) =>
+      card.subagentId === event.subagentId
+        ? {
+            ...card,
+            attempt: event.attempt,
+            status: event.status,
+            summary: event.summary,
+            toolCalls: event.toolCalls,
+            durationMs: event.durationMs,
+          }
+        : card,
+    );
+  }
+  // subagent.reviewed
+  return cards.map((card) => {
+    if (card.subagentId !== event.subagentId) return card;
+    const review = {
+      attempt: event.attempt,
+      passed: event.passed,
+      score: event.score,
+      feedback: event.feedback,
+      checklist: event.checklist,
+    };
+    const others = card.reviews.filter((item) => item.attempt !== event.attempt);
+    return { ...card, reviews: [...others, review].sort((a, b) => a.attempt - b.attempt) };
+  });
+}
+
+/** 从消息 parts 恢复子 Agent 卡片（data-subagent 随消息持久化，刷新后重建）。 */
+function subagentCardsFromMessages(messages: ResilientMessage[]): SubagentCard[] {
+  let cards: SubagentCard[] = [];
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === 'data-subagent') {
+        cards = foldSubagentCard(cards, part.data);
+      }
+    }
+  }
+  return cards;
 }
 
 function isPendingStatus(status: RunStatus) {
@@ -161,11 +253,13 @@ function formatSessionTime(value: string) {
 export {
   deriveAgentActivity,
   failureFromRun,
+  foldSubagentCard,
   formatDuration,
   formatSessionTime,
   isPendingStatus,
   messageText,
   messagesFromHistory,
+  subagentCardsFromMessages,
   toolCallSummary,
   toolDetailText,
 };

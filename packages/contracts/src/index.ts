@@ -170,6 +170,61 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     stats: retrievalStatsSchema,
   }),
   z.object({ ...eventBase, type: z.literal('todo.updated'), todos: z.array(todoSchema) }),
+  /**
+   * 子 Agent 编排：主 Agent 通过 spawn_subagent 工具派发的子任务生命周期。
+   * started 在每轮尝试派发时发出，completed 在该轮子 Agent 结束（含失败/超时）时发出，
+   * reviewed 是评分器对 completed 产出的评审结论；不达标时工具会带 feedback 重派，
+   * 同 subagentId 会出现 attempt=2、3 的新一轮 started/completed/reviewed。
+   * 子 Agent 自身的工具/模型事件不逐条上抛，只在 completed 里聚合计数。
+   */
+  z.object({
+    ...eventBase,
+    type: z.literal('subagent.started'),
+    subagentId: z.string().min(1).max(64),
+    /** 角色名：主 Agent 现场撰写的 role_prompt 首行（截断），用于卡片标题。 */
+    role: z.string().min(1).max(200),
+    /** 任务简述：task 文本截断，供卡片展开前的一句话说明。 */
+    description: z.string().max(2_000),
+    /** 第几轮尝试：首轮为 1，评审不达标重派时递增（上限 3）。 */
+    attempt: z.number().int().positive(),
+    /** 是否为后台异步任务（spawn_subagent 的 background=true）：工具立即返回，
+     *  主 Agent 先给阶段性回复，任务在同 run 内继续执行、完成后自动续轮汇总。 */
+    background: z.boolean().optional(),
+  }),
+  z.object({
+    ...eventBase,
+    type: z.literal('subagent.completed'),
+    subagentId: z.string().min(1).max(64),
+    /** 该完成事件对应第几轮尝试。 */
+    attempt: z.number().int().positive(),
+    status: z.enum(['completed', 'failed', 'timeout']),
+    /** 回传给主 Agent 的摘要文本（已 clamp 到 2000 字）。 */
+    summary: z.string().max(2_000),
+    toolCalls: z.number().int().nonnegative(),
+    durationMs: z.number().int().nonnegative(),
+  }),
+  z.object({
+    ...eventBase,
+    type: z.literal('subagent.reviewed'),
+    subagentId: z.string().min(1).max(64),
+    /** 被评审的是第几轮尝试的产出。 */
+    attempt: z.number().int().positive(),
+    /** 是否达到验收标准；false 时工具会带 feedback 重派（未达上限的话）。 */
+    passed: z.boolean(),
+    /** 0-100 质量分（仅参考，通过线由评分器按验收标准判断）。 */
+    score: z.number().min(0).max(100),
+    /** 不达标时的具体整改意见；通过时为空串。 */
+    feedback: z.string().max(1_000),
+    /** 逐条验收项的达成情况，供卡片展示与下轮整改对照。 */
+    checklist: z
+      .array(
+        z.object({
+          item: z.string().min(1).max(300),
+          met: z.boolean(),
+        }),
+      )
+      .max(20),
+  }),
   z.object({
     ...eventBase,
     type: z.literal('approval.required'),

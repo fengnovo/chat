@@ -4,4 +4,5 @@ export * from './docker-sandbox.js';
 export * from './e2b-sandbox.js';
 export * from './mcp-client-cache.js';
 export * from './model-router.js';
+export * from './subagent.js';
 export * from './types.js';

@@ -5,6 +5,7 @@
   "description": "",
   "scripts": {
     "setup": "pnpm install",
+    "dev:close": "sh scripts/free-dev-close.sh",
     "dev": "node --env-file-if-exists=.env scripts/free-dev-ports.mjs && node --env-file-if-exists=.env node_modules/concurrently/dist/bin/concurrently.js -n web,api,worker -c blue,green,magenta \"pnpm --filter web dev\" \"pnpm --filter @repo/agent-api dev\" \"pnpm --filter @repo/agent-worker dev\"",
     "dev:api": "pnpm --filter @repo/agent-api dev",
     "dev:worker": "pnpm --filter @repo/agent-worker dev",

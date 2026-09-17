@@ -91,6 +91,57 @@ function agentEventToTrace(event: AgentEvent): PipelineEvent | null {
         detail: `${completed}/${event.todos.length} 项已完成`,
       };
     }
+    case 'subagent.started':
+      return {
+        ...base,
+        stage: 'request',
+        status: 'running',
+        title: event.background
+          ? event.attempt > 1
+            ? `后台子 Agent 整改重派 · 第 ${event.attempt} 轮 · ${event.role}`
+            : `后台子 Agent 已启动 · ${event.role}`
+          : event.attempt > 1
+            ? `子 Agent 整改重派 · 第 ${event.attempt} 轮 · ${event.role}`
+            : `子 Agent 已启动 · ${event.role}`,
+        detail: event.description,
+      };
+    case 'subagent.completed': {
+      // 摘要可能长达 2000 字，过程流里只显示简短结论；完整摘要在子 Agent 卡片里。
+      const brief = event.summary.length > 160
+        ? `${event.summary.slice(0, 159)}…`
+        : event.summary;
+      return {
+        ...base,
+        stage: 'verify',
+        status: event.status === 'completed' ? 'success' : 'error',
+        title:
+          event.status === 'completed'
+            ? event.attempt > 1
+              ? `子 Agent 第 ${event.attempt} 轮已完成，等待评审`
+              : '子 Agent 已完成，等待评审'
+            : event.status === 'timeout'
+              ? '子 Agent 已超时'
+              : '子 Agent 执行失败',
+        detail: brief,
+      };
+    }
+    case 'subagent.reviewed': {
+      const missed = event.checklist.filter((item) => !item.met);
+      return {
+        ...base,
+        stage: 'verify',
+        status: event.passed ? 'success' : 'warning',
+        title: event.passed
+          ? `第 ${event.attempt} 轮评审通过（${event.score} 分）`
+          : `第 ${event.attempt} 轮评审未达标（${event.score} 分）`,
+        detail: event.passed
+          ? '子任务验收通过'
+          : event.feedback ||
+            (missed.length > 0
+              ? `未满足：${missed.map((item) => item.item).join('；')}`.slice(0, 160)
+              : '未达标，准备整改重派'),
+      };
+    }
     case 'approval.required':
       return {
         ...base,

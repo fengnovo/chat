@@ -37,6 +37,15 @@ function chunksFrom(runId: string, events: PersistedAgentEvent[]): UiChunk[] {
       const { citations: _citations, ...traceEvent } = event;
       agentData = traceEvent as PersistedAgentEvent;
     }
+    if (
+      event.type === 'subagent.started' ||
+      event.type === 'subagent.completed' ||
+      event.type === 'subagent.reviewed'
+    ) {
+      // 子 Agent 事件：持久化为 data-subagent part（刷新后可从消息 parts 恢复卡片），
+      // 同时下方 data-agent 过程流照常保留，供执行面板实时追踪。
+      chunks.push({ type: 'data-subagent', data: event, transient: false });
+    }
     chunks.push({ type: 'data-agent', data: agentData, transient: true });
     if (
       !finished &&

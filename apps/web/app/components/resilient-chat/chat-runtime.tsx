@@ -62,15 +62,18 @@ import type {
   RunSummary,
   SessionDialog,
   SessionHistory,
+  SubagentCard,
   TaskFailure,
   WebSessionSummary,
 } from './types';
 import {
   deriveAgentActivity,
   failureFromRun,
+  foldSubagentCard,
   isPendingStatus,
   messageText,
   messagesFromHistory,
+  subagentCardsFromMessages,
 } from './utils';
 
 const emptyActivity: AgentActivityState = {
@@ -131,6 +134,10 @@ function ChatRuntime() {
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
+  // 子 Agent 卡片：从持久化消息的 data-subagent parts 恢复（历史接口不回传，见方案偏差）。
+  const [subagentCards, setSubagentCards] = useState<SubagentCard[]>(() =>
+    subagentCardsFromMessages(conversation.messages),
+  );
   const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
   const [historyFiles, setHistoryFiles] = useState<TouchedFile[]>([]);
   const [generatedTokens, setGeneratedTokens] = useState(0);
@@ -391,6 +398,10 @@ function ChatRuntime() {
     throttle: 24,
     transport,
     onData: (part) => {
+      if (part.type === 'data-subagent') {
+        // 子 Agent 事件：折叠进执行面板卡片（started 显示运行中，completed 落定结果）。
+        setSubagentCards((current) => foldSubagentCard(current, part.data));
+      }
       if (part.type === 'data-agent') {
         const event = part.data;
         const mapped = agentEventToTrace(event);
@@ -654,8 +665,9 @@ function ChatRuntime() {
     };
   }, [activity, activityClock, generatedTokens, isBusy]);
 
-  // 与 AgentStatusPanel 的显示条件保持一致：有过程记录才显示。
-  const processPanelVisible = agentActivity.entries.length > 0;
+  // 与 AgentStatusPanel 的显示条件保持一致：有过程记录或子 Agent 卡片才显示。
+  const processPanelVisible =
+    agentActivity.entries.length > 0 || subagentCards.length > 0;
 
   useEffect(() => {
     // 已经有缓存就先直接渲染，切回页面时不再重复拉取会话列表
@@ -843,7 +855,7 @@ function ChatRuntime() {
 
   // 执行面板：嵌入本轮 assistant 消息体顶部，与正文同列、顶边不高于头像。
   const processPanel = (
-    <AgentStatusPanel busy={isBusy} status={agentActivity} />
+    <AgentStatusPanel busy={isBusy} status={agentActivity} subagents={subagentCards} />
   );
 
   // 从工具调用记录里提取 AI 操作过的文件，按路径去重，保留最后一次操作的内容。
@@ -953,6 +965,7 @@ function ChatRuntime() {
       setPendingInterrupt(null);
       setAgentTodos([]);
       setActivity(emptyActivity);
+      setSubagentCards(subagentCardsFromMessages(restoredMessages));
       setGeneratedTokens(0);
       setInteractionError(null);
       setRunFailure(failureFromRun(latestRun));
@@ -979,6 +992,7 @@ function ChatRuntime() {
     // 新消息开始时清掉上一轮残留的过程记录/任务计划，避免"你好"也先冒出上轮的工具执行。
     setActivity(emptyActivity);
     setAgentTodos([]);
+    setSubagentCards([]);
     setGeneratedTokens(0);
     sessionRef.current.addUserMessage(trimmed);
     setTrace([
@@ -1017,6 +1031,7 @@ function ChatRuntime() {
     setRunFailure(null);
     setActivity(emptyActivity);
     setAgentTodos([]);
+    setSubagentCards([]);
     setGeneratedTokens(0);
     setTrace([
       localEvent(
@@ -1099,6 +1114,7 @@ function ChatRuntime() {
     setPendingInterrupt(null);
     setAgentTodos([]);
     setActivity(emptyActivity);
+    setSubagentCards([]);
     setHistoryFiles([]);
     setGeneratedTokens(0);
     setInteractionError(null);

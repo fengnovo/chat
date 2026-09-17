@@ -160,3 +160,62 @@ test('retrieval completion keeps the transient trace and emits bounded persisten
   assert.equal((trace?.data as { citations?: unknown[] }).citations, undefined);
   assert.equal(JSON.stringify(citationChunk).includes('passage'), false);
 });
+
+test('subagent lifecycle emits persistent data-subagent parts and keeps the agent trace', () => {
+  // 子 Agent 卡片依赖 data-subagent part 持久化（transient: false），
+  // 刷新后才能从消息 parts 重建；同时 data-agent 过程流必须照常保留。
+  const events: PersistedAgentEvent[] = [
+    {
+      runId,
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      type: 'subagent.started',
+      subagentId: 'sub-1',
+      role: '依赖调研员',
+      description: '检索依赖的最新版本',
+      attempt: 1,
+    },
+    {
+      runId,
+      seq: 2,
+      timestamp: new Date().toISOString(),
+      type: 'subagent.completed',
+      subagentId: 'sub-1',
+      attempt: 1,
+      status: 'completed',
+      summary: '已确认版本',
+      toolCalls: 3,
+      durationMs: 12_345,
+    },
+    {
+      runId,
+      seq: 3,
+      timestamp: new Date().toISOString(),
+      type: 'subagent.reviewed',
+      subagentId: 'sub-1',
+      attempt: 1,
+      passed: true,
+      score: 92,
+      feedback: '',
+      checklist: [{ item: '给出依赖版本', met: true }],
+    },
+  ];
+
+  const chunks = chunksFrom(runId, events);
+  const subagentChunks = chunks.filter((chunk) => chunk.type === 'data-subagent');
+  assert.equal(subagentChunks.length, 3);
+  assert.equal(subagentChunks.every((chunk) => chunk.transient === false), true);
+  assert.equal(
+    (subagentChunks[0]?.data as { type?: string }).type,
+    'subagent.started',
+  );
+  assert.equal(
+    (subagentChunks[1]?.data as { status?: string }).status,
+    'completed',
+  );
+  assert.equal(
+    (subagentChunks[2]?.data as { type?: string }).type,
+    'subagent.reviewed',
+  );
+  assert.equal(chunks.filter((chunk) => chunk.type === 'data-agent').length, 3);
+});

@@ -13,6 +13,12 @@ import { z } from 'zod';
 
 import { getSharedMcpToolsForConfigPath } from './mcp-client-cache.js';
 import { createResilientModelRouter } from './model-router.js';
+import {
+  createBackgroundRunContext,
+  createSpawnSubagentTool,
+  type BackgroundRunContext,
+  type BackgroundTaskResult,
+} from './subagent.js';
 import type {
   AgentResumeInput,
   AgentTelemetry,
@@ -45,7 +51,9 @@ const DEFAULT_THREAD_MODEL_CALL_LIMIT = 3_000;
 type AgentStreamEvent =
   | ['values', Record<string, unknown>]
   | ['messages', [unknown, Record<string, unknown>]]
-  | ['tools', Record<string, unknown>];
+  | ['tools', Record<string, unknown>]
+  // custom 流：spawn_subagent 工具内部经 writer 推来的 subagent.* 事件。
+  | ['custom', unknown];
 
 function timestamp() {
   return new Date().toISOString();
@@ -259,11 +267,85 @@ export function normalizeToolInput(value: unknown): unknown {
 }
 
 /**
+ * LangGraph `Command` 是状态更新工具（官方 todoListMiddleware 的 write_todos 等）
+ * 的返回载体：`{ update: { todos, messages, ... } }`。它是给图引擎的指令，
+ * 不是给用户看的工具产物——直接按普通对象截断会把 todo 项/ToolMessage
+ * 渲染成 [object Object] / [object ToolMessage] 的噪音 dump。
+ */
+function isLangGraphCommand(value: unknown): value is {
+  update?: Record<string, unknown>;
+} {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.lg_name === 'Command' ||
+    (record.lc_direct_tool_output === true &&
+      typeof record.update === 'object' &&
+      record.update !== null)
+  );
+}
+
+/** 把状态更新类工具结果转成一行人类可读摘要。 */
+export function summarizeCommandOutput(value: unknown): string | null {
+  if (!isLangGraphCommand(value)) return null;
+  const update = value.update ?? {};
+  if (Array.isArray(update.todos)) {
+    const todos = update.todos as Array<{ status?: string }>;
+    const completed = todos.filter((item) => item?.status === 'completed').length;
+    const inProgress = todos.filter((item) => item?.status === 'in_progress').length;
+    const pending = todos.length - completed - inProgress;
+    const parts = [`${completed} 已完成`];
+    if (inProgress > 0) parts.push(`${inProgress} 进行中`);
+    if (pending > 0) parts.push(`${pending} 待开始`);
+    return `任务清单已更新：${parts.join(' · ')}（共 ${todos.length} 项）`;
+  }
+  const keys = Object.keys(update);
+  return keys.length > 0 ? `状态已更新：${keys.join('、')}` : '状态已更新';
+}
+
+type TodoStatus = 'pending' | 'in_progress' | 'completed';
+interface TodoItem {
+  content: string;
+  status: TodoStatus;
+}
+
+/**
+ * 正常结束收口：模型输出最终答复（最后一轮无工具调用）时，常常忘记把最后一个
+ * todo 标成 completed——官方 todoListMiddleware 没有自动收口机制，全靠模型自觉。
+ * Agent 已正常交付最终答案意味着剩余项要么完成、要么被合并/跳过，
+ * 统一收口为 completed；无剩余项时返回 null（调用方不补发事件）。
+ * 失败/取消/等人审路径不得调用本函数。
+ */
+export function closeRemainingTodos(
+  todos: unknown,
+): TodoItem[] | null {
+  if (!Array.isArray(todos) || todos.length === 0) return null;
+  const items = todos.filter(
+    (item): item is TodoItem =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof (item as { content?: unknown }).content === 'string' &&
+      ['pending', 'in_progress', 'completed'].includes(
+        String((item as { status?: unknown }).status),
+      ),
+  );
+  if (items.every((item) => item.status === 'completed')) return null;
+  return items.map((item) =>
+    item.status === 'completed' ? item : { ...item, status: 'completed' as const },
+  );
+}
+
+/**
  * 工具结果通常是序列化后的 ToolMessage，真正的打印内容在 content；
  * 直接落库会把 lc_kwargs / metadata 等噪音一起写进事件表。
  */
 export function normalizeToolOutput(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || !('content' in value)) {
+  if (!value || typeof value !== 'object') {
+    return boundedToolPayload(value);
+  }
+  const commandSummary = summarizeCommandOutput(value);
+  if (commandSummary !== null) return commandSummary;
+  if (!('content' in value)) {
     return boundedToolPayload(value);
   }
   const content = (value as { content: unknown }).content;
@@ -511,6 +593,14 @@ export async function createDeepAgentRuntime(
   // 逐个包一层：MCP 工具的业务错误（抓不到页面、超时、5xx 等）转成可恢复结果，
   // 不再让单个外部工具失败冒泡成 run.failed。name/schema 保持不变，审批规则不受影响。
   const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools].map(wrapMcpToolAsRecoverable);
+  // 子 Agent 派发工具（P1 同步模式）：工具池交给策略层过滤，事件经 custom 流透出。
+  const spawnSubagentTool = createSpawnSubagentTool({
+    runId: options.runId,
+    router: { primary: router.primary, middleware: router.middleware },
+    tools: mcpTools,
+    backend: options.backend,
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
   const protectedToolApproval = { allowedDecisions: ['approve', 'reject'] };
   // 会话级自动批准（用户点过“本会话都允许”）时，所有工具一律放行；
   // 否则写操作、命令、MCP 工具都要逐项审批（graphrag_search 只读，始终免批）。
@@ -562,7 +652,7 @@ export async function createDeepAgentRuntime(
     model: router.primary,
     checkpointer: options.checkpointer as never,
     backend: options.backend as never,
-    tools: [createAskUserTool(), ...mcpTools] as never,
+    tools: [createAskUserTool(), spawnSubagentTool, ...mcpTools] as never,
     skills: options.skills ?? [],
     memory: options.memory ?? [],
     systemPrompt: [
@@ -586,6 +676,7 @@ export async function createDeepAgentRuntime(
             '遇到会显著改变结果且无法从上下文判断的问题时使用 ask_user；其余情况按最合理的假设直接作答，并说明所依据的假设。',
           ]),
       'todo 必须实时同步进度：每完成一项就立即调用 write_todos，把该项标为 completed、并把下一项标为 in_progress，然后才开始下一项。严禁攒到最后一次性把多项标记完成——用户依赖这个列表看到当前进展。',
+      '独立、可整体交付的调研/检索/分析/验证类子任务可用 spawn_subagent 派发：role_prompt 现场写清职责边界与输出要求，task 写清目标与可核对的验收标准（工具内部有评审器按这些标准自动验收、不达标会自动重派，返回即已通过评审，你不必再重复验收），关键背景/文件路径放 context；工具只回传子 Agent 的最终摘要，拿到摘要后再继续主任务，不要把主对话历史整段复述给它。多个相互独立的耗时任务可在同一条消息里都带 background=true 并行后台执行：工具会立即返回 taskId，你先给用户一句阶段性说明，任务完成后系统自动续轮交回摘要，你再做最终汇总；期间不要空等、不要重复派发。',
       '注意收敛：构建成功并通过必要的验证后就结束本轮，不要为了追求完美反复重写同一文件。改动应聚焦当前 todo，一次批量写多个文件而不是逐个追加。',
       ...(backendMode === 'docker'
         ? [
@@ -634,18 +725,148 @@ export async function createDeepAgentRuntime(
       backend: backendMode,
       cwd: options.workspacePath,
     },
-    streamMode: ['values', 'messages', 'tools'] as Array<'values' | 'messages' | 'tools'>,
+    streamMode: ['values', 'messages', 'tools', 'custom'] as Array<
+      'values' | 'messages' | 'tools' | 'custom'
+    >,
     ...(options.signal ? { signal: options.signal } : {}),
   };
 
+  /** 后台任务事件等待轮询间隔。 */
+  const BACKGROUND_EVENT_POLL_MS = 200;
+  /** 后台续轮上限：防止模型在 follow-up 里反复后台派发导致 run 无限延长。 */
+  const MAX_BACKGROUND_FOLLOWUPS = 2;
+
+  /** 后台任务全部结束后注入的续轮消息：触发主 Agent 基于摘要做最终汇总。 */
+  function buildBackgroundFollowup(results: BackgroundTaskResult[], finalRound: boolean): HumanMessage {
+    const blocks = results
+      .map(
+        (result, index) =>
+          `${index + 1}. 角色：${result.role}\n结果摘要：\n${result.summary}`,
+      )
+      .join('\n\n');
+    return new HumanMessage(
+      [
+        '【后台子任务结果（系统自动回灌，不是用户新提问）】以下后台子任务已全部结束，',
+        '请直接基于这些摘要完成你之前向用户承诺的最终汇总（保留关键数据与来源链接，不要复述任务过程）。',
+        '',
+        blocks,
+        finalRound
+          ? '这是最后一轮：直接给出最终回复，不要再调用 spawn_subagent（同步或后台都不要）。'
+          : '若信息仍有明显缺口，最多再补一轮；否则直接给出最终回复。',
+      ].join('\n'),
+    );
+  }
+
+  /** 后台事件必须过契约校验后才透出（与图 custom 流路径一致）。 */
+  async function* yieldBackgroundEvents(events: AgentEvent[]): AsyncIterable<AgentEvent> {
+    for (const event of events) {
+      const parsed = agentEventSchema.safeParse(event);
+      if (parsed.success) yield parsed.data;
+    }
+  }
+
+  /** 等待后台任务期间把 subagent.* 事件实时透出（卡片持续转动/收口）。 */
+  async function* pumpBackgroundEvents(
+    backgroundCtx: BackgroundRunContext,
+  ): AsyncIterable<AgentEvent> {
+    while (backgroundCtx.size() > 0) {
+      yield* yieldBackgroundEvents(backgroundCtx.drainEvents());
+      await new Promise((resolve) => setTimeout(resolve, BACKGROUND_EVENT_POLL_MS));
+    }
+    yield* yieldBackgroundEvents(backgroundCtx.drainEvents());
+  }
+
+  type ClosedTodos = Array<{
+    content: string;
+    status: 'pending' | 'in_progress' | 'completed';
+  }> | null;
+
+  type GraphPassOutcome =
+    | { kind: 'interrupted' }
+    | { kind: 'done'; closedTodos: ClosedTodos }
+    | { kind: 'error'; error: unknown };
+
+  /**
+   * execute：多 pass 驱动。
+   * - 每个 pass 是一次图执行（首轮或后台续轮）；
+   * - pass 正常结束但有后台任务未完成时：等任务结束（事件继续推送）→ 注入结果消息续一轮；
+   * - 人审挂起/出错/取消：中止所有后台任务，避免孤儿子 Agent 继续消耗 MCP/模型配额。
+   */
   async function* execute(input: unknown): AsyncIterable<AgentEvent> {
+    const backgroundCtx = createBackgroundRunContext(options.signal);
+    let lastClosedTodos: ClosedTodos = null;
+    try {
+      let passInput: unknown = input;
+      for (let followup = 0; ; followup += 1) {
+        const outcome: GraphPassOutcome = yield* runGraphPass(passInput, backgroundCtx);
+        if (outcome.kind === 'interrupted') {
+          await backgroundCtx.abortAll();
+          return;
+        }
+        if (outcome.kind === 'error') throw outcome.error;
+        lastClosedTodos = outcome.closedTodos;
+
+        if (backgroundCtx.size() > 0 && followup < MAX_BACKGROUND_FOLLOWUPS) {
+          yield* pumpBackgroundEvents(backgroundCtx);
+          const results = await backgroundCtx.settled();
+          yield* yieldBackgroundEvents(backgroundCtx.drainEvents());
+          passInput = {
+            messages: [
+              buildBackgroundFollowup(results, followup + 1 >= MAX_BACKGROUND_FOLLOWUPS),
+            ],
+          };
+          continue;
+        }
+        // 达到续轮上限仍有任务（模型在最后一轮仍派发后台任务）：收割掉，run 正常结束。
+        if (backgroundCtx.size() > 0) await backgroundCtx.abortAll();
+        if (lastClosedTodos) {
+          yield {
+            runId: options.runId,
+            timestamp: timestamp(),
+            type: 'todo.updated',
+            todos: lastClosedTodos,
+          };
+        }
+        safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'completed' }));
+        yield { runId: options.runId, timestamp: timestamp(), type: 'run.completed' };
+        return;
+      }
+    } catch (error) {
+      await backgroundCtx.abortAll();
+      if (options.signal?.aborted) {
+        safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'cancelled' }));
+        yield { runId: options.runId, timestamp: timestamp(), type: 'run.cancelled' };
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const code = isStepLimitError(error) ? 'AGENT_STEP_LIMIT' : 'AGENT_RUN_FAILED';
+      safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'failed', code }));
+      yield {
+        runId: options.runId,
+        timestamp: timestamp(),
+        type: 'run.failed',
+        code,
+        message,
+      };
+    }
+  }
+
+  async function* runGraphPass(
+    passInput: unknown,
+    backgroundCtx: BackgroundRunContext,
+  ): AsyncIterable<AgentEvent> {
     let interruptRequest: AgentInterruptRequest | null = null;
     let interruptId: string = randomUUID();
-    let lastTodos = '';
     // invocationId -> on_tool_start 时间戳，用于配对计算工具耗时。
     const toolStartedAt = new Map<string, number>();
+    // 每个 pass 独立的 todo 去重序列（续轮首帧可能重放相同 todos）。
+    let lastTodos = '';
+    const passConfig = {
+      ...config,
+      configurable: { ...(config.configurable as Record<string, unknown>), backgroundCtx },
+    };
     try {
-      const stream = await runnable.stream(input, config);
+      const stream = await runnable.stream(passInput, passConfig);
       // 按「模型调用」为单位区分正文与旁白：带工具调用的轮次里模型吐出的文字是过程旁白
       // （应进过程区），不带工具调用的那一轮才是最终答复（必须逐 token 实时流式输出）。
       // 工具调用块可能晚于文字块到达，所以文字先按正文实时流出，一旦本轮出现工具调用，
@@ -662,6 +883,9 @@ export async function createDeepAgentRuntime(
       // 单次 run 内只发一次 context.compressing，避免重复闪烁。
       let summaryNotified = false;
       for await (const [mode, payload] of stream) {
+        // 后台任务事件（started/completed/reviewed）不经过图的 custom 流，
+        // 在每个 chunk 边界排空一次；等待阶段由 pumpBackgroundEvents 独立透出。
+        yield* yieldBackgroundEvents(backgroundCtx.drainEvents());
         while (pendingRouterEvents.length > 0) {
           const event = pendingRouterEvents.shift();
           if (event) yield event;
@@ -846,6 +1070,14 @@ export async function createDeepAgentRuntime(
           continue;
         }
 
+        if (mode === 'custom') {
+          // 子 Agent 事件：spawn_subagent 工具经 writer 推入 custom 流，
+          // 校验后原样透传（worker 持久化 + API 映射 data-subagent），不落入 values 分支。
+          const parsed = agentEventSchema.safeParse(payload);
+          if (parsed.success) yield parsed.data;
+          continue;
+        }
+
         if (Array.isArray(payload.todos)) {
           const serialized = JSON.stringify(payload.todos);
           if (serialized !== lastTodos) {
@@ -885,16 +1117,22 @@ export async function createDeepAgentRuntime(
         const event = pendingRouterEvents.shift();
         if (event) yield event;
       }
-      if (!interruptRequest) {
-        const state = (await runnable.getState(config)) as {
-          tasks?: Array<{ interrupts?: Array<{ id?: string; value: AgentInterruptRequest }> }>;
-        };
-        const paused = state.tasks?.find((task) => (task.interrupts?.length ?? 0) > 0);
-        const firstInterrupt = paused?.interrupts?.[0];
-        if (firstInterrupt) {
-          interruptRequest = firstInterrupt.value;
-          interruptId = firstInterrupt.id ?? interruptId;
-        }
+      // 收口检测在 pass 结束时统一做：区分「人审挂起」与「正常结束（可能有后台任务）」。
+      let closedTodos: ClosedTodos = null;
+      const state = (await runnable.getState(passConfig)) as {
+        values?: { todos?: unknown };
+        tasks?: Array<{ interrupts?: Array<{ id?: string; value: AgentInterruptRequest }> }>;
+      };
+      const paused = state.tasks?.find((task) => (task.interrupts?.length ?? 0) > 0);
+      const pausedInterrupt = paused?.interrupts?.[0];
+      if (pausedInterrupt) {
+        interruptRequest = pausedInterrupt.value;
+        interruptId = pausedInterrupt.id ?? interruptId;
+      } else {
+        // 正常结束收口：模型交付最终答复后常漏标最后一个 todo（官方中间件无此能力），
+        // 计算收口结果交给外层 execute——仅最终 pass 才真正发出，
+        // 后台等待中的 pass 不能提前把 in_progress 标完成。
+        closedTodos = closeRemainingTodos(state.values?.todos);
       }
 
       if (interruptRequest) {
@@ -927,30 +1165,14 @@ export async function createDeepAgentRuntime(
             })),
           };
         }
-        return;
+        return { kind: 'interrupted' };
       }
-      safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'completed' }));
-      yield { runId: options.runId, timestamp: timestamp(), type: 'run.completed' };
+      // 排空后台事件队列，返回 done：是否续轮/收口由外层 execute 决定。
+      yield* yieldBackgroundEvents(backgroundCtx.drainEvents());
+      return { kind: 'done', closedTodos };
     } catch (error) {
-      if (options.signal?.aborted) {
-        safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'cancelled' }));
-        yield { runId: options.runId, timestamp: timestamp(), type: 'run.cancelled' };
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      const code = isStepLimitError(error) ? 'AGENT_STEP_LIMIT' : 'AGENT_RUN_FAILED';
-      safeTelemetry((sink) =>
-        sink.event('run.terminal', { outcome: 'failed', code }),
-      );
-      yield {
-        runId: options.runId,
-        timestamp: timestamp(),
-        type: 'run.failed',
-        // 步数耗尽与真正的执行错误区分开：工作区此时是完整的，
-        // 下游据此保留沙箱，用户可以直接接着上一轮继续。
-        code,
-        message,
-      };
+      // 不在此发终态事件：交给外层 execute 统一处理（需要先 abort 后台任务）。
+      return { kind: 'error', error };
     }
   }
 

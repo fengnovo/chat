@@ -5,9 +5,11 @@ import { AIMessageChunk, ToolMessage } from '@langchain/core/messages';
 
 import {
   assistantTextOf,
+  closeRemainingTodos,
   hasToolCallsOf,
   normalizeToolInput,
   normalizeToolOutput,
+  summarizeCommandOutput,
   usageOf,
   extractRetrievalEvent,
 } from '../src/index.js';
@@ -88,6 +90,58 @@ test('oversized tool payloads are truncated before they reach the event table', 
   };
   assert.ok(parsed.command.length < long.length);
   assert.match(parsed.command, /\[已截断\]$/);
+});
+
+test('write_todos Command output is summarized, never dumped as [object Object]', () => {
+  // 与 run_events 中实际落库的 write_todos tool.end 负载同构（LangGraph Command）。
+  const command = {
+    goto: [],
+    graph: null,
+    resume: null,
+    update: {
+      todos: [
+        { status: 'completed', content: '任务一' },
+        { status: 'in_progress', content: '任务二' },
+        { status: 'pending', content: '任务三' },
+      ],
+      messages: [new ToolMessage({ content: 'Updated todo list', tool_call_id: 'c1' })],
+    },
+    lg_name: 'Command',
+    lc_direct_tool_output: true,
+  };
+  const summary = summarizeCommandOutput(command);
+  assert.ok(summary);
+  assert.doesNotMatch(summary, /\[object /);
+  assert.match(summary, /1 已完成/);
+  assert.match(summary, /1 进行中/);
+  assert.match(summary, /1 待开始/);
+
+  // normalizeToolOutput 端到端：不得出现 [object Object] / [object ToolMessage]。
+  const normalized = String(normalizeToolOutput(command));
+  assert.doesNotMatch(normalized, /\[object (Object|ToolMessage)\]/);
+  assert.equal(normalized, summary);
+});
+
+test('closeRemainingTodos closes only unfinished items on a clean finish', () => {
+  const closed = closeRemainingTodos([
+    { content: '已完成项', status: 'completed' },
+    { content: '进行中项', status: 'in_progress' },
+    { content: '待办项', status: 'pending' },
+  ]);
+  assert.deepEqual(closed, [
+    { content: '已完成项', status: 'completed' },
+    { content: '进行中项', status: 'completed' },
+    { content: '待办项', status: 'completed' },
+  ]);
+
+  // 全部完成 / 空列表 / 脏数据：不补发。
+  assert.equal(
+    closeRemainingTodos([{ content: 'a', status: 'completed' }]),
+    null,
+  );
+  assert.equal(closeRemainingTodos([]), null);
+  assert.equal(closeRemainingTodos(null), null);
+  assert.equal(closeRemainingTodos([{ foo: 1 }]), null);
 });
 
 test('real token usage is read from the model metadata, never estimated', () => {

@@ -45,6 +45,49 @@ export interface SharedMcpCacheOptions {
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 
+const ENV_PLACEHOLDER = /\$\{([A-Z0-9_]+)\}/g;
+
+/**
+ * 展开 MCP 配置里的 `${ENV_VAR}` 占位（如 API key 放 .env 而不是提交进 git）。
+ * headers 下引用了未设置/空白变量的条目整条剔除（如 `Bearer ${KEY}` 缺 key 时
+ * 退化成 `Bearer `，trim 后仍有 "Bearer" 字样，不能按空串判断；发出去只会换来 401）。
+ */
+export function expandEnvPlaceholders(
+  value: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  key = '',
+): unknown {
+  const hasUnresolvedPlaceholder = (text: string): boolean =>
+    Array.from(text.matchAll(ENV_PLACEHOLDER)).some(
+      (match) => !env[match[1] ?? '']?.trim(),
+    );
+  const expand = (input: unknown, parentKey = ''): unknown => {
+    if (typeof input === 'string') {
+      return input.replace(ENV_PLACEHOLDER, (_match, name: string) => env[name] ?? '');
+    }
+    if (Array.isArray(input)) {
+      return input.map((item) => expand(item, parentKey));
+    }
+    if (input && typeof input === 'object') {
+      const entries = Object.entries(input as Record<string, unknown>).flatMap(
+        ([entryKey, entryValue]) => {
+          if (
+            parentKey === 'headers' &&
+            typeof entryValue === 'string' &&
+            hasUnresolvedPlaceholder(entryValue)
+          ) {
+            return [];
+          }
+          return [[entryKey, expand(entryValue, entryKey)]];
+        },
+      );
+      return Object.fromEntries(entries);
+    }
+    return input;
+  };
+  return expand(value, key);
+}
+
 // 缓存 Promise 本身实现 single-flight：并发请求共享同一次建连，不会重复握手。
 const sharedClients = new Map<string, Promise<SharedMcpEntry>>();
 
@@ -54,7 +97,7 @@ function buildEntry(
   now: () => number,
   connectTimeoutMs: number,
 ): Promise<SharedMcpEntry> {
-  const config = JSON.parse(raw) as Record<string, unknown>;
+  const config = expandEnvPlaceholders(JSON.parse(raw)) as Record<string, unknown>;
   const client = clientFactory(config);
   const deadline = new Promise<never>((_, reject) => {
     const timer = setTimeout(
