@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, Suspense, type FormEvent, type ReactNode } from 'react';
 
 import { useAuth } from '../components/auth/auth-context';
 import { AuthLoading } from '../components/auth/auth-gate';
@@ -47,6 +47,14 @@ const OAUTH_LABELS: Record<string, string> = {
 };
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<AuthLoading />}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const { user, loading, refresh } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
