@@ -1,7 +1,7 @@
 .message-list {
   margin: 0 auto;
-  max-width: 1120px;
-  padding: 42px 34px 32px;
+  max-width: 1180px;
+  padding: 32px 18px 24px;
   width: 100%;
 }
 
@@ -71,7 +71,7 @@
 }
 
 .message-copy {
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.72;
   overflow-wrap: anywhere;
 }
@@ -87,7 +87,7 @@
   border: 1px solid #e8e4eb;
   border-radius: 12px 3px 12px 12px;
   line-height: 1.62;
-  padding: 10px 14px;
+  padding: 7px 11px;
   white-space: pre-wrap;
 }
 
@@ -166,7 +166,7 @@
 }
 
 .markdown-content p {
-  margin: 0 0 0.85em;
+  margin: 0 0 0.35em;
 }
 
 .markdown-content h1,
@@ -223,7 +223,7 @@
 .markdown-content blockquote {
   border-left: 3px solid #b8adf5;
   color: var(--ink-soft);
-  margin: 1em 0;
+  margin: 0.7em 0;
   padding: 0.15em 0 0.15em 1em;
 }
 
@@ -231,6 +231,24 @@
   color: var(--violet-dark);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
+}
+
+.markdown-content .file-link {
+  align-items: center;
+  background: var(--violet-soft);
+  border: 0;
+  border-radius: 5px;
+  color: var(--violet-dark);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  gap: 4px;
+  padding: 1px 7px;
+  text-decoration: none;
+}
+
+.markdown-content .file-link:hover {
+  background: #e0d8ff;
 }
 
 .markdown-content img {
@@ -253,15 +271,52 @@
 }
 
 .markdown-content pre {
-  background: #191721;
-  border: 1px solid #2c2935;
+  background: #eeecf2;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  color: #f4f1fa;
-  margin: 1em 0;
+  color: #2a2733;
+  margin: 0.45em 0;
   max-width: 100%;
   overflow-x: auto;
-  padding: 15px 17px;
-  scrollbar-color: #5f596d transparent;
+  padding: 12px 14px;
+  scrollbar-color: #b8b3c4 transparent;
+}
+
+/* 带复制按钮的代码块容器：让按钮绝对定位到右上角 */
+.markdown-content .code-block {
+  position: relative;
+}
+
+.markdown-content .code-block pre {
+  margin: 0.45em 0;
+}
+
+.markdown-content .code-copy-btn {
+  align-items: center;
+  background: rgba(42, 39, 51, 0.08);
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: inline-flex;
+  height: 26px;
+  justify-content: center;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  transition: background 140ms ease, color 140ms ease;
+  width: 26px;
+  z-index: 1;
+}
+
+.markdown-content .code-copy-btn:hover {
+  background: rgba(42, 39, 51, 0.14);
+  color: var(--ink);
+}
+
+.markdown-content .code-copy-btn[aria-label='已复制'] {
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 .markdown-content pre code {
@@ -271,20 +326,20 @@
   display: block;
   font-family: var(--font-mono);
   font-size: 13px;
-  line-height: 1.65;
+  line-height: 1.5;
   padding: 0;
   tab-size: 2;
   white-space: pre;
 }
 
-/* highlight.js 语法高亮 token 配色：与 pre 暗色背景（#191721）协调。 */
+/* highlight.js 语法高亮 token 配色：与 pre 浅色背景（#faf9fc）协调。 */
 .markdown-content .hljs {
-  color: #f4f1fa;
+  color: #2a2733;
 }
 
 .markdown-content .hljs-comment,
 .markdown-content .hljs-quote {
-  color: #7a768a;
+  color: #8a8598;
   font-style: italic;
 }
 
@@ -293,34 +348,34 @@
 .markdown-content .hljs-built_in,
 .markdown-content .hljs-name,
 .markdown-content .hljs-tag {
-  color: #c792ea;
+  color: #7c3aed;
 }
 
 .markdown-content .hljs-string,
 .markdown-content .hljs-attr,
 .markdown-content .hljs-template-tag,
 .markdown-content .hljs-addition {
-  color: #c3e88d;
+  color: #158b62;
 }
 
 .markdown-content .hljs-number,
 .markdown-content .hljs-literal,
 .markdown-content .hljs-variable,
 .markdown-content .hljs-template-variable {
-  color: #f78c6c;
+  color: #c43b4d;
 }
 
 .markdown-content .hljs-title,
 .markdown-content .hljs-section,
 .markdown-content .hljs-selector-id,
 .markdown-content .hljs-selector-class {
-  color: #82aaff;
+  color: #1a56db;
 }
 
 .markdown-content .hljs-type,
 .markdown-content .hljs-class .hljs-title,
 .markdown-content .hljs-function .hljs-title {
-  color: #ffcb6b;
+  color: #a86612;
 }
 
 .markdown-content .hljs-attribute,
@@ -328,20 +383,20 @@
 .markdown-content .hljs-symbol,
 .markdown-content .hljs-bullet,
 .markdown-content .hljs-link {
-  color: #89ddff;
+  color: #0e7490;
 }
 
 .markdown-content .hljs-deletion {
-  color: #f07178;
+  color: #c43b4d;
 }
 
 .markdown-content .hljs-regexp,
 .markdown-content .hljs-emphasis {
-  color: #f78c6c;
+  color: #c43b4d;
 }
 
 .markdown-content .hljs-strong {
-  color: #f4f1fa;
+  color: #2a2733;
   font-weight: 600;
 }
 

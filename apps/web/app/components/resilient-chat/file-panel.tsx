@@ -1,4 +1,5 @@
-import { type PointerEvent, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import hljs from 'highlight.js';
 
 import { Icon } from './icon';
 
@@ -107,7 +108,7 @@ function FileTreeNode({
   onSelect: (file: TouchedFile) => void;
   selectedPath: string | null;
 }) {
-  const [open, setOpen] = useState(depth < 1);
+  const [open, setOpen] = useState(true);
   if (node.isDir) {
     return (
       <li>
@@ -138,7 +139,7 @@ function FileTreeNode({
       </li>
     );
   }
-  const selected = node.path === selectedPath;
+  const selected = node.file?.path === selectedPath;
   return (
     <li>
       <button
@@ -147,7 +148,7 @@ function FileTreeNode({
         type="button"
         onClick={() => node.file && onSelect(node.file)}
       >
-        <Icon name="edit" size={14} />
+        <Icon name="file" size={14} />
         <span className="file-item-name">{node.name}</span>
         <span className={`file-op file-op-${node.file?.operation ?? 'read_file'}`}>
           {node.file?.operation === 'write_file'
@@ -163,8 +164,61 @@ function FileTreeNode({
   );
 }
 
+/** 判断文件是否可在浏览器内直接运行（HTML/SVG 等）。 */
+function isBrowserRunnable(path: string): boolean {
+  const ext = extOf(path);
+  return ext === 'html' || ext === 'htm' || ext === 'svg';
+}
+
+/** 用 Blob 触发浏览器下载：文件内容已在前端内存中，无需走后端。 */
+function downloadTouchedFile(file: TouchedFile) {
+  if (file.content === null) return;
+  const ext = extOf(file.path);
+  const mimeMap: Record<string, string> = {
+    html: 'text/html',
+    htm: 'text/html',
+    svg: 'image/svg+xml',
+    css: 'text/css',
+    js: 'text/javascript',
+    json: 'application/json',
+    md: 'text/markdown',
+    txt: 'text/plain',
+  };
+  const blob = new Blob([file.content], {
+    type: mimeMap[ext] ?? 'application/octet-stream',
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = file.path.split('/').pop() ?? 'file';
+  anchor.rel = 'noopener';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4_000);
+}
+
 function FilePreview({ file }: { file: TouchedFile }) {
   const lang = languageFromPath(file.path);
+  const runnable = isBrowserRunnable(file.path);
+  // 默认对可运行文件展示浏览器预览，其余展示代码；用户可切换。
+  const [viewMode, setViewMode] = useState<'code' | 'browser'>(
+    runnable ? 'browser' : 'code',
+  );
+  // 用 highlight.js 对代码内容做语法高亮，返回带 hljs class 的 HTML 字符串。
+  const highlighted = useMemo(() => {
+    if (file.content === null) return null;
+    try {
+      const result =
+        lang !== 'plaintext' && hljs.getLanguage(lang)
+          ? hljs.highlight(file.content, { language: lang, ignoreIllegals: true })
+          : hljs.highlightAuto(file.content);
+      return result.value;
+    } catch {
+      return null;
+    }
+  }, [file.content, lang]);
+
   if (file.content === null) {
     return (
       <div className="file-preview-empty">
@@ -178,65 +232,147 @@ function FilePreview({ file }: { file: TouchedFile }) {
     <div className="file-preview">
       <div className="file-preview-head">
         <span className="file-preview-path">{file.path}</span>
-        <span className="file-preview-lang">{lang}</span>
+        <div className="file-preview-actions">
+          {runnable && (
+            <div className="file-view-switch" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'browser'}
+                className={viewMode === 'browser' ? 'is-active' : ''}
+                onClick={() => setViewMode('browser')}
+                title="在浏览器中运行页面"
+              >
+                浏览器
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'code'}
+                className={viewMode === 'code' ? 'is-active' : ''}
+                onClick={() => setViewMode('code')}
+                title="查看源代码"
+              >
+                代码
+              </button>
+            </div>
+          )}
+          {!runnable && <span className="file-preview-lang">{lang}</span>}
+          <button
+            type="button"
+            className="file-download-btn"
+            title="下载该文件"
+            onClick={() => downloadTouchedFile(file)}
+          >
+            <Icon name="download" size={14} />
+          </button>
+        </div>
       </div>
-      <pre className="file-preview-code">
-        <code>{file.content}</code>
-      </pre>
+      {viewMode === 'browser' && runnable ? (
+        <iframe
+          className="file-browser-frame"
+          title={`预览 ${file.path}`}
+          sandbox="allow-scripts allow-same-origin"
+          srcDoc={file.content}
+        />
+      ) : (
+        <pre className={`file-preview-code hljs language-${lang}`}>
+          {highlighted ? (
+            <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+          ) : (
+            <code>{file.content}</code>
+          )}
+        </pre>
+      )}
     </div>
   );
 }
 
 const MIN_FILES_WIDTH = 320;
-const MAX_FILES_WIDTH = 680;
-const MIN_CHAT_WIDTH = 360;
 const DEFAULT_FILES_WIDTH = 420;
+/** 侧边栏原始宽度（用于计算文件面板最大可拖到的位置）。 */
+const SIDEBAR_WIDTH = 264;
 
-/** 文件面板左边缘的拖拽条：左右拖动改变整个文件面板的宽度。 */
+/** 文件面板左边缘的拖拽条：左右拖动改变整个文件面板的宽度。
+ *  拖到最小宽度后继续向右拖超过阈值，则关闭文件面板。
+ *  支持拖动超过屏幕中心，此时会触发左侧导航隐藏，并允许继续拖到接近左边缘。 */
 function PanelResizer({
   onResize,
+  onClose,
   onDoubleClick,
+  onHideSidebar,
 }: {
   onResize: (width: number) => void;
+  onClose: () => void;
   onDoubleClick: () => void;
+  /** 当文件面板宽度超过屏幕一半时调用，隐藏左侧导航。 */
+  onHideSidebar?: () => void;
 }) {
   const dragRef = useRef<{ x: number; width: number; max: number } | null>(null);
+  const closedRef = useRef(false);
+  const sidebarHiddenRef = useRef(false);
+  // 用 ref 保存最新回调，避免闭包过期
+  const onResizeRef = useRef(onResize);
+  const onCloseRef = useRef(onClose);
+  const onHideSidebarRef = useRef(onHideSidebar);
+  onResizeRef.current = onResize;
+  onCloseRef.current = onClose;
+  onHideSidebarRef.current = onHideSidebar;
 
-  function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
-    const panel = event.currentTarget.closest(
-      '.file-panel',
-    ) as HTMLElement | null;
+    event.stopPropagation();
+    closedRef.current = false;
+    sidebarHiddenRef.current = false;
+    const panel = event.currentTarget.closest('.file-panel') as HTMLElement | null;
     const currentWidth = panel?.offsetWidth ?? DEFAULT_FILES_WIDTH;
-    const max = Math.min(
-      MAX_FILES_WIDTH,
-      window.innerWidth - MIN_CHAT_WIDTH,
-    );
     dragRef.current = {
       x: event.clientX,
       width: currentWidth,
-      max,
+      max: window.innerWidth - SIDEBAR_WIDTH,
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
     document.body.classList.add('is-file-resizing');
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* 忽略 */
+    }
   }
 
-  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag) return;
-    // 鼠标向左拖 -> 面板变宽
+    const delta = drag.x - event.clientX;
     const next = Math.min(
       drag.max,
-      Math.max(MIN_FILES_WIDTH, drag.width + drag.x - event.clientX),
+      Math.max(MIN_FILES_WIDTH, drag.width + delta),
     );
-    onResize(next);
+    onResizeRef.current(next);
+
+    if (!sidebarHiddenRef.current && onHideSidebarRef.current) {
+      if (next > window.innerWidth / 2) {
+        sidebarHiddenRef.current = true;
+        onHideSidebarRef.current();
+      }
+    }
+
+    if (
+      !closedRef.current &&
+      next === MIN_FILES_WIDTH &&
+      delta < drag.width - MIN_FILES_WIDTH - 40
+    ) {
+      closedRef.current = true;
+      onCloseRef.current();
+    }
   }
 
-  function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+  function handlePointerUp(event: React.PointerEvent<HTMLDivElement>) {
     dragRef.current = null;
     document.body.classList.remove('is-file-resizing');
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    try {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* 忽略 */
     }
   }
 
@@ -250,6 +386,78 @@ function PanelResizer({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+    />
+  );
+}
+
+/** 文件树与预览区之间的拖拽条：左右拖动改变目录列宽度。
+ *  当目录宽度超过文件面板一半时，完全隐藏左侧导航以腾出空间。 */
+function TreeResizer({
+  onResize,
+  onHideSidebar,
+}: {
+  onResize: (width: number) => void;
+  onHideSidebar: () => void;
+}) {
+  const dragRef = useRef<{ x: number; width: number } | null>(null);
+  const hiddenRef = useRef(false);
+  const onResizeRef = useRef(onResize);
+  const onHideSidebarRef = useRef(onHideSidebar);
+  onResizeRef.current = onResize;
+  onHideSidebarRef.current = onHideSidebar;
+
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    hiddenRef.current = false;
+    const body = event.currentTarget.closest('.file-panel-body') as HTMLElement | null;
+    const treePane = body?.querySelector('.file-tree-pane') as HTMLElement | null;
+    dragRef.current = { x: event.clientX, width: treePane?.offsetWidth ?? 200 };
+    document.body.classList.add('is-file-resizing');
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const nextWidth = drag.width + event.clientX - drag.x;
+    onResizeRef.current(nextWidth);
+    if (hiddenRef.current) return;
+    const panel = document.querySelector('.file-panel') as HTMLElement | null;
+    const panelWidth = panel?.offsetWidth ?? 420;
+    const maxWidth = panelWidth - 80;
+    const clamped = Math.max(120, Math.min(maxWidth, nextWidth));
+    if (clamped > panelWidth / 2) {
+      hiddenRef.current = true;
+      onHideSidebarRef.current();
+    }
+  }
+
+  function handlePointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    document.body.classList.remove('is-file-resizing');
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  return (
+    <div
+      aria-label="拖动调整目录宽度"
+      aria-orientation="vertical"
+      className="file-tree-resizer"
+      role="separator"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
     />
   );
 }
@@ -259,36 +467,82 @@ function FilePanel({
   onClose,
   onResize,
   onResetWidth,
+  selectedPath,
+  onSelectPath,
+  onHideSidebar,
 }: {
   files: TouchedFile[];
   onClose: () => void;
   onResize: (width: number) => void;
   onResetWidth: () => void;
+  /** 外部受控选中路径：从聊天消息的文件链接跳转时由父组件设置。 */
+  selectedPath: string | null;
+  onSelectPath: (path: string) => void;
+  /** 目录拖宽超过文件面板一半时完全隐藏左侧导航。 */
+  onHideSidebar: () => void;
 }) {
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const tree = useMemo(() => buildFileTree(files), [files]);
   const selected = useMemo(
     () => files.find((file) => file.path === selectedPath) ?? files[0] ?? null,
     [files, selectedPath],
   );
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [treeWidth, setTreeWidth] = useState(200);
+  const [treeVisible, setTreeVisible] = useState(true);
+
+  // 切换会话时 files 变化，重置树宽度避免布局错乱
+  useEffect(() => {
+    setTreeWidth(200);
+  }, [files]);
+
+  function handleTreeResize(next: number) {
+    const panel = document.querySelector('.file-panel') as HTMLElement | null;
+    const max = (panel?.offsetWidth ?? 420) - 80;
+    setTreeWidth(Math.min(max, Math.max(120, next)));
+  }
 
   return (
-    <aside className="file-panel" aria-label="AI 生成的文件">
-      <PanelResizer onResize={onResize} onDoubleClick={onResetWidth} />
+    <aside
+      className={`file-panel ${isFullscreen ? 'is-fullscreen' : ''}`}
+      aria-label="AI 生成的文件"
+    >
+      {!isFullscreen && (
+        <PanelResizer onResize={onResize} onClose={onClose} onDoubleClick={onResetWidth} onHideSidebar={onHideSidebar} />
+      )}
       <header className="file-panel-head">
         <div className="file-panel-title">
           <Icon name="folder" size={17} />
           <strong>文件</strong>
           <span className="file-panel-count">{files.length}</span>
         </div>
-        <button
-          aria-label="关闭文件面板"
-          className="icon-button"
-          type="button"
-          onClick={onClose}
-        >
-          <Icon name="x" size={16} />
-        </button>
+        <div className="file-panel-actions">
+          <button
+            aria-label={treeVisible ? '隐藏文件目录' : '显示文件目录'}
+            className="icon-button"
+            type="button"
+            title={treeVisible ? '隐藏文件目录' : '显示文件目录'}
+            onClick={() => setTreeVisible((v) => !v)}
+          >
+            <Icon name="panel" size={15} />
+          </button>
+          <button
+            aria-label={isFullscreen ? '退出全屏' : '全屏浏览'}
+            className="icon-button"
+            type="button"
+            title={isFullscreen ? '退出全屏' : '全屏浏览'}
+            onClick={() => setIsFullscreen((v) => !v)}
+          >
+            <Icon name="maximize" size={15} />
+          </button>
+          <button
+            aria-label="关闭文件面板"
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
       </header>
 
       {files.length === 0 ? (
@@ -298,15 +552,20 @@ function FilePanel({
           <small>AI 写入或修改文件后会出现在这里。</small>
         </div>
       ) : (
-        <div className="file-panel-body">
-          <div className="file-tree-pane">
-            <FileTree
-              nodes={tree}
-              selectedPath={selected?.path ?? null}
-              onSelect={(file) => setSelectedPath(file.path)}
-            />
-          </div>
-          <div className="file-preview-pane">
+        <div className="file-panel-body" style={{ gridTemplateColumns: treeVisible ? `${treeWidth}px 12px minmax(0, 1fr)` : 'minmax(0, 1fr)' }}>
+          {treeVisible && (
+            <>
+              <div className="file-tree-pane">
+                <FileTree
+                  nodes={tree}
+                  selectedPath={selected?.path ?? null}
+                  onSelect={(file) => onSelectPath(file.path)}
+                />
+              </div>
+              <TreeResizer onResize={handleTreeResize} onHideSidebar={onHideSidebar} />
+            </>
+          )}
+          <div className="file-preview-pane" style={!treeVisible ? { gridColumn: '1' } : undefined}>
             {selected ? (
               <FilePreview file={selected} />
             ) : (

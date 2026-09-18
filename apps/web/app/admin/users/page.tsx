@@ -49,14 +49,13 @@ function AdminUsersView() {
   if (user && user.role !== 'admin') {
     return (
       <main className="admin-page">
-        <header className="admin-page-header">
-          <div className="admin-page-heading">
-            <Link href="/" className="admin-back">
-              <Icon name="arrow-left" size={15} />
-              返回首页
-            </Link>
-            <h1>用户管理</h1>
-          </div>
+        <header className="page-nav">
+          <Link href="/" className="page-nav-back" title="返回首页" aria-label="返回首页">
+            <Icon name="arrow-left" size={16} />
+            <span>返回</span>
+          </Link>
+          <h1 className="page-nav-title">用户管理</h1>
+          <div className="page-nav-user"><UserMenu /></div>
         </header>
         <p role="alert">需要管理员权限。</p>
       </main>
@@ -65,18 +64,13 @@ function AdminUsersView() {
 
   return (
     <main className="admin-page">
-      <header className="admin-page-header">
-        <div className="admin-page-heading">
-          <Link href="/" className="admin-back">
-            <Icon name="arrow-left" size={15} />
-            返回首页
-          </Link>
-          <div>
-            <h1>用户管理</h1>
-            <p>管理租户成员、角色与知识库授权。</p>
-          </div>
-        </div>
-        <UserMenu />
+      <header className="page-nav">
+        <Link href="/" className="page-nav-back" title="返回首页" aria-label="返回首页">
+          <Icon name="arrow-left" size={16} />
+          <span>返回</span>
+        </Link>
+        <h1 className="page-nav-title">用户管理</h1>
+        <div className="page-nav-user"><UserMenu /></div>
       </header>
       {error && <p role="alert">{error}</p>}
       <div className="admin-toolbar">

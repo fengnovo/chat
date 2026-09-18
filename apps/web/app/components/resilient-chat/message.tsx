@@ -120,6 +120,7 @@ function Message({
   onBoundaryError,
   onCopy,
   onDismissCard,
+  onFileLinkClick,
   onPreviewDiagram,
   onPreviewImage,
   reasoning,
@@ -139,6 +140,8 @@ function Message({
   onBoundaryError: () => void;
   onCopy: (id: string, text: string) => Promise<void>;
   onDismissCard: (id: string) => void;
+  /** 点击聊天正文中引用的文件路径链接时，打开文件面板并定位到该文件。 */
+  onFileLinkClick?: (path: string) => void;
   /** 点击 Mermaid 图表时弹出浮层，支持缩放查看。 */
   onPreviewDiagram: (svg: string) => void;
   /** 点击聊天图片时在当前页弹出大图（输入框缩略图与历史消息共用）。 */
@@ -244,6 +247,7 @@ function Message({
             ) : (
               <MarkdownContent
                 content={text}
+                onFileLinkClick={onFileLinkClick}
                 onPreviewDiagram={onPreviewDiagram}
                 onPreviewImage={onPreviewImage}
                 highlight={highlight}
@@ -344,13 +348,75 @@ function safeExternalUrl(href: string | undefined): string | null {
   return null;
 }
 
+/**
+ * 判断 href 是否指向一个本地文件路径（AI 生成的文件）。
+ * 排除带协议的 URL 与危险协议后，包含扩展名或路径分隔符即视为文件路径。
+ */
+function fileLinkPath(href: string | undefined): string | null {
+  if (!href) return null;
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+  // 带协议的 URL 不是文件路径
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed)) return null;
+  // 锚点或纯查询不算文件
+  if (trimmed.startsWith('#')) return null;
+  // 至少包含扩展名（.xxx）或路径分隔符，才认为是文件路径引用
+  const hasExt = /\.[A-Za-z\d]{1,10}$/.test(trimmed);
+  const hasSep = trimmed.includes('/') || trimmed.includes('\\');
+  if (!hasExt && !hasSep) return null;
+  // 去掉前导的 ./ 和 /，统一成相对路径形式用于匹配 touchedFiles
+  const normalized = trimmed.replace(/^(\.\/|\/)+/, '');
+  return normalized || null;
+}
+
+/**
+ * 带复制按钮的代码块：右上角悬浮一个复制图标，点击后把代码文本写入剪贴板，
+ * 短暂显示对勾反馈。pre 本身保持可滚动与键盘聚焦能力。
+ */
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+
+  async function handleCopy() {
+    const text = preRef.current?.innerText ?? '';
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_400);
+    } catch {
+      /* 剪贴板不可用时静默 */
+    }
+  }
+
+  return (
+    <div className="code-block">
+      <button
+        type="button"
+        className="code-copy-btn"
+        onClick={() => void handleCopy()}
+        title={copied ? '已复制' : '复制代码'}
+        aria-label={copied ? '已复制' : '复制代码'}
+      >
+        <Icon name={copied ? 'check' : 'copy'} size={13} />
+      </button>
+      <pre ref={preRef} tabIndex={0}>
+        {children}
+      </pre>
+    </div>
+  );
+}
+
 function MarkdownContent({
   content,
+  onFileLinkClick,
   onPreviewDiagram,
   onPreviewImage,
   highlight,
 }: {
   content: string;
+  /** 点击正文里的文件路径链接时触发，由父组件打开文件面板并定位。 */
+  onFileLinkClick?: (path: string) => void;
   onPreviewDiagram?: (svg: string) => void;
   onPreviewImage: (url: string, filename?: string) => void;
   /** 开启后启用代码语法高亮与 Mermaid 图表渲染；关闭则退化为纯文本代码块。 */
@@ -362,6 +428,19 @@ function MarkdownContent({
       rehypePlugins={highlight ? [rehypeHighlight] : []}
       components={{
         a: ({ children, href }) => {
+          const filePath = fileLinkPath(href);
+          if (filePath && onFileLinkClick) {
+            return (
+              <button
+                type="button"
+                className="file-link"
+                onClick={() => onFileLinkClick(filePath)}
+                title={`在文件浏览器中定位：${filePath}`}
+              >
+                {children}
+              </button>
+            );
+          }
           const safe = safeExternalUrl(href);
           if (!safe) {
             // 危险链接降级为纯文本，避免 javascript: 等协议在本站上下文执行。
@@ -394,7 +473,7 @@ function MarkdownContent({
           // 无法用 child.type === MermaidDiagram 判断（图表组件此时还没创建）；
           // 只能读它身上的原始 hast props：className 与代码文本。
           // Mermaid 图表自带浅色容器，若再套暗色 <pre> 会出现一圈黑色边框，
-          // 命中时直接渲染图表组件，其余代码块保持暗色 pre 样式。
+          // 命中时直接渲染图表组件，其余代码块保持 pre 样式并带复制按钮。
           const child = Array.isArray(children) ? children[0] : children;
           const codeProps = isValidElement(child)
             ? (child.props as { className?: string; children?: unknown })
@@ -407,7 +486,7 @@ function MarkdownContent({
             const chart = String(codeProps.children ?? '').replace(/\n$/, '');
             return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
           }
-          return <pre tabIndex={0}>{children}</pre>;
+          return <CodeBlock>{children}</CodeBlock>;
         },
         img: ({ src, alt }) => {
           if (!src) return null;

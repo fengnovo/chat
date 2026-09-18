@@ -104,6 +104,57 @@
   z-index: 30;
 }
 
+/* ---- 通用页面导航栏（长期记忆 / 用户管理 / 知识库共用高度） ---- */
+.page-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 6px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  min-height: 48px;
+  width: 100%;
+}
+
+.page-nav-back {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.page-nav-back:hover {
+  background: var(--surface-soft);
+  color: var(--violet);
+}
+
+.page-nav-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--ink);
+}
+
+.page-nav-user {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+}
+
 /* ---- 主体两栏 ---- */
 .kc-body {
   display: flex;

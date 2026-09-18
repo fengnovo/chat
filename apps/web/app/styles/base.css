@@ -40,7 +40,7 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 16px;
+  font-size: 14px;
   /* 整个应用是固定高度的 App Shell，滚动只发生在会话/侧栏容器内；
      禁止窗口级滚动，避免处理中页面被滚走、底部露出大片空白。 */
   overflow: hidden;

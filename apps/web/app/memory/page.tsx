@@ -1,10 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 import { AuthGate } from '../components/auth/auth-gate';
 import { UserMenu } from '../components/auth/user-menu';
 import { apiFetch } from '../components/resilient-chat/api';
+import { Icon } from '../components/resilient-chat/icon';
 
 type Memory = { id: string; kind: string; scope: string; content: string; importance: number; confidence: number; updatedAt: string };
 
@@ -51,7 +53,14 @@ function MemoryPageContent() {
 
   return (
     <main className="memory-page">
-      <header className="memory-page-head"><div><p className="memory-eyebrow">LONG-TERM MEMORY</p><h1>长期记忆</h1><p>查看和管理 Agent 在不同会话中记住的用户信息。</p></div><UserMenu /></header>
+      <header className="page-nav">
+        <Link href="/" className="page-nav-back" title="返回首页" aria-label="返回首页">
+          <Icon name="arrow-left" size={16} />
+          <span>返回</span>
+        </Link>
+        <h1 className="page-nav-title">长期记忆</h1>
+        <div className="page-nav-user"><UserMenu /></div>
+      </header>
       <section className="memory-card">
         <div className="memory-card-head"><strong>已保存的信息</strong><button type="button" onClick={() => void clear()} disabled={memories.length === 0}>全部清空</button></div>
         {loading && <p className="memory-muted">加载中…</p>}

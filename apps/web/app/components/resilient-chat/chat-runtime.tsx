@@ -128,9 +128,12 @@ function ChatRuntime() {
   const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesWidth, setFilesWidth] = useState(DEFAULT_FILES_WIDTH);
+  /** 文件面板中当前选中的文件路径；从聊天消息的文件链接跳转时由外部设置。 */
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
@@ -906,6 +909,26 @@ function ChatRuntime() {
     return [...fileOps.values()].sort((a, b) => a.path.localeCompare(b.path));
   }, [agentActivity.entries, historyFiles]);
 
+  /**
+   * 点击聊天正文中的文件路径链接：在 touchedFiles 中定位对应文件，
+   * 打开文件面板并选中它。支持精确匹配、后缀匹配与文件名匹配，
+   * 兼容 AI 回复里写相对路径或省略目录前缀的情况。
+   */
+  function handleFileLinkClick(linkPath: string) {
+    const normalized = linkPath.replace(/^(\.\/|\/)+/, '');
+    const match =
+      touchedFiles.find((file) => file.path === normalized) ??
+      touchedFiles.find((file) => file.path.endsWith(`/${normalized}`)) ??
+      touchedFiles.find((file) => file.path.split('/').pop() === normalized.split('/').pop());
+    if (match) {
+      setSelectedFilePath(match.path);
+    } else {
+      // 没找到也打开面板，提示用户该文件不在已记录的操作列表中。
+      setSelectedFilePath(null);
+    }
+    setFilesOpen(true);
+  }
+
   async function selectSession(session: WebSessionSummary) {
     if (session.externalKey === conversation.chatId) return;
     stickToBottomRef.current = true;
@@ -1344,13 +1367,14 @@ function ChatRuntime() {
 
   return (
     <main
-      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${filesOpen ? 'is-files-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}
+      className={`app-shell ${traceOpen ? 'is-trace-open' : ''} ${filesOpen ? 'is-files-open' : ''} ${sidebarOpen ? 'is-sidebar-open' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''} ${sidebarHidden ? 'is-sidebar-hidden' : ''}`}
       style={
         {
           '--files-width': `${filesWidth}px`,
         } as CSSProperties
       }
     >
+      {!sidebarHidden && (
       <Sidebar
         activeChatId={conversation.chatId}
         busy={isBusy || creatingSession}
@@ -1395,6 +1419,18 @@ function ChatRuntime() {
         open={sidebarOpen}
         switchingSessionId={switchingSessionId}
       />
+      )}
+
+      {sidebarHidden && (
+        <button
+          aria-label="展开侧边栏"
+          className="sidebar-restore-fab"
+          type="button"
+          onClick={() => setSidebarHidden(false)}
+        >
+          <Icon name="menu" size={18} />
+        </button>
+      )}
 
       {sidebarOpen && (
         <button
@@ -1437,7 +1473,7 @@ function ChatRuntime() {
             >
               <Icon name="folder" size={16} />
             </button>
-            <button
+            {/* <button
               className="icon-button"
               type="button"
               aria-label={traceOpen ? '隐藏 Agent 运行轨迹' : '显示 Agent 运行轨迹'}
@@ -1445,7 +1481,7 @@ function ChatRuntime() {
               onClick={() => setTraceOpen((current) => !current)}
             >
               <Icon name="panel" size={16} />
-            </button>
+            </button> */}
             <UserMenu />
           </div>
         </header>
@@ -1481,6 +1517,7 @@ function ChatRuntime() {
                     ]);
                   }}
                   onCopy={copyMessage}
+                  onFileLinkClick={handleFileLinkClick}
                   onPreviewDiagram={(svg) =>
                     setLightboxImage({ svg, filename: '图表预览' })
                   }
@@ -1623,9 +1660,12 @@ function ChatRuntime() {
       {filesOpen && (
         <FilePanel
           files={touchedFiles}
-          onClose={() => setFilesOpen(false)}
+          onClose={() => { setFilesOpen(false); setSidebarHidden(false); }}
           onResize={setFilesWidth}
           onResetWidth={() => setFilesWidth(DEFAULT_FILES_WIDTH)}
+          selectedPath={selectedFilePath}
+          onSelectPath={setSelectedFilePath}
+          onHideSidebar={() => setSidebarHidden(true)}
         />
       )}
 
