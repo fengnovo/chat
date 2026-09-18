@@ -23,6 +23,8 @@ function setSessionCookie(reply: FastifyReply, config: ApiConfig, token: string)
     path: '/',
     secure: config.NODE_ENV === 'production',
     maxAge: SESSION_TTL_SECONDS,
+    // 开发环境显式指定 domain=localhost，使 API (8002) 与前端 (3020) 共享 Cookie。
+    ...(config.NODE_ENV !== 'production' ? { domain: 'localhost' } : {}),
   });
 }
 
@@ -148,14 +150,20 @@ export async function registerAuthRoutes(app: FastifyInstance, services: Service
       auth.tenantId,
       auth.userId,
     );
+    const passwordHash = await services.repository.getUserPasswordHash(
+      auth.tenantId,
+      auth.userId,
+    );
     return {
       user: {
         id: auth.userId,
         displayName: displayName ?? 'Agent user',
         role: auth.roles[0] ?? 'member',
         tenantId: auth.tenantId,
-        // dev 模式没有真实登录态，前端据此隐藏“退出登录”等会话操作。
+        // dev 模式没有真实登录态，前端据此隐藏"退出登录"等会话操作。
         authMode: services.config.AUTH_MODE,
+        // OAuth 登录用户没有密码，前端据此隐藏"修改密码"入口。
+        hasPassword: passwordHash !== null,
       },
     };
   });

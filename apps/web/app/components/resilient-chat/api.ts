@@ -173,6 +173,7 @@ export type CurrentUser = {
   role: 'admin' | 'owner' | 'member';
   tenantId: string;
   authMode?: 'dev' | 'password' | 'oidc';
+  hasPassword?: boolean;
 };
 
 export async function fetchCurrentUser(signal?: AbortSignal): Promise<CurrentUser | null> {
@@ -222,6 +223,22 @@ export async function register(input: RegisterInput): Promise<CurrentUser> {
 
 export async function logout(): Promise<void> {
   await fetch('/api/auth/logout', { method: 'POST' });
+}
+
+// ---- OAuth 社交登录 ----
+export async function fetchOAuthProviders(): Promise<string[]> {
+  try {
+    const response = await fetch('/api/auth/oauth/providers');
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { data?: string[] };
+    return payload.data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export function getOAuthLoginUrl(provider: string): string {
+  return `/api/auth/oauth/${provider}`;
 }
 
 export type ChangePasswordError =

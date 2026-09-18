@@ -1834,6 +1834,74 @@ export class AgentRepository {
       return { deletedArtifactKeys };
     });
   }
+
+  // ---- OAuth 社交登录 ----
+
+  async findOAuthAccount(
+    provider: string,
+    subject: string,
+  ): Promise<{ userId: string; displayName: string; tenantId: string; role: string } | null> {
+    const result = await this.pool.query(
+      `SELECT oa.user_id, u.display_name, tm.tenant_id, tm.role
+       FROM oauth_accounts oa
+       JOIN users u ON u.id = oa.user_id
+       JOIN tenant_memberships tm ON tm.user_id = oa.user_id
+       WHERE oa.provider = $1 AND oa.subject = $2
+       ORDER BY tm.created_at ASC
+       LIMIT 1`,
+      [provider, subject],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      userId: String(row.user_id),
+      displayName: String(row.display_name),
+      tenantId: String(row.tenant_id),
+      role: String(row.role),
+    };
+  }
+
+  async createOAuthUser(
+    tenantId: string,
+    input: {
+      provider: string;
+      subject: string;
+      email: string | null;
+      displayName: string;
+      avatarUrl: string | null;
+      role: string;
+    },
+  ): Promise<{ id: string; displayName: string; role: string }> {
+    return inTransaction(this.pool, async (client) => {
+      const userId = randomUUID();
+      const accountId = randomUUID();
+      await client.query(
+        `INSERT INTO users (id, display_name) VALUES ($1, $2)`,
+        [userId, input.displayName],
+      );
+      await client.query(
+        `INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)`,
+        [tenantId, userId, input.role],
+      );
+      await client.query(
+        `INSERT INTO oauth_accounts (id, user_id, provider, subject, email, display_name, avatar_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [accountId, userId, input.provider, input.subject, input.email, input.displayName, input.avatarUrl],
+      );
+      return { id: userId, displayName: input.displayName, role: input.role };
+    });
+  }
+
+  async linkOAuthAccount(
+    userId: string,
+    input: { provider: string; subject: string; email: string | null; displayName: string; avatarUrl: string | null },
+  ): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO oauth_accounts (id, user_id, provider, subject, email, display_name, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [randomUUID(), userId, input.provider, input.subject, input.email, input.displayName, input.avatarUrl],
+    );
+  }
 }
 
 export class RepositoryConflictError extends Error {

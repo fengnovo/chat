@@ -13,6 +13,7 @@ import { registerAdminRoutes } from './admin-routes.js';
 import { AuthenticationError, ForbiddenError, createAuthenticator } from './auth.js';
 import { registerAuthRoutes } from './auth-routes.js';
 import type { ApiConfig } from './config.js';
+import { registerOAuthRoutes } from './oauth-routes.js';
 import { RunOutboxDispatcher } from './outbox.js';
 import { registerRoutes } from './routes.js';
 import { registerKnowledgeRoutes } from './knowledge-routes.js';
@@ -117,6 +118,8 @@ export async function buildApp(options: BuildAppOptions) {
     '/api/auth/login',
     '/api/auth/register',
     '/api/auth/logout',
+    // OAuth 社交登录入口与回调均为匿名。
+    '/api/auth/oauth/providers',
     // Preview routes serve static files from sandbox; iframe resources don't carry cookies.
     '/api/agent/sessions/:sessionId/preview',
     '/api/agent/sessions/:sessionId/preview/*',
@@ -127,6 +130,10 @@ export async function buildApp(options: BuildAppOptions) {
     if (request.url.startsWith('/health/')) return;
     // Preview routes are public but origin-restricted; skip auth to allow iframe resource loading.
     if (pathname.startsWith('/api/agent/sessions/') && pathname.includes('/preview')) {
+      return;
+    }
+    // OAuth 发起与回调路径无需鉴权。
+    if (pathname.startsWith('/api/auth/oauth/')) {
       return;
     }
     if (PUBLIC_PATHS.has(pathname)) {
@@ -211,6 +218,10 @@ export async function buildApp(options: BuildAppOptions) {
     artifacts,
   });
   registerAuthRoutes(app, {
+    config: options.config,
+    repository: options.repository,
+  });
+  await registerOAuthRoutes(app, {
     config: options.config,
     repository: options.repository,
   });

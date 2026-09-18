@@ -71,9 +71,16 @@ const schema = z
     SIGNUP_TENANT_ID: z.uuid().optional(),
     // 公开自助注册开关；未显式配置时仅开发/测试环境开放，生产默认关闭。
     AUTH_SIGNUP_ENABLED: z.enum(['true', 'false']).optional(),
-    OIDC_ISSUER: z.string().url().optional(),
-    OIDC_AUDIENCE: z.string().optional(),
-    OIDC_JWKS_URL: z.string().url().optional(),
+    OIDC_ISSUER: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
+    OIDC_AUDIENCE: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+    OIDC_JWKS_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
+    // OAuth2 社交登录（GitHub / Google）：与 AUTH_MODE 正交，password 模式下可叠加使用。
+    OAUTH_GITHUB_CLIENT_ID: z.string().optional(),
+    OAUTH_GITHUB_CLIENT_SECRET: z.string().optional(),
+    OAUTH_GOOGLE_CLIENT_ID: z.string().optional(),
+    OAUTH_GOOGLE_CLIENT_SECRET: z.string().optional(),
+    OAUTH_CALLBACK_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
+    OAUTH_STATE_SECRET: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(32).optional()),
     WORKSPACE_ROOT: z.string().default(path.join(repositoryRoot, 'data/workspaces')),
     // 与 worker 的沙箱配置保持一致：删除会话时需要级联清理沙箱文件目录。
     SANDBOX_RUNTIME: z.enum(['docker', 'e2b-cloud']).default('docker'),
@@ -171,5 +178,15 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     SANDBOX_SESSIONS_ROOT: path.isAbsolute(sandboxSessionsRoot)
       ? path.normalize(sandboxSessionsRoot)
       : path.resolve(workerRoot, sandboxSessionsRoot),
+    OAUTH: {
+      github: value.OAUTH_GITHUB_CLIENT_ID && value.OAUTH_GITHUB_CLIENT_SECRET
+        ? { clientId: value.OAUTH_GITHUB_CLIENT_ID, clientSecret: value.OAUTH_GITHUB_CLIENT_SECRET }
+        : undefined,
+      google: value.OAUTH_GOOGLE_CLIENT_ID && value.OAUTH_GOOGLE_CLIENT_SECRET
+        ? { clientId: value.OAUTH_GOOGLE_CLIENT_ID, clientSecret: value.OAUTH_GOOGLE_CLIENT_SECRET }
+        : undefined,
+      callbackUrl: value.OAUTH_CALLBACK_URL,
+      stateSecret: value.OAUTH_STATE_SECRET ?? value.AUTH_JWT_SECRET,
+    },
   };
 }

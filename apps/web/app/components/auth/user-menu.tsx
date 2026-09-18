@@ -267,7 +267,7 @@ export function UserMenu() {
               用户管理
             </Link>
           )}
-          {!isDevMode && (
+          {!isDevMode && user.hasPassword && (
             <button
               type="button"
               role="menuitem"
