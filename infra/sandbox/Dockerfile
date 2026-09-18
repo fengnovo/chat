@@ -1,4 +1,4 @@
-FROM node:24.14.0-bookworm-slim
+FROM docker.m.daocloud.io/library/node:24.14.0-bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -27,7 +27,9 @@ COPY web-runtime/package.json /opt/chat-web-runtime/package.json
 RUN cd /opt/chat-web-runtime \
     && npm install --no-audit --no-fund
 COPY prepare-web-project /usr/local/bin/prepare-web-project
-RUN chmod 0755 /usr/local/bin/prepare-web-project
+COPY run-web-preview /usr/local/bin/run-web-preview
+RUN chmod 0755 /usr/local/bin/prepare-web-project \
+    && chmod 0755 /usr/local/bin/run-web-preview
 
 WORKDIR /mnt/user-data/workspace
 

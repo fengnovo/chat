@@ -198,7 +198,7 @@ function downloadTouchedFile(file: TouchedFile) {
   setTimeout(() => URL.revokeObjectURL(url), 4_000);
 }
 
-function FilePreview({ file }: { file: TouchedFile }) {
+function FilePreview({ file, previewUrl, isBuildPreview }: { file: TouchedFile; previewUrl?: string; isBuildPreview?: boolean }) {
   const lang = languageFromPath(file.path);
   const runnable = isBrowserRunnable(file.path);
   // 默认对可运行文件展示浏览器预览，其余展示代码；用户可切换。
@@ -219,7 +219,7 @@ function FilePreview({ file }: { file: TouchedFile }) {
     }
   }, [file.content, lang]);
 
-  if (file.content === null) {
+  if (file.content === null && !isBuildPreview) {
     return (
       <div className="file-preview-empty">
         <Icon name="folder" size={28} />
@@ -268,12 +268,24 @@ function FilePreview({ file }: { file: TouchedFile }) {
           </button>
         </div>
       </div>
-      {viewMode === 'browser' && runnable ? (
+      {isBuildPreview && previewUrl ? (
+        <iframe
+          className="file-browser-frame"
+          title="构建预览"
+          src={previewUrl}
+        />
+      ) : viewMode === 'browser' && runnable ? (
         <iframe
           className="file-browser-frame"
           title={`预览 ${file.path}`}
           sandbox="allow-scripts allow-same-origin"
-          srcDoc={file.content}
+          srcDoc={file.content ?? ''}
+        />
+      ) : previewUrl ? (
+        <iframe
+          className="file-browser-frame"
+          title="实时预览"
+          src={previewUrl}
         />
       ) : (
         <pre className={`file-preview-code hljs language-${lang}`}>
@@ -470,6 +482,8 @@ function FilePanel({
   selectedPath,
   onSelectPath,
   onHideSidebar,
+  sessionId,
+  openBuildPreview,
 }: {
   files: TouchedFile[];
   onClose: () => void;
@@ -480,6 +494,10 @@ function FilePanel({
   onSelectPath: (path: string) => void;
   /** 目录拖宽超过文件面板一半时完全隐藏左侧导航。 */
   onHideSidebar: () => void;
+  /** 当前会话 ID，用于加载构建预览。 */
+  sessionId?: string | null;
+  /** 外部触发打开构建预览的计数器，每次 +1 触发 useEffect（从聊天消息的预览按钮点击时由父组件递增）。 */
+  openBuildPreview?: number;
 }) {
   const tree = useMemo(() => buildFileTree(files), [files]);
   const selected = useMemo(
@@ -489,11 +507,27 @@ function FilePanel({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeWidth, setTreeWidth] = useState(200);
   const [treeVisible, setTreeVisible] = useState(true);
+  const [buildPreview, setBuildPreview] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
+  const previewUrl = sessionId && buildPreview
+    ? `/api/agent/sessions/${sessionId}/preview/?_=${previewRefreshKey}`
+    : '';
+  console.log('[FilePanel] preview state:', { sessionId, buildPreview, previewUrl });
 
   // 切换会话时 files 变化，重置树宽度避免布局错乱
   useEffect(() => {
     setTreeWidth(200);
   }, [files]);
+
+  // 外部触发打开构建预览（用户点击聊天消息中的预览按钮）
+  useEffect(() => {
+    console.log('[FilePanel] openBuildPreview changed:', { openBuildPreview, buildPreview });
+    if (openBuildPreview && openBuildPreview > 0) {
+      setBuildPreview(true);
+      setPreviewRefreshKey((k) => k + 1);
+    }
+  }, [openBuildPreview]);
 
   function handleTreeResize(next: number) {
     const panel = document.querySelector('.file-panel') as HTMLElement | null;
@@ -516,6 +550,39 @@ function FilePanel({
           <span className="file-panel-count">{files.length}</span>
         </div>
         <div className="file-panel-actions">
+          {sessionId && (
+            <button
+              aria-label="构建预览"
+              className={`icon-button${buildPreview ? ' is-active' : ''}`}
+              type="button"
+              title={buildPreview ? '显示构建产物预览' : '打开构建预览'}
+              onClick={() => setBuildPreview((v) => !v)}
+            >
+              <Icon name="home" size={15} />
+            </button>
+          )}
+          {buildPreview && sessionId && (
+            <button
+              aria-label="重新构建"
+              className={`icon-button${rebuilding ? ' is-active' : ''}`}
+              type="button"
+              title="重新构建项目并刷新预览"
+              disabled={rebuilding}
+              onClick={async () => {
+                setRebuilding(true);
+                try {
+                  const resp = await fetch(`/api/agent/sessions/${sessionId}/rebuild`, { method: 'POST' });
+                  if (resp.ok) {
+                    setPreviewRefreshKey((k) => k + 1);
+                  }
+                } finally {
+                  setRebuilding(false);
+                }
+              }}
+            >
+              <Icon name="refresh" size={15} />
+            </button>
+          )}
           <button
             aria-label={treeVisible ? '隐藏文件目录' : '显示文件目录'}
             className="icon-button"
@@ -566,8 +633,14 @@ function FilePanel({
             </>
           )}
           <div className="file-preview-pane" style={!treeVisible ? { gridColumn: '1' } : undefined}>
-            {selected ? (
-              <FilePreview file={selected} />
+            {buildPreview && previewUrl ? (
+              <FilePreview
+                file={{ path: 'dist/index.html', content: null, operation: 'read_file' }}
+                previewUrl={previewUrl}
+                isBuildPreview={true}
+              />
+            ) : selected ? (
+              <FilePreview file={selected} previewUrl={previewUrl} isBuildPreview={buildPreview} />
             ) : (
               <div className="file-preview-empty">
                 <Icon name="folder" size={28} />

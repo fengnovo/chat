@@ -1062,6 +1062,16 @@ export class AgentRepository {
       : null;
   }
 
+  /** 通过 external_key 获取对应的 workspace_id（用于公开预览路由）。 */
+  async getWorkspaceIdByExternalKey(externalKey: string): Promise<string | null> {
+    const result = await this.pool.query(
+      `SELECT w.id AS workspace_id FROM agent_sessions s JOIN workspaces w ON w.id = s.workspace_id WHERE s.external_key = $1`,
+      [externalKey]
+    );
+    const row = result.rows[0];
+    return row ? String(row.workspace_id) : null;
+  }
+
   async saveWorkspaceSandboxId(
     tenantId: string,
     workspaceId: string,

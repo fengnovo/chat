@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { readFile, stat, readdir } from 'node:fs/promises';
 import { rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 import {
@@ -979,5 +981,219 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   app.get('/api/chat/:runId/stream', async (request, reply) => {
     const { runId } = request.params as { runId: string };
     return streamWorkflowRun(request, reply, services, runId);
+  });
+
+  // ── 构建预览（静态文件服务 + 重新构建） ──────────────────────────────
+
+  const SANDBOX_IMAGE = process.env.DOCKER_SANDBOX_IMAGE?.trim() || 'chat-agent-sandbox:latest';
+  const DOCKER_WORKSPACE = '/mnt/user-data/workspace';
+
+  /** 按 session → workspace_id 反推宿主侧沙箱工作区绝对路径。 */
+  async function resolveSandboxWorkspacePath(tenantId: string, sessionId: string): Promise<string | null> {
+    if (services.config.SANDBOX_RUNTIME !== 'docker') return null;
+    const workspace = await services.repository
+      .getWorkspaceSandboxForWorker(tenantId, sessionId)
+      .catch(() => null);
+    if (!workspace?.workspaceId) return null;
+    return path.join(services.config.SANDBOX_SESSIONS_ROOT, workspace.workspaceId, 'user-data', 'workspace');
+  }
+
+  /** 仅通过 session ID 查找沙箱路径（用于公开预览路由，无需认证）。 */
+  async function resolveSandboxWorkspacePathBySession(sessionId: string): Promise<string | null> {
+    if (services.config.SANDBOX_RUNTIME !== 'docker') return null;
+    
+    // 通过 sessionId（external_key）查询对应的 workspace_id
+    const workspaceId = await services.repository.getWorkspaceIdByExternalKey(sessionId);
+    if (!workspaceId) return null;
+    
+    // 使用 workspace_id 作为沙箱目录名
+    const sandboxPath = path.join(services.config.SANDBOX_SESSIONS_ROOT, workspaceId, 'user-data', 'workspace');
+    try {
+      const info = await stat(sandboxPath);
+      if (info.isDirectory()) return sandboxPath;
+    } catch {
+      /* 目录不存在 */
+    }
+    return null;
+  }
+
+  /** 在宿主工作区内查找包含 index.html 的预览根目录。 */
+  async function findPreviewRoot(workspacePath: string): Promise<string | null> {
+    // 优先 workspace/dist/，其次 workspace 根目录本身
+    const candidates = [
+      path.join(workspacePath, 'dist'),
+      workspacePath,
+    ];
+    for (const dir of candidates) {
+      const indexFile = path.join(dir, 'index.html');
+      try {
+        const info = await stat(indexFile);
+        if (info.isFile()) return dir;
+      } catch { /* 不存在 */ }
+    }
+    // 扫描一级子目录（AI 可能写到子目录的 dist/ 下）
+    try {
+      const entries = await readdir(workspacePath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const distDir = path.join(workspacePath, entry.name, 'dist');
+        try {
+          const info = await stat(path.join(distDir, 'index.html'));
+          if (info.isFile()) return distDir;
+        } catch { /* 不存在 */ }
+      }
+    } catch { /* 工作区不存在 */ }
+    return null;
+  }
+
+  const MIME_TYPES: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.htm': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.mjs': 'application/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.ico': 'image/x-icon',
+    '.map': 'application/json',
+  };
+
+  /** 提供会话沙箱内的构建产物预览（只读静态文件服务）。 */
+  const servePreview = async (request: any, reply: any) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const wildcard = (request.params as Record<string, string>)['*'] ?? '';
+    const requestPath = wildcard || 'index.html';
+
+    // 安全检查：验证请求来自本站（iframe 内嵌时浏览器会自动携带 Origin/Referer）
+    const origin = request.headers.origin ?? request.headers.referer ?? '';
+    const allowedOrigins = [
+      services.config.WEB_ORIGIN,
+      `http://localhost:${services.config.API_PORT}`,
+      `http://127.0.0.1:${services.config.API_PORT}`,
+    ];
+    if (!allowedOrigins.some((o) => origin.startsWith(o))) {
+      console.log('[preview] blocked_by_origin:', { origin, allowedOrigins });
+      return reply.code(403).send({ error: 'forbidden' });
+    }
+
+    // 公开预览路由：不依赖认证，直接通过 session ID 查找沙箱
+    const sandboxPath = await resolveSandboxWorkspacePathBySession(sessionId);
+    if (!sandboxPath) {
+      console.log('[preview] sandbox_not_found:', { sessionId });
+      return reply.code(404).send({ error: 'sandbox_not_found' });
+    }
+
+    const previewRoot = await findPreviewRoot(sandboxPath);
+    if (!previewRoot) {
+      console.log('[preview] no_preview_built:', { sandboxPath });
+      return reply.code(404).send({ error: 'no_preview_built' });
+    }
+
+    const safePath = path.normalize(requestPath).replace(/^(\.\.[/\\])+/, '');
+    const filePath = path.resolve(previewRoot, safePath);
+    console.log('[preview] serving:', { previewRoot, requestPath, filePath });
+    // 路径遍历保护
+    if (!filePath.startsWith(previewRoot)) return reply.code(403).send({ error: 'forbidden' });
+
+    try {
+      const info = await stat(filePath);
+      if (!info.isFile()) return reply.code(404).send({ error: 'not_found' });
+      const ext = path.extname(filePath).toLowerCase();
+      const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+      const content = await readFile(filePath);
+      return reply.code(200).header('content-type', contentType).header('cache-control', 'no-cache').send(content);
+    } catch (err) {
+      console.log('[preview] read_error:', { filePath, err });
+      return reply.code(404).send({ error: 'not_found' });
+    }
+  };
+  app.get('/api/agent/sessions/:sessionId/preview', servePreview);
+  app.get('/api/agent/sessions/:sessionId/preview/*', servePreview);
+
+  /** 在沙箱容器内重新构建项目（vite build），产物输出到 workspace/dist/。 */
+  app.post('/api/agent/sessions/:sessionId/rebuild', async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+
+    // sessionId 可能是 external_key（前端统一传 externalKey），需解析为内部 id
+    const session = await services.repository.getSessionByExternalKey(request.auth, sessionId).catch(() => null);
+    const resolvedSessionId = session?.id ?? sessionId;
+
+    const sandboxPath = await resolveSandboxWorkspacePath(request.auth.tenantId, resolvedSessionId);
+    if (!sandboxPath) return reply.code(404).send({ error: 'sandbox_not_found' });
+
+    if (services.config.SANDBOX_RUNTIME !== 'docker') {
+      return reply.code(400).send({ error: 'rebuild_requires_docker' });
+    }
+
+    const containerName = `rebuild-${sessionId.slice(0, 8)}-${Date.now().toString(36)}`;
+    const buildScript = [
+      'set -e',
+      `cd ${DOCKER_WORKSPACE}`,
+      // 查找包含 package.json 的项目目录
+      'PROJECT_DIR="."',
+      'if [ ! -f package.json ]; then',
+      '  for d in */; do',
+      '    if [ -f "${d}package.json" ]; then PROJECT_DIR="${d}"; break; fi',
+      '  done',
+      'fi',
+      'cd "$PROJECT_DIR"',
+      `npx vite build --base ./ --outDir ${DOCKER_WORKSPACE}/dist 2>&1`,
+    ].join(' && ');
+
+    const args = [
+      'run', '--rm',
+      '--name', containerName,
+      '--network', 'none',
+      '--read-only',
+      '--cap-drop', 'ALL',
+      '--security-opt', 'no-new-privileges',
+      '--pids-limit', '128',
+      '--memory', '768m',
+      '--cpus', '1.5',
+      '--tmpfs', '/tmp:rw,nosuid,nodev,size=128m',
+      '--user', '65532:65532',
+      '--env', 'HOME=/tmp',
+      '--workdir', DOCKER_WORKSPACE,
+      '--mount', `type=bind,src=${sandboxPath},dst=/mnt/user-data`,
+      SANDBOX_IMAGE,
+      '/bin/bash', '-lc', buildScript,
+    ];
+
+    const output = await new Promise<{ stdout: string; exitCode: number }>((resolveExec) => {
+      const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      const maxBytes = 100_000;
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (totalBytes < maxBytes) {
+          chunks.push(chunk.subarray(0, maxBytes - totalBytes));
+          totalBytes += chunk.length;
+        }
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        if (totalBytes < maxBytes) {
+          chunks.push(chunk.subarray(0, maxBytes - totalBytes));
+          totalBytes += chunk.length;
+        }
+      });
+      child.once('error', () => resolveExec({ stdout: 'Docker 执行出错', exitCode: 1 }));
+      child.once('close', (code) => resolveExec({
+        stdout: Buffer.concat(chunks).toString('utf8'),
+        exitCode: code ?? 1,
+      }));
+    });
+
+    if (output.exitCode === 0) {
+      return { status: 'ok', previewUrl: `/api/agent/sessions/${sessionId}/preview/` };
+    }
+    return reply.code(500).send({ error: 'build_failed', output: output.stdout.slice(0, 5000) });
   });
 }

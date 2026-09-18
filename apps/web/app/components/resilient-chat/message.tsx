@@ -121,6 +121,7 @@ function Message({
   onCopy,
   onDismissCard,
   onFileLinkClick,
+  onPreviewPage,
   onPreviewDiagram,
   onPreviewImage,
   reasoning,
@@ -142,6 +143,8 @@ function Message({
   onDismissCard: (id: string) => void;
   /** 点击聊天正文中引用的文件路径链接时，打开文件面板并定位到该文件。 */
   onFileLinkClick?: (path: string) => void;
+  /** 点击页面预览按钮时，打开文件面板的构建预览。 */
+  onPreviewPage?: () => void;
   /** 点击 Mermaid 图表时弹出浮层，支持缩放查看。 */
   onPreviewDiagram: (svg: string) => void;
   /** 点击聊天图片时在当前页弹出大图（输入框缩略图与历史消息共用）。 */
@@ -248,6 +251,7 @@ function Message({
               <MarkdownContent
                 content={text}
                 onFileLinkClick={onFileLinkClick}
+                onPreviewPage={onPreviewPage}
                 onPreviewDiagram={onPreviewDiagram}
                 onPreviewImage={onPreviewImage}
                 highlight={highlight}
@@ -410,6 +414,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 function MarkdownContent({
   content,
   onFileLinkClick,
+  onPreviewPage,
   onPreviewDiagram,
   onPreviewImage,
   highlight,
@@ -417,11 +422,165 @@ function MarkdownContent({
   content: string;
   /** 点击正文里的文件路径链接时触发，由父组件打开文件面板并定位。 */
   onFileLinkClick?: (path: string) => void;
+  /** 点击页面预览按钮时触发，由父组件打开文件面板的构建预览。 */
+  onPreviewPage?: () => void;
   onPreviewDiagram?: (svg: string) => void;
   onPreviewImage: (url: string, filename?: string) => void;
   /** 开启后启用代码语法高亮与 Mermaid 图表渲染；关闭则退化为纯文本代码块。 */
   highlight: boolean;
 }) {
+  // 检测内容中是否包含预览链接模式（markdown 格式或纯文本）
+  const previewLinkRegex = /\[?📺?\s*打开页面预览\]?\(preview:\/\/open\)|📺\s*打开页面预览|打开页面预览|preview_page/;
+  const hasPreviewLink = onPreviewPage && previewLinkRegex.test(content);
+
+  if (hasPreviewLink) {
+    // 分割内容：预览链接之前、之后
+    const parts = content.split(previewLinkRegex);
+    return (
+      <>
+        {parts[0] && (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={highlight ? [rehypeHighlight] : []}
+            components={{
+              a: ({ children, href }) => {
+                const filePath = fileLinkPath(href);
+                if (filePath && onFileLinkClick) {
+                  return (
+                    <button
+                      type="button"
+                      className="file-link"
+                      onClick={() => onFileLinkClick(filePath)}
+                      title={`在文件浏览器中定位：${filePath}`}
+                    >
+                      {children}
+                    </button>
+                  );
+                }
+                const safe = safeExternalUrl(href);
+                if (!safe) return <span>{children}</span>;
+                return (
+                  <a href={safe} rel="noopener noreferrer" target="_blank">
+                    {children}
+                  </a>
+                );
+              },
+              code: ({ className, children }) => {
+                if (highlight && className && /language-mermaid/i.test(className)) {
+                  const chart = String(children).replace(/\n$/, '');
+                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+                }
+                return <code className={className}>{children}</code>;
+              },
+              pre: ({ children }) => {
+                const child = Array.isArray(children) ? children[0] : children;
+                const codeProps = isValidElement(child)
+                  ? (child.props as { className?: string; children?: unknown })
+                  : null;
+                if (
+                  highlight &&
+                  codeProps?.className &&
+                  /language-mermaid/i.test(codeProps.className)
+                ) {
+                  const chart = String(codeProps.children ?? '').replace(/\n$/, '');
+                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+                }
+                return <CodeBlock>{children}</CodeBlock>;
+              },
+              img: ({ src, alt }) => {
+                if (!src) return null;
+                const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+                return (
+                  <img
+                    src={url}
+                    alt={alt ?? ''}
+                    loading="lazy"
+                    onClick={() => onPreviewImage(url, alt ?? undefined)}
+                  />
+                );
+              },
+            }}
+          >
+            {parts[0]}
+          </ReactMarkdown>
+        )}
+        <button
+          type="button"
+          className="preview-page-link"
+          onClick={onPreviewPage}
+        >
+          📺 打开页面预览
+        </button>
+        {parts[1] && (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={highlight ? [rehypeHighlight] : []}
+            components={{
+              a: ({ children, href }) => {
+                const filePath = fileLinkPath(href);
+                if (filePath && onFileLinkClick) {
+                  return (
+                    <button
+                      type="button"
+                      className="file-link"
+                      onClick={() => onFileLinkClick(filePath)}
+                      title={`在文件浏览器中定位：${filePath}`}
+                    >
+                      {children}
+                    </button>
+                  );
+                }
+                const safe = safeExternalUrl(href);
+                if (!safe) return <span>{children}</span>;
+                return (
+                  <a href={safe} rel="noopener noreferrer" target="_blank">
+                    {children}
+                  </a>
+                );
+              },
+              code: ({ className, children }) => {
+                if (highlight && className && /language-mermaid/i.test(className)) {
+                  const chart = String(children).replace(/\n$/, '');
+                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+                }
+                return <code className={className}>{children}</code>;
+              },
+              pre: ({ children }) => {
+                const child = Array.isArray(children) ? children[0] : children;
+                const codeProps = isValidElement(child)
+                  ? (child.props as { className?: string; children?: unknown })
+                  : null;
+                if (
+                  highlight &&
+                  codeProps?.className &&
+                  /language-mermaid/i.test(codeProps.className)
+                ) {
+                  const chart = String(codeProps.children ?? '').replace(/\n$/, '');
+                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+                }
+                return <CodeBlock>{children}</CodeBlock>;
+              },
+              img: ({ src, alt }) => {
+                if (!src) return null;
+                const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+                return (
+                  <img
+                    src={url}
+                    alt={alt ?? ''}
+                    loading="lazy"
+                    onClick={() => onPreviewImage(url, alt ?? undefined)}
+                  />
+                );
+              },
+            }}
+          >
+            {parts[1]}
+          </ReactMarkdown>
+        )}
+      </>
+    );
+  }
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -443,15 +602,11 @@ function MarkdownContent({
           }
           const safe = safeExternalUrl(href);
           if (!safe) {
-            // 危险链接降级为纯文本，避免 javascript: 等协议在本站上下文执行。
             return <span>{children}</span>;
           }
           return (
             <a
               href={safe}
-              // noopener：新标签页无法通过 window.opener 反向操作本页；
-              // noreferrer：不发送 Referer 头，避免泄露当前页面 URL。
-              // 二者共同确保跳转不携带本站点的任何上下文信息。
               rel="noopener noreferrer"
               target="_blank"
             >
@@ -460,8 +615,6 @@ function MarkdownContent({
           );
         },
         code: ({ className, children }) => {
-          // 仅在开启高亮时识别 mermaid 代码块并渲染为图表；
-          // 关闭时让代码以普通文本展示，便于对比"未增强"的渲染效果。
           if (highlight && className && /language-mermaid/i.test(className)) {
             const chart = String(children).replace(/\n$/, '');
             return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
@@ -469,11 +622,6 @@ function MarkdownContent({
           return <code className={className}>{children}</code>;
         },
         pre: ({ children }) => {
-          // react-markdown 传给 pre 的是尚未执行的 code 渲染器元素，
-          // 无法用 child.type === MermaidDiagram 判断（图表组件此时还没创建）；
-          // 只能读它身上的原始 hast props：className 与代码文本。
-          // Mermaid 图表自带浅色容器，若再套暗色 <pre> 会出现一圈黑色边框，
-          // 命中时直接渲染图表组件，其余代码块保持 pre 样式并带复制按钮。
           const child = Array.isArray(children) ? children[0] : children;
           const codeProps = isValidElement(child)
             ? (child.props as { className?: string; children?: unknown })

@@ -58,6 +58,10 @@
   gap: 2px;
 }
 
+.file-panel-actions .icon-button.is-active {
+  color: var(--accent, #7c3aed);
+}
+
 .file-panel-head .icon-button {
   height: 36px;
   width: 36px;

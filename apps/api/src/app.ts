@@ -117,11 +117,18 @@ export async function buildApp(options: BuildAppOptions) {
     '/api/auth/login',
     '/api/auth/register',
     '/api/auth/logout',
+    // Preview routes serve static files from sandbox; iframe resources don't carry cookies.
+    '/api/agent/sessions/:sessionId/preview',
+    '/api/agent/sessions/:sessionId/preview/*',
   ]);
   app.decorateRequest('auth');
   app.addHook('preHandler', async (request, reply) => {
     const pathname = request.url.split('?')[0] ?? request.url;
     if (request.url.startsWith('/health/')) return;
+    // Preview routes are public but origin-restricted; skip auth to allow iframe resource loading.
+    if (pathname.startsWith('/api/agent/sessions/') && pathname.includes('/preview')) {
+      return;
+    }
     if (PUBLIC_PATHS.has(pathname)) {
       // 登录与自助注册都是匿名入口，共用同一 IP 限流桶，防撞库与批量注册。
       if (pathname === '/api/auth/login' || pathname === '/api/auth/register') {

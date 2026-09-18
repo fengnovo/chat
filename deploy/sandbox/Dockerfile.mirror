@@ -12,7 +12,7 @@
 #
 # 构建上下文是 infra/sandbox（所以 COPY 的相对路径与原始 Dockerfile 相同）。
 
-FROM node:24.14.0-bookworm-slim
+FROM docker.m.daocloud.io/library/node:24.14.0-bookworm-slim
 
 # 换成阿里云 Debian 镜像源（bookworm 用的是 deb822 格式的 sources）
 RUN set -eux; \
@@ -54,7 +54,9 @@ RUN npm config set registry https://registry.npmmirror.com \
     && cd /opt/chat-web-runtime \
     && npm install --no-audit --no-fund
 COPY prepare-web-project /usr/local/bin/prepare-web-project
-RUN chmod 0755 /usr/local/bin/prepare-web-project
+COPY run-web-preview /usr/local/bin/run-web-preview
+RUN chmod 0755 /usr/local/bin/prepare-web-project \
+    && chmod 0755 /usr/local/bin/run-web-preview
 
 WORKDIR /mnt/user-data/workspace
 

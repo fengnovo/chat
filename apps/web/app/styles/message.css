@@ -251,6 +251,31 @@
   background: #e0d8ff;
 }
 
+.markdown-content .preview-page-link {
+  align-items: center;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 600;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 8px 18px;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.markdown-content .preview-page-link:hover {
+  box-shadow: 0 2px 8px rgb(124 58 237 / 30%);
+  transform: translateY(-1px);
+}
+
+.markdown-content .preview-page-link:active {
+  transform: translateY(0);
+}
+
 .markdown-content img {
   border-radius: 10px;
   cursor: zoom-in;

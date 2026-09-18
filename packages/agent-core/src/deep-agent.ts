@@ -235,38 +235,39 @@ function truncateToolText(text: string): string {
  * 递归压缩工具参数/结果：保留对象结构（前端要按 file_path / command 取摘要），
  * 只对超长字符串逐字段截断，避免 write_file 的整段 content 撑爆事件表。
  */
-function boundedToolPayload(value: unknown, depth = 0): unknown {
+function boundedToolPayload(value: unknown, depth = 0, preserveStrings = false): unknown {
   if (value === undefined || value === null) return null;
-  if (typeof value === 'string') return truncateToolText(value);
+  if (typeof value === 'string') return preserveStrings ? value : truncateToolText(value);
   if (typeof value === 'function' || typeof value === 'symbol') return String(value);
   if (typeof value !== 'object') return value;
-  if (depth >= 3) return truncateToolText(String(value));
+  if (depth >= 3) return preserveStrings ? String(value) : truncateToolText(String(value));
   if (Array.isArray(value)) {
-    return value.slice(0, MAX_TOOL_FIELDS).map((item) => boundedToolPayload(item, depth + 1));
+    return value.slice(0, MAX_TOOL_FIELDS).map((item) => boundedToolPayload(item, depth + 1, preserveStrings));
   }
-  if (value instanceof Error) return truncateToolText(value.message);
+  if (value instanceof Error) return preserveStrings ? value.message : truncateToolText(value.message);
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
       .slice(0, MAX_TOOL_FIELDS)
-      .map(([key, item]) => [key, boundedToolPayload(item, depth + 1)]),
+      .map(([key, item]) => [key, boundedToolPayload(item, depth + 1, preserveStrings)]),
   );
 }
 
 /**
  * tools 流把调用参数作为 JSON 字符串给出；解析回对象，
  * 前端才能按 file_path / command 取摘要而不是展示一整串转义 JSON。
+ * write_file / edit_file 的 input 保留完整 content，供文件面板展示。
  */
-export function normalizeToolInput(value: unknown): unknown {
-  if (typeof value !== 'string') return boundedToolPayload(value);
+export function normalizeToolInput(value: unknown, preserveStrings = false): unknown {
+  if (typeof value !== 'string') return boundedToolPayload(value, 0, preserveStrings);
   const trimmed = value.trim();
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
-      return boundedToolPayload(JSON.parse(trimmed));
+      return boundedToolPayload(JSON.parse(trimmed), 0, preserveStrings);
     } catch {
-      return truncateToolText(value);
+      return preserveStrings ? value : truncateToolText(value);
     }
   }
-  return truncateToolText(value);
+  return preserveStrings ? value : truncateToolText(value);
 }
 
 /**
@@ -677,12 +678,23 @@ export async function createDeepAgentRuntime(
         )] : []),
       ]
     : [];
+  // 页面预览工具：AI 构建完 Web 项目后调用，前端会在消息中渲染可点击的预览按钮。
+  const previewPageTool = tool(
+    async (_input: { message?: string }) => {
+      return '✅ 页面预览已准备好。请在回复中包含以下链接让用户点击查看：[📺 打开页面预览](preview://open)';
+    },
+    {
+      name: 'preview_page',
+      description: 'Web 项目构建完成后调用此工具，为用户生成一个可点击的页面预览按钮。调用后在回复文本中包含返回的预览链接。',
+      schema: z.object({ message: z.string().optional().describe('可选的预览说明文字，如页面标题') }),
+    },
+  );
   const agent = createDeepAgent({
     model: router.primary,
     checkpointer: options.checkpointer as never,
     backend: agentBackend as never,
     ...(options.longTermMemory ? { store: options.longTermMemory.store as never } : {}),
-    tools: [createAskUserTool(), spawnSubagentTool, ...memoryTools, ...mcpTools] as never,
+    tools: [createAskUserTool(), spawnSubagentTool, previewPageTool, ...memoryTools, ...mcpTools] as never,
     skills: options.skills ?? [],
     memory: memorySources,
     ...(options.longTermMemory
@@ -709,8 +721,15 @@ export async function createDeepAgentRuntime(
             '长期记忆由系统通过 remember_fact / forget_memory 两个工具统一管理。不要主动 read_file/edit_file /memories/ 目录下的任何文件——该目录由后台维护，手动读写会失败或触发不必要的审批。',
           ]
         : []),
-      '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。启动网络服务时必须监听 0.0.0.0，并用后台命令启动。',
+      '只有任务需要理解或修改项目时才检查项目结构；寒暄和通用问答直接回答。多步任务使用 todo；修改完成后运行相关测试或类型检查。',
       '当你决定调用工具时，直接发起工具调用，不要在同一轮里先输出解释或旁白；面向用户的说明文字只放在所有工具执行完后的最终回复里。',
+      '【Web 项目预览规则 - 必须执行】当你创建了任何 Web 项目（HTML/Vite/React/等）时，**必须**按以下步骤操作：\n' +
+      '  1) 如果是独立 HTML 文件，直接写到工作区根目录 /mnt/user-data/workspace/index.html，不要创建子目录。\n' +
+      '  2) 如果是 Vite/React 多文件项目，写到子目录（如 /mnt/user-data/workspace/homepage/）后，必须自己用 execute 工具执行构建：cd /mnt/user-data/workspace/homepage && npx vite build --base ./ --outDir /mnt/user-data/workspace/dist 。\n' +
+      '  3) **无论什么类型的项目，完成后必须立即调用 preview_page 工具**。这个工具会返回一个预览链接。\n' +
+      '  4) 在最终回复中，**必须原样包含** preview_page 工具返回的链接：`[📺 打开页面预览](preview://open)` 。不要改写、不要 paraphrase、不要只写文字不带链接。\n' +
+      '  5) 绝对不要在回复中说"直接用浏览器打开"或类似的话。用户只能通过点击预览按钮来查看页面。\n' +
+      '  6) 绝对不要在回复中给用户列出手动执行的命令让用户自己跑。所有命令都由你自己通过 execute 工具执行。不要启动任何 dev server 或静态文件服务。',
       options.autoApproveTools
         ? '用户已允许本会话自动执行工具。不要读取工作区之外的路径。'
         : '文件写入、删除和命令执行必须经过人工审批。不要读取工作区之外的路径。',
@@ -1039,7 +1058,10 @@ export async function createDeepAgentRuntime(
               type: 'tool.started',
               invocationId,
               tool: toolName,
-              input: normalizeToolInput(payload.input),
+              input: normalizeToolInput(
+                payload.input,
+                toolName === 'write_file' || toolName === 'edit_file',
+              ),
             };
           } else if (eventName === 'on_tool_end') {
             const retrieval = extractRetrievalEvent(options.runId, invocationId, toolName, payload.output);

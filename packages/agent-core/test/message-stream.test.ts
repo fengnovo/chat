@@ -92,6 +92,22 @@ test('oversized tool payloads are truncated before they reach the event table', 
   assert.match(parsed.command, /\[已截断\]$/);
 });
 
+test('write_file / edit_file input keeps full content for the file panel', () => {
+  const longContent = 'line\n'.repeat(2_000); // ~10 000 chars
+  const parsed = normalizeToolInput(
+    JSON.stringify({ file_path: '/tmp/x.ts', content: longContent }),
+    true, // preserveStrings — same flag the runtime passes for write_file/edit_file
+  ) as { file_path: string; content: string };
+  assert.equal(parsed.content, longContent);
+  assert.ok(!parsed.content.includes('[已截断]'));
+  // 不传 preserveStrings 时仍截断
+  const truncated = normalizeToolInput(
+    JSON.stringify({ file_path: '/tmp/x.ts', content: longContent }),
+  ) as { file_path: string; content: string };
+  assert.ok(truncated.content.length < longContent.length);
+  assert.match(truncated.content, /\[已截断\]$/);
+});
+
 test('write_todos Command output is summarized, never dumped as [object Object]', () => {
   // 与 run_events 中实际落库的 write_todos tool.end 负载同构（LangGraph Command）。
   const command = {

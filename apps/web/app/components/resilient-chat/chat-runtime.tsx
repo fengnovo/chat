@@ -134,6 +134,8 @@ function ChatRuntime() {
   const [filesWidth, setFilesWidth] = useState(DEFAULT_FILES_WIDTH);
   /** 文件面板中当前选中的文件路径；从聊天消息的文件链接跳转时由外部设置。 */
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  /** 外部触发 FilePanel 打开构建预览的计数器，每次 +1 触发 useEffect。 */
+  const [openBuildPreviewCount, setOpenBuildPreviewCount] = useState(0);
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
@@ -929,6 +931,13 @@ function ChatRuntime() {
     setFilesOpen(true);
   }
 
+  /** 用户点击聊天消息中的页面预览按钮：打开文件面板并启用构建预览。 */
+  function handlePreviewPage() {
+    setSelectedFilePath(null);
+    setFilesOpen(true);
+    setOpenBuildPreviewCount((c) => c + 1);
+  }
+
   async function selectSession(session: WebSessionSummary) {
     if (session.externalKey === conversation.chatId) return;
     stickToBottomRef.current = true;
@@ -1518,6 +1527,7 @@ function ChatRuntime() {
                   }}
                   onCopy={copyMessage}
                   onFileLinkClick={handleFileLinkClick}
+                  onPreviewPage={handlePreviewPage}
                   onPreviewDiagram={(svg) =>
                     setLightboxImage({ svg, filename: '图表预览' })
                   }
@@ -1666,6 +1676,8 @@ function ChatRuntime() {
           selectedPath={selectedFilePath}
           onSelectPath={setSelectedFilePath}
           onHideSidebar={() => setSidebarHidden(true)}
+          sessionId={sessions.find((s) => s.externalKey === conversation.chatId)?.externalKey ?? null}
+          openBuildPreview={openBuildPreviewCount}
         />
       )}
 
