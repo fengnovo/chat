@@ -287,6 +287,7 @@ async function buildLongTermMemory(
   job: RunJob,
   projectId: string | null,
   query: string,
+  options: { refreshProfile: boolean } = { refreshProfile: true },
 ): Promise<NonNullable<Parameters<typeof createDeepAgentRuntime>[0]['longTermMemory']> | undefined> {
   const retrieveStartedAt = Date.now();
   try {
@@ -339,7 +340,9 @@ async function buildLongTermMemory(
       limit: 12,
       maxChars: 6_000,
     });
-    if (records.length > 0) {
+    // start 轮用 PG 最新状态重渲染 profile；续跑轮保留文件现状——
+    // 审批恢复时可能正挂着针对旧文件内容的 edit_file，重写会让其 old_string 失配。
+    if (options.refreshProfile && records.length > 0) {
       await writeLongTermMemoryProfile(services.memoryStore, namespace, renderProfile(records, { maxChars: 6_000 }));
     }
     services.memoryMetrics?.memoryOperation?.({ operation: 'retrieve', outcome: 'success', durationMs: Date.now() - retrieveStartedAt });
@@ -716,13 +719,19 @@ export function createRunProcessor(
                   services.config.AGENT_SKILLS_DIR,
                 ),
               ),
-              // 长期记忆：仅 start 轮按本轮用户消息检索并写入 profile.md；
-              // 续跑沿用 checkpointer 中已有上下文，避免重复注入。
-              job.kind === 'start'
-                ? observed('memory.retrieve', () =>
-                    buildLongTermMemory(services, job, projectId, job.message),
-                  )
-                : Promise.resolve(undefined),
+              // 长期记忆：start 轮按本轮消息检索并重写 profile.md；
+              // 续跑轮同样挂载记忆后端/工具并注入 context（runtime 是重建的，
+              // 不挂载会导致 /memories 路径失效及 remember/forget 工具丢失），
+              // 但保留 profile.md 文件现状，避免挂起的编辑失配。
+              observed(job.kind === 'start' ? 'memory.retrieve' : 'memory.reattach', () =>
+                buildLongTermMemory(
+                  services,
+                  job,
+                  projectId,
+                  job.kind === 'start' ? job.message : '',
+                  { refreshProfile: job.kind === 'start' },
+                ),
+              ),
             ]),
         );
         // Langfuse 按 run 采样：命中则在当前 job span 上下文内建一个 LangChain
