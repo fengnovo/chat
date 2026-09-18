@@ -26,6 +26,7 @@ interface BuildAppOptions {
   publisher?: Redis;
   queue?: Queue;
   knowledgeQueue?: Queue;
+  memoryIndexQueue?: Queue;
   knowledgeRepository: import('./types.js').KnowledgeRepositoryApi;
   artifacts?: S3ArtifactStore;
   observability?: ApiObservability;
@@ -66,6 +67,8 @@ export async function buildApp(options: BuildAppOptions) {
   const knowledgeQueue =
     options.knowledgeQueue ??
     new Queue('knowledge-index', { connection: knowledgeQueueConnection! });
+  const memoryIndexQueueConnection = options.memoryIndexQueue ? null : new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
+  const memoryIndexQueue = options.memoryIndexQueue ?? new Queue('agent-memory-index', { connection: memoryIndexQueueConnection! });
   const artifacts =
     options.artifacts ??
     new S3ArtifactStore({
@@ -191,6 +194,7 @@ export async function buildApp(options: BuildAppOptions) {
     outbox,
     streamSubscriptions,
     knowledgeQueue,
+    memoryIndexQueue,
     observability,
   });
   await registerKnowledgeRoutes(app, {
@@ -215,8 +219,10 @@ export async function buildApp(options: BuildAppOptions) {
     await streamSubscriptions.closeAll();
     await queue.close();
     await knowledgeQueue.close();
+    await memoryIndexQueue.close();
     await queueConnection?.quit();
     await knowledgeQueueConnection?.quit();
+    await memoryIndexQueueConnection?.quit();
     await publisher.quit();
     artifacts.destroy();
   });

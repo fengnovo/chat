@@ -251,6 +251,10 @@ export function UserMenu() {
             <Icon name="home" size={15} />
             首页
           </Link>
+          <Link href="/memory" onClick={() => setOpen(false)}>
+            <Icon name="layers" size={15} />
+            长期记忆
+          </Link>
           {(user.role === 'admin' || user.role === 'owner') && (
             <Link href="/knowledge" onClick={() => setOpen(false)}>
               <Icon name="layers" size={15} />

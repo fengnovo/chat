@@ -79,6 +79,15 @@ export interface CancellationResult {
   event: PersistedAgentEvent | null;
 }
 
+export interface MemoryJobRecord {
+  id: string;
+  tenantId: string;
+  userId: string;
+  sessionId: string;
+  runId: string;
+  attempts: number;
+}
+
 export interface ArtifactRecord {
   id: string;
   tenantId: string;
@@ -115,6 +124,55 @@ export interface DispatchOutboxRecord {
   runId: string;
   job: RunJob;
   attempts: number;
+}
+
+export type MemoryKind =
+  | 'identity'
+  | 'preference'
+  | 'constraint'
+  | 'project_fact'
+  | 'episode'
+  | 'goal';
+export type MemoryStatus = 'active' | 'superseded' | 'deleted';
+export type MemoryScope = 'global' | `project:${string}`;
+
+export interface MemoryRecord {
+  id: string;
+  tenantId: string;
+  userId: string;
+  projectId: string | null;
+  assistantKey: string;
+  scope: MemoryScope;
+  kind: MemoryKind;
+  content: string;
+  normalizedKey: string;
+  importance: number;
+  confidence: number;
+  status: MemoryStatus;
+  sourceSessionId: string | null;
+  sourceRunId: string | null;
+  supersedesId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastAccessedAt: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface MemoryListInput {
+  tenantId: string;
+  userId: string;
+  assistantKey: string;
+  scope?: MemoryScope;
+  projectId?: string | null;
+  status?: MemoryStatus;
+  limit?: number;
+}
+
+export interface MemoryJobInput {
+  tenantId: string;
+  userId: string;
+  sessionId: string;
+  runId: string;
 }
 
 function iso(value: Date | string): string {
@@ -224,6 +282,32 @@ function chatAttachmentOf(row: QueryResultRow): ChatAttachmentRecord {
   };
 }
 
+function memoryOf(row: QueryResultRow): MemoryRecord {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    userId: String(row.user_id),
+    projectId: row.project_id ? String(row.project_id) : null,
+    assistantKey: String(row.assistant_key),
+    scope: String(row.scope) as MemoryScope,
+    kind: row.kind as MemoryKind,
+    content: String(row.content),
+    normalizedKey: String(row.normalized_key),
+    importance: Number(row.importance),
+    confidence: Number(row.confidence),
+    status: row.status as MemoryStatus,
+    sourceSessionId: row.source_session_id ? String(row.source_session_id) : null,
+    sourceRunId: row.source_run_id ? String(row.source_run_id) : null,
+    supersedesId: row.supersedes_id ? String(row.supersedes_id) : null,
+    createdAt: iso(row.created_at as Date),
+    updatedAt: iso(row.updated_at as Date),
+    lastAccessedAt: row.last_accessed_at ? iso(row.last_accessed_at as Date) : null,
+    metadata: row.metadata && typeof row.metadata === 'object'
+      ? row.metadata as Record<string, unknown>
+      : {},
+  };
+}
+
 async function inTransaction<T>(pool: Pool, action: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -255,6 +339,173 @@ export class AgentRepository {
 
   async ping(): Promise<void> {
     await this.pool.query('SELECT 1');
+  }
+
+  async listMemories(input: MemoryListInput): Promise<MemoryRecord[]> {
+    const values: unknown[] = [input.tenantId, input.userId, input.assistantKey];
+    const predicates = [
+      'tenant_id = $1',
+      'user_id = $2',
+      'assistant_key = $3',
+    ];
+    if (input.scope) {
+      values.push(input.scope);
+      predicates.push(`scope = $${values.length}`);
+    }
+    if (input.projectId !== undefined) {
+      values.push(input.projectId);
+      predicates.push(`project_id IS NOT DISTINCT FROM $${values.length}`);
+    }
+    values.push(input.status ?? 'active');
+    predicates.push(`status = $${values.length}`);
+    values.push(Math.min(Math.max(input.limit ?? 100, 1), 500));
+    const result = await this.pool.query(
+      `SELECT * FROM agent_memories
+       WHERE ${predicates.join(' AND ')}
+       ORDER BY importance DESC, updated_at DESC, id DESC
+       LIMIT $${values.length}`,
+      values,
+    );
+    return result.rows.map(memoryOf);
+  }
+
+  async getMemory(tenantId: string, userId: string, id: string): Promise<MemoryRecord | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM agent_memories
+       WHERE tenant_id = $1 AND user_id = $2 AND id = $3`,
+      [tenantId, userId, id],
+    );
+    return result.rows[0] ? memoryOf(result.rows[0]) : null;
+  }
+
+  async upsertMemory(input: Omit<MemoryRecord, 'createdAt' | 'updatedAt' | 'lastAccessedAt'> & {
+    id?: string;
+  }): Promise<MemoryRecord> {
+    const id = input.id ?? randomUUID();
+    const result = await this.pool.query(
+      `INSERT INTO agent_memories
+       (id, tenant_id, user_id, project_id, assistant_key, scope, kind, content,
+        normalized_key, importance, confidence, status, source_session_id,
+        source_run_id, supersedes_id, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
+       ON CONFLICT (tenant_id, user_id, assistant_key, scope, normalized_key)
+         WHERE status = 'active'
+       DO UPDATE SET content = EXCLUDED.content,
+                     kind = EXCLUDED.kind,
+                     importance = EXCLUDED.importance,
+                     confidence = EXCLUDED.confidence,
+                     source_session_id = EXCLUDED.source_session_id,
+                     source_run_id = EXCLUDED.source_run_id,
+                     supersedes_id = EXCLUDED.supersedes_id,
+                     metadata = EXCLUDED.metadata,
+                     updated_at = now()
+       RETURNING *`,
+      [
+        id,
+        input.tenantId,
+        input.userId,
+        input.projectId ?? null,
+        input.assistantKey,
+        input.scope,
+        input.kind,
+        input.content,
+        input.normalizedKey,
+        input.importance,
+        input.confidence,
+        input.status,
+        input.sourceSessionId ?? null,
+        input.sourceRunId ?? null,
+        input.supersedesId ?? null,
+        JSON.stringify(input.metadata ?? {}),
+      ],
+    );
+    return memoryOf(result.rows[0]);
+  }
+
+  async deleteMemory(tenantId: string, userId: string, id: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE agent_memories SET status = 'deleted', updated_at = now()
+       WHERE tenant_id = $1 AND user_id = $2 AND id = $3`,
+      [tenantId, userId, id],
+    );
+  }
+
+  async updateMemory(tenantId: string, userId: string, id: string, content: string): Promise<MemoryRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE agent_memories SET content = $4, updated_at = now()
+       WHERE tenant_id = $1 AND user_id = $2 AND id = $3 AND status = 'active'
+       RETURNING *`,
+      [tenantId, userId, id, content.trim().slice(0, 2_000)],
+    );
+    return result.rows[0] ? memoryOf(result.rows[0]) : null;
+  }
+
+  async clearMemories(tenantId: string, userId: string, assistantKey?: string): Promise<void> {
+    const values: unknown[] = [tenantId, userId];
+    const assistantPredicate = assistantKey ? ' AND assistant_key = $3' : '';
+    if (assistantKey) values.push(assistantKey);
+    await this.pool.query(
+      `UPDATE agent_memories SET status = 'deleted', updated_at = now()
+       WHERE tenant_id = $1 AND user_id = $2${assistantPredicate}`,
+      values,
+    );
+  }
+
+  async enqueueMemoryJob(input: MemoryJobInput): Promise<string> {
+    const result = await this.pool.query(
+      `INSERT INTO memory_jobs (id, tenant_id, user_id, session_id, run_id)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (tenant_id, run_id)
+       DO UPDATE SET updated_at = now()
+       RETURNING id`,
+      [randomUUID(), input.tenantId, input.userId, input.sessionId, input.runId],
+    );
+    return String(result.rows[0].id);
+  }
+
+  async claimMemoryJob(leaseMs = 300_000): Promise<MemoryJobRecord | null> {
+    const result = await this.pool.query(
+      `WITH candidate AS (
+         SELECT id FROM memory_jobs
+         WHERE (status = 'queued' AND available_at <= now())
+            OR (status = 'processing' AND locked_at < now() - ($1::integer * interval '1 millisecond'))
+         ORDER BY created_at ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1
+       )
+       UPDATE memory_jobs AS job
+       SET status = 'processing', locked_at = now(), attempts = job.attempts + 1,
+           updated_at = now()
+       FROM candidate
+       WHERE job.id = candidate.id
+       RETURNING job.id, job.tenant_id, job.user_id, job.session_id, job.run_id, job.attempts`,
+      [leaseMs],
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: String(row.id), tenantId: String(row.tenant_id), userId: String(row.user_id),
+          sessionId: String(row.session_id), runId: String(row.run_id), attempts: Number(row.attempts),
+        }
+      : null;
+  }
+
+  async completeMemoryJob(id: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE memory_jobs SET status = 'completed', locked_at = NULL, updated_at = now()
+       WHERE id = $1`,
+      [id],
+    );
+  }
+
+  async failMemoryJob(id: string, error: string, delayMs = 30_000): Promise<void> {
+    await this.pool.query(
+      `UPDATE memory_jobs SET status = 'queued', locked_at = NULL,
+          available_at = now() + ($2::integer * interval '1 millisecond'),
+          last_error = left($3, 4000), updated_at = now()
+       WHERE id = $1`,
+      [id, delayMs, error],
+    );
   }
 
   async ensureIdentity(context: AuthContext): Promise<void> {
@@ -782,6 +1033,14 @@ export class AgentRepository {
     return result.rows[0] ? runOf(result.rows[0]) : null;
   }
 
+  async getSessionForWorker(tenantId: string, sessionId: string): Promise<SessionRecord | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM agent_sessions WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL',
+      [tenantId, sessionId],
+    );
+    return result.rows[0] ? sessionOf(result.rows[0]) : null;
+  }
+
   async getWorkspaceSandboxForWorker(
     tenantId: string,
     sessionId: string,
@@ -895,6 +1154,20 @@ export class AgentRepository {
        ORDER BY seq ASC
        LIMIT $4`,
       [context.tenantId, runId, afterSeq, limit],
+    );
+    return result.rows.map((row) => ({ ...row.payload, seq: row.seq }) as PersistedAgentEvent);
+  }
+
+  async listEventsForWorker(
+    tenantId: string,
+    runId: string,
+    limit = 2_000,
+  ): Promise<PersistedAgentEvent[]> {
+    const result = await this.pool.query<{ seq: number; payload: AgentEvent }>(
+      `SELECT seq, payload FROM run_events
+       WHERE tenant_id = $1 AND run_id = $2
+       ORDER BY seq ASC LIMIT $3`,
+      [tenantId, runId, Math.min(Math.max(limit, 1), 5_000)],
     );
     return result.rows.map((row) => ({ ...row.payload, seq: row.seq }) as PersistedAgentEvent);
   }

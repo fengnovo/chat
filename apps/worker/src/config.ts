@@ -63,6 +63,13 @@ const schema = z.object({
   // 历史消息压缩：token 数超过该阈值时自动压缩旧消息，降低 LLM 输入 token 数。
   AGENT_SUMMARIZATION_TRIGGER_TOKENS: z.coerce.number().int().min(5_000).max(200_000).default(50_000),
   AGENT_SUMMARIZATION_KEEP_TOKENS: z.coerce.number().int().min(1_000).max(100_000).default(15_000),
+  // 长期记忆语义索引：复用现有 Qdrant + Embedding；缺任一关键配置则自动关闭索引，仅保留 PG 记忆。
+  MEMORY_QDRANT_URL: z.string().url().optional(),
+  MEMORY_QDRANT_API_KEY: z.string().optional(),
+  MEMORY_EMBEDDING_URL: z.string().url().optional(),
+  MEMORY_EMBEDDING_API_KEY: z.string().optional(),
+  MEMORY_EMBEDDING_MODEL: z.string().optional(),
+  MEMORY_EMBEDDING_DIM: z.coerce.number().int().min(1).max(8_192).optional(),
 });
 
 export type WorkerConfig = ReturnType<typeof loadWorkerConfig>;
@@ -94,7 +101,6 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
       : value.DATABASE_URL);
   const workspaceRoot = path.resolve(value.WORKSPACE_ROOT);
   const sandboxSessionsRoot = path.resolve(value.DOCKER_SANDBOX_SESSIONS_ROOT);
-  // 相对路径一律按仓库根解析，同一份 .env 在本机（仓库目录）与生产（/opt/chat）都可用。
   const mcpConfigPath = value.MCP_CONFIG_PATH
     ? path.resolve(repositoryRoot, value.MCP_CONFIG_PATH)
     : undefined;

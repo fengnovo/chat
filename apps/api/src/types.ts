@@ -39,6 +39,7 @@ export interface ApiServices {
   repository: AgentRepository;
   knowledgeRepository?: KnowledgeRepositoryApi;
   queue: Queue;
+  memoryIndexQueue?: Queue;
   publisher: Redis;
   artifacts: S3ArtifactStore;
   knowledgeQueue: Queue;

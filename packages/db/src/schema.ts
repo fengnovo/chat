@@ -1,6 +1,7 @@
 import {
   boolean,
   bigint,
+  real,
   index,
   integer,
   jsonb,
@@ -128,6 +129,56 @@ export const agentRuns = pgTable(
       table.idempotencyKey,
     ),
     index('agent_runs_tenant_created_idx').on(table.tenantId, table.createdAt),
+  ],
+);
+
+export const agentMemories = pgTable(
+  'agent_memories',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    assistantKey: text('assistant_key').notNull().default('chat'),
+    scope: text('scope').notNull(),
+    kind: text('kind').notNull(),
+    content: text('content').notNull(),
+    normalizedKey: text('normalized_key').notNull(),
+    importance: real('importance').notNull().default(0.5),
+    confidence: real('confidence').notNull().default(0.5),
+    status: text('status').notNull().default('active'),
+    sourceSessionId: uuid('source_session_id').references(() => agentSessions.id, { onDelete: 'set null' }),
+    sourceRunId: uuid('source_run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+    supersedesId: uuid('supersedes_id'),
+    metadata: jsonb('metadata').notNull().default({}),
+    lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('agent_memories_scope_idx').on(table.tenantId, table.userId, table.assistantKey, table.scope, table.status, table.updatedAt),
+  ],
+);
+
+export const memoryJobs = pgTable(
+  'memory_jobs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id').notNull().references(() => agentSessions.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('queued'),
+    attempts: integer('attempts').notNull().default(0),
+    availableAt: timestamp('available_at', { withTimezone: true }).notNull().defaultNow(),
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('memory_jobs_tenant_run_idx').on(table.tenantId, table.runId),
+    index('memory_jobs_claim_idx').on(table.status, table.availableAt, table.createdAt),
   ],
 );
 

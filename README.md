@@ -299,6 +299,12 @@ AUTH_JWT_SECRET=<openssl rand -hex 32 生成，至少 32 字符>
 - 注册成功即自动登录（直接下发会话 Cookie）。
 - 典型提权流程：新用户注册（member）→ admin 在 `/admin/users` 将其角色改为 `owner`（或将知识库授权给该 member）→ 该用户即可管理知识库或在聊天中使用被授权的 RAG 知识库。
 
+### 长期记忆
+
+平台默认启用按租户、用户和项目隔离的长期记忆。记忆事实保存在 PostgreSQL；配置完整的 `MEMORY_*` 环境变量后，Worker 会额外写入和召回独立的 Qdrant 语义索引。未配置时自动降级为 PostgreSQL-only，不影响聊天。
+
+用户可在 Web 的“长期记忆”页面查看、编辑、删除或清空记忆；对话中也可以明确要求 Agent 记住或忘记某条信息。密码、Token、私钥等敏感内容会被拒绝保存。
+
 ## 常用命令
 
 ```bash

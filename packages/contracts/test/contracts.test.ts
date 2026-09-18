@@ -151,8 +151,11 @@ test('start job accepts up to five inline image attachments and defaults to empt
   };
   const image = {
     kind: 'image' as const,
-    mediaType: 'image/png' as const,
-    dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+    id: '00000000-0000-4000-8000-000000000014',
+    objectKey: 'tenant/run/image.png',
+    filename: 'image.png',
+    contentType: 'image/png',
+    sizeBytes: 8,
   };
 
   const withoutAttachments = runJobSchema.parse(base);
@@ -172,14 +175,14 @@ test('start job accepts up to five inline image attachments and defaults to empt
   assert.equal(
     runJobSchema.safeParse({
       ...base,
-      attachments: [{ ...image, dataUrl: 'https://example.com/a.png' }],
+      attachments: [{ ...image, objectKey: '' }],
     }).success,
     false,
   );
   assert.equal(
     runJobSchema.safeParse({
       ...base,
-      attachments: [{ ...image, mediaType: 'image/bmp' }],
+      attachments: [{ ...image, contentType: '' }],
     }).success,
     false,
   );

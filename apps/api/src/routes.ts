@@ -25,6 +25,7 @@ import {
   type RunAttachmentRef,
 } from '@repo/contracts';
 import { RepositoryNotFoundError } from '@repo/db';
+import { isSensitiveMemory } from '@repo/memory-core';
 import { redactTelemetryValue } from '@repo/observability';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -124,6 +125,17 @@ const sessionCursorSchema = z.object({
   updatedAt: z.string().datetime(),
   id: z.uuid(),
 });
+
+const memoryListQuerySchema = z.object({
+  assistantKey: z.string().trim().min(1).max(100).default('chat'),
+  scope: z.enum(['global', 'project']).optional(),
+  projectId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+}).refine((value) => value.scope !== 'project' || Boolean(value.projectId), {
+  message: 'projectId is required for project scope',
+  path: ['projectId'],
+});
+export const memoryUpdateInputSchema = z.object({ content: z.string().trim().min(1).max(2_000) });
 
 function encodeSessionCursor(cursor: { updatedAt: string; id: string }) {
   return Buffer.from(JSON.stringify(cursor)).toString('base64url');
@@ -275,6 +287,59 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
           ? encodeSessionCursor({ updatedAt: last.updatedAt, id: last.id })
           : null,
     };
+  });
+
+  app.get('/api/agent/memories', async (request) => {
+    const query = memoryListQuerySchema.parse(request.query ?? {});
+    return {
+      data: await services.repository.listMemories({
+        tenantId: request.auth.tenantId,
+        userId: request.auth.userId,
+        assistantKey: query.assistantKey,
+        ...(query.scope ? { scope: query.scope === 'global' ? 'global' as const : `project:${query.projectId ?? ''}` } : {}),
+        ...(query.projectId ? { projectId: query.projectId } : {}),
+        limit: query.limit,
+      }),
+    };
+  });
+
+  app.delete('/api/agent/memories/:memoryId', async (request, reply) => {
+    const { memoryId } = request.params as { memoryId: string };
+    const existing = await services.repository.getMemory(request.auth.tenantId, request.auth.userId, memoryId);
+    await services.repository.deleteMemory(
+      request.auth.tenantId,
+      request.auth.userId,
+      memoryId,
+    );
+    if (existing && services.memoryIndexQueue) await services.memoryIndexQueue.add('delete', { memoryId }, { jobId: `delete:${memoryId}:${Date.now()}` }).catch(() => undefined);
+    return reply.code(204).send();
+  });
+
+  app.patch('/api/agent/memories/:memoryId', async (request, reply) => {
+    const { memoryId } = request.params as { memoryId: string };
+    const input = memoryUpdateInputSchema.parse(request.body);
+    if (isSensitiveMemory(input.content)) {
+      return reply.code(400).send({ error: 'sensitive_memory_rejected' });
+    }
+    const memory = await services.repository.updateMemory(
+      request.auth.tenantId,
+      request.auth.userId,
+      memoryId,
+      input.content,
+    );
+    if (memory && services.memoryIndexQueue) await services.memoryIndexQueue.add('upsert', { memory }, { jobId: `upsert:${memory.id}:${memory.updatedAt}` }).catch(() => undefined);
+    return memory ? memory : reply.code(404).send({ error: 'memory_not_found' });
+  });
+
+  app.delete('/api/agent/memories', async (request, reply) => {
+    const query = z.object({ assistantKey: z.string().trim().min(1).max(100).default('chat') })
+      .parse(request.query ?? {});
+    await services.repository.clearMemories(
+      request.auth.tenantId,
+      request.auth.userId,
+      query.assistantKey,
+    );
+    return reply.code(204).send();
   });
 
   app.get('/api/agent/sessions/:sessionId', async (request, reply) => {

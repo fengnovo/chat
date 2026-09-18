@@ -17,6 +17,7 @@
     "@repo/artifacts": "workspace:*",
     "@repo/contracts": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/memory-core": "workspace:*",
     "@repo/knowledge-graphrag": "workspace:*",
     "@repo/observability": "workspace:*",
     "@opentelemetry/api": "1.9.1",

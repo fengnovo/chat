@@ -1,19 +1,22 @@
 import { existsSync } from 'node:fs';
 
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
+import { PostgresStore } from '@langchain/langgraph-checkpoint-postgres/store';
 import { closeSharedMcpClients, getSharedMcpToolsForConfigPath } from '@repo/agent-core';
 import { S3ArtifactStore } from '@repo/artifacts';
-import { RUN_QUEUE_NAME, runCancellationChannel } from '@repo/contracts';
+import { MEMORY_INDEX_QUEUE_NAME, MEMORY_QUEUE_NAME, RUN_QUEUE_NAME, runCancellationChannel } from '@repo/contracts';
 import { createDatabase, migrateDatabase } from '@repo/db';
 import { registeredObservability } from '@repo/observability/register';
 import { redactTelemetryValue } from '@repo/observability';
-import { Worker } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 
 import { loadWorkerConfig } from './config.js';
 import { createWorkerObservability } from './observability.js';
 import { createWorkerLangfuse } from './langfuse.js';
 import { createRunProcessor } from './processor.js';
+import { createMemoryQueueProcessor } from './memory-consumer.js';
+import { createMemoryIndexer } from './memory-index.js';
 
 const runtime = await registeredObservability;
 const observability = createWorkerObservability(runtime, { serviceVersion: '0.1.0' });
@@ -62,6 +65,10 @@ const checkpointer = PostgresSaver.fromConnString(config.DATABASE_URL, {
   schema: 'public',
 });
 await checkpointer.setup();
+const memoryStore = PostgresStore.fromConnString(config.DATABASE_URL, {
+  schema: 'public',
+});
+await memoryStore.setup();
 
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const publisher = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -91,12 +98,47 @@ cancellationSubscriber.on('error', (error) => {
   );
 });
 
+const memoryIndexer = createMemoryIndexer({
+  ...(config.MEMORY_QDRANT_URL ? { qdrantUrl: config.MEMORY_QDRANT_URL } : {}),
+  ...(config.MEMORY_QDRANT_API_KEY ? { qdrantApiKey: config.MEMORY_QDRANT_API_KEY } : {}),
+  ...(config.MEMORY_EMBEDDING_URL ? { embeddingUrl: config.MEMORY_EMBEDDING_URL } : {}),
+  ...(config.MEMORY_EMBEDDING_API_KEY ? { embeddingApiKey: config.MEMORY_EMBEDDING_API_KEY } : {}),
+  ...(config.MEMORY_EMBEDDING_MODEL ? { embeddingModel: config.MEMORY_EMBEDDING_MODEL } : {}),
+  ...(config.MEMORY_EMBEDDING_DIM ? { embeddingDimension: config.MEMORY_EMBEDDING_DIM } : {}),
+});
+
+const memoryQueue = new Queue(MEMORY_QUEUE_NAME, { connection });
+const memoryProcessorOptions = {
+  repository: database.repository,
+  models: config.models,
+  ...(memoryIndexer ? { index: memoryIndexer } : {}),
+  metrics: observability.metrics,
+};
+const memoryWorker = new Worker(MEMORY_QUEUE_NAME, createMemoryQueueProcessor(memoryProcessorOptions), {
+  connection,
+  concurrency: 1,
+});
+const memoryIndexWorker = new Worker(MEMORY_INDEX_QUEUE_NAME, async (job) => {
+  if (!memoryIndexer) return;
+  if (job.name === 'delete') return memoryIndexer.remove(String(job.data.memoryId));
+  const memory = job.data.memory as Record<string, unknown>;
+  return memoryIndexer.upsert({
+    id: String(memory.id), tenantId: String(memory.tenantId), userId: String(memory.userId),
+    content: String(memory.content), normalizedKey: String(memory.normalizedKey),
+    kind: String(memory.kind), importance: Number(memory.importance), confidence: Number(memory.confidence),
+    projectId: memory.projectId ? String(memory.projectId) : null, scope: String(memory.scope),
+  });
+}, { connection, concurrency: 1 });
 const worker = new Worker(
   RUN_QUEUE_NAME,
   createRunProcessor(
     {
       config,
       repository: database.repository,
+      memoryStore,
+      memoryQueue,
+      memoryMetrics: observability.metrics,
+      ...(memoryIndexer?.search ? { memoryIndex: memoryIndexer } : {}),
       redis: connection,
       publisher,
       checkpointer,
@@ -112,6 +154,7 @@ const worker = new Worker(
     lockDuration: 300_000,
   },
 );
+
 
 worker.on('completed', (job) =>
   logger.info({ operation: 'worker.job', reason: 'completed' }, `run job ${job.id ?? ''} completed`),
@@ -193,12 +236,16 @@ const shutdown = async () => {
     }
     // 3. 等待在途任务退出（abort 后很快结束）。
     await worker.close();
+    await memoryWorker.close();
+    await memoryIndexWorker.close();
+    await memoryQueue.close();
     // 4. 关闭业务资源（含进程级共享的 base MCP client）。
     await closeSharedMcpClients();
     await cancellationSubscriber.quit();
     await publisher.quit();
     await connection.quit();
     await checkpointer.end();
+    await memoryStore.stop();
     artifacts.destroy();
     await database.repository.close();
     // 5. flush 遥测后退出，超时只告警不阻塞进程。

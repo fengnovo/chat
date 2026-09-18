@@ -48,6 +48,7 @@ type CircuitMeasurement = { provider: ModelProvider; model: ModelFamily; state: 
 type AgentPhaseMeasurement = { phase: AgentPhase; outcome: PhaseOutcome; durationMs: number };
 
 export type CoreMetrics = {
+  memoryOperation?(measurement: { operation: 'retrieve' | 'extract' | 'upsert'; outcome: MetricOutcome; durationMs: number }): void;
   httpServer(measurement: HttpServerMeasurement): void;
   sseConnection(measurement: SseConnectionMeasurement): void;
   sseDisconnect(measurement: SseDisconnectMeasurement): void;
@@ -139,8 +140,15 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
     unit: 'ms',
   });
   const exportFailures = meter.createCounter('telemetry.export.failures', { unit: '{failure}' });
+  const memoryDuration = meter.createHistogram('memory.operation.duration', { unit: 'ms' });
 
   return {
+    memoryOperation(measurement) {
+      safeRecord(memoryDuration, nonNegative(measurement.durationMs), {
+        operation: measurement.operation,
+        outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
+      });
+    },
     httpServer(measurement) {
       const labels: Attributes = {
         'http.request.method': enumerated(measurement.method, HTTP_METHODS, 'OTHER'),

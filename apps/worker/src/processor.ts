@@ -17,6 +17,7 @@ import {
   DockerSandboxBackend,
   E2BSandbox,
   type HeadlessAgentRuntime,
+  writeLongTermMemoryProfile,
 } from '@repo/agent-core';
 import type { S3ArtifactStore } from '@repo/artifacts';
 import {
@@ -30,6 +31,16 @@ import {
 } from '@repo/contracts';
 import { extractObservabilityContext, type JobKind } from '@repo/observability';
 import type { AgentRepository } from '@repo/db';
+import {
+  createMemoryRetriever,
+  isSensitiveMemory,
+  memoryKindSchema,
+  memoryNamespace,
+  renderProfile,
+  type MemoryQuery,
+  type MemoryRecord,
+} from '@repo/memory-core';
+import type { Queue } from 'bullmq';
 import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { SignJWT } from 'jose';
@@ -57,13 +68,26 @@ interface ProcessorServices {
   checkpointer: PostgresSaver;
   artifacts: S3ArtifactStore;
   controllers: Map<string, AbortController>;
+  memoryStore: unknown;
+  memoryQueue: Queue;
+  memoryMetrics?: {
+    memoryOperation?: (measurement: { operation: 'retrieve' | 'extract' | 'upsert'; outcome: 'success' | 'failure'; durationMs: number }) => void;
+  };
+  memoryIndex?: {
+    upsert: (memory: { id: string; tenantId: string; userId: string; content: string; normalizedKey: string; kind?: string; importance?: number; confidence?: number; projectId?: string | null; scope?: string }) => Promise<void>;
+    search: (query: string, tenantId: string, userId: string, limit?: number, projectId?: string | null) => Promise<MemoryRecord[]>;
+    remove: (memoryId: string) => Promise<void>;
+  };
 }
 
 function metricJobKind(kind: RunJob['kind']): JobKind {
   return kind === 'start' ? 'run' : 'resume';
 }
 
-/** Web Worker 的通用 MCP 必须显式启用，不能回退到 CLI 的示例配置。 */
+/**
+ * Worker MCP 配置路径透传。默认路径已在 config.ts 按 NODE_ENV 选定
+ * （dev→firecrawl，test/prod→anysearch）；显式设置 MCP_CONFIG_PATH 时优先。
+ */
 export function resolveWorkerMcpConfigPath(
   configuredPath: string | undefined,
 ): string | undefined {
@@ -117,6 +141,21 @@ async function persistEvent(
       status,
       event.type === 'run.failed' ? { code: event.code, message: event.message } : undefined,
     );
+    // run 完成后投递后台记忆整理任务：幂等写 memory_jobs 表，再用 BullMQ 唤醒消费者。
+    // 投递失败不影响已完成的聊天（fail-open）。
+    if (status === 'completed') {
+      await services.repository.enqueueMemoryJob({
+        tenantId: job.tenantId,
+        userId: job.userId,
+        sessionId: job.sessionId,
+        runId: job.runId,
+      }).catch(() => undefined);
+      await services.memoryQueue.add('extract', { runId: job.runId }, {
+        jobId: `memory-${job.runId}`,
+        removeOnComplete: 100,
+        removeOnFail: 100,
+      }).catch(() => undefined);
+    }
   }
 }
 
@@ -238,6 +277,130 @@ async function acquireSandbox(
   return sandbox;
 }
 
+/**
+ * 读取长期记忆并写入 DeepAgents Store 的 /memories/profile.md，同时返回
+ * createDeepAgentRuntime 需要的 longTermMemory 选项（含 remember/forget 工具）。
+ * 任何子步骤失败都 fail-open：记录指标后返回 undefined，让对话正常进行。
+ */
+async function buildLongTermMemory(
+  services: ProcessorServices,
+  job: RunJob,
+  projectId: string | null,
+  query: string,
+): Promise<NonNullable<Parameters<typeof createDeepAgentRuntime>[0]['longTermMemory']> | undefined> {
+  const retrieveStartedAt = Date.now();
+  try {
+    const assistantKey = 'chat';
+    const scope: 'global' | `project:${string}` = projectId ? `project:${projectId}` : 'global';
+    const namespace = memoryNamespace({ tenantId: job.tenantId, userId: job.userId, assistantKey, scope });
+    const toMemoryRecord = (row: Awaited<ReturnType<AgentRepository['listMemories']>>[number]): MemoryRecord => ({
+      id: row.id,
+      tenantId: row.tenantId,
+      userId: row.userId,
+      projectId: row.projectId,
+      assistantKey: row.assistantKey,
+      scope: row.scope,
+      kind: row.kind,
+      content: row.content,
+      normalizedKey: row.normalizedKey,
+      importance: row.importance,
+      confidence: row.confidence,
+      status: row.status,
+      sourceSessionId: row.sourceSessionId,
+      sourceRunId: row.sourceRunId,
+      supersedesId: row.supersedesId,
+      createdAt: new Date(row.createdAt),
+      updatedAt: new Date(row.updatedAt),
+      lastAccessedAt: row.lastAccessedAt ? new Date(row.lastAccessedAt) : null,
+      metadata: row.metadata,
+    });
+    const retriever = createMemoryRetriever({
+      list: async (input) => {
+        const rows = await services.repository.listMemories({
+          tenantId: input.tenantId,
+          userId: input.userId,
+          assistantKey: input.assistantKey,
+          scope: input.scope,
+          ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+          limit: input.limit,
+        });
+        return rows.map(toMemoryRecord);
+      },
+      search: async (input: MemoryQuery) => services.memoryIndex
+        ? services.memoryIndex.search(input.query, input.tenantId, input.userId, input.limit, input.projectId)
+        : [],
+    });
+    const { records, context } = await retriever.retrieve({
+      tenantId: job.tenantId,
+      userId: job.userId,
+      assistantKey,
+      projectId,
+      query,
+      limit: 12,
+      maxChars: 6_000,
+    });
+    if (records.length > 0) {
+      await writeLongTermMemoryProfile(services.memoryStore, namespace, renderProfile(records, { maxChars: 6_000 }));
+    }
+    services.memoryMetrics?.memoryOperation?.({ operation: 'retrieve', outcome: 'success', durationMs: Date.now() - retrieveStartedAt });
+    const remember = async (input: { content: string; kind?: string; normalizedKey?: string }) => {
+      try {
+        if (isSensitiveMemory(input.content)) return '保存失败：检测到疑似敏感信息（密钥/密码/凭证），不予记忆。';
+        const kind = input.kind ? memoryKindSchema.parse(input.kind) : 'preference';
+        const saved = await services.repository.upsertMemory({
+          id: randomUUID(),
+          tenantId: job.tenantId,
+          userId: job.userId,
+          projectId,
+          assistantKey,
+          scope,
+          kind,
+          content: input.content.slice(0, 2_000),
+          normalizedKey: input.normalizedKey ?? `manual:${Date.now()}`,
+          importance: 0.7,
+          confidence: 0.9,
+          status: 'active',
+          sourceSessionId: job.sessionId,
+          sourceRunId: job.runId,
+          supersedesId: null,
+          metadata: { source: 'remember_fact_tool' },
+        });
+        await services.memoryIndex?.upsert({
+          id: saved.id, tenantId: saved.tenantId, userId: saved.userId, content: saved.content,
+          normalizedKey: saved.normalizedKey, kind: saved.kind, importance: saved.importance,
+          confidence: saved.confidence, projectId, scope,
+        }).catch(() => undefined);
+        return `已记住（id: ${saved.id}）`;
+      } catch (error) {
+        return `保存失败：${error instanceof Error ? error.message : String(error)}`;
+      }
+    };
+    const forget = async (memoryId: string) => {
+      try {
+        const existing = await services.repository.getMemory(job.tenantId, job.userId, memoryId);
+        if (!existing) return false;
+        await services.repository.deleteMemory(job.tenantId, job.userId, memoryId);
+        await services.memoryIndex?.remove(memoryId).catch(() => undefined);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    return {
+      store: services.memoryStore,
+      namespace,
+      ...(records.length > 0 ? { profilePath: '/memories/profile.md' as const } : {}),
+      context,
+      remember,
+      forget,
+    };
+  } catch (error) {
+    services.memoryMetrics?.memoryOperation?.({ operation: 'retrieve', outcome: 'failure', durationMs: Date.now() - retrieveStartedAt });
+    console.error('[processor] long-term memory retrieval failed (fail-open)', error);
+    return undefined;
+  }
+}
+
 async function createRuntime(
   services: ProcessorServices,
   job: RunJob,
@@ -247,6 +410,7 @@ async function createRuntime(
   agentTelemetry?: AgentTelemetry,
   callbacks?: readonly unknown[],
   agentResources?: AgentResources,
+  longTermMemory?: NonNullable<Parameters<typeof createDeepAgentRuntime>[0]['longTermMemory']>,
 ): Promise<HeadlessAgentRuntime> {
   if (!backend) throw new Error('Deep agent requires a sandbox backend');
   const knowledgeMcpEnabled = services.config.KNOWLEDGE_MCP_ENABLED &&
@@ -286,6 +450,7 @@ async function createRuntime(
     },
     ...(agentResources?.memory && agentResources.memory.length > 0 ? { memory: agentResources.memory } : {}),
     ...(agentResources?.skills && agentResources.skills.length > 0 ? { skills: agentResources.skills } : {}),
+    ...(longTermMemory ? { longTermMemory } : {}),
     summarization: {
       triggerTokens: services.config.AGENT_SUMMARIZATION_TRIGGER_TOKENS,
       keepTokens: services.config.AGENT_SUMMARIZATION_KEEP_TOKENS,
@@ -515,8 +680,10 @@ export function createRunProcessor(
         const remotePath = services.config.SANDBOX_RUNTIME === 'docker'
           ? remoteWorkspacePath(services.config.DOCKER_SANDBOX_WORKSPACE_PATH)
           : remoteWorkspacePath(services.config.E2B_WORKSPACE_PATH);
+        const session = await services.repository.getSessionForWorker(job.tenantId, job.sessionId).catch(() => null);
+        const projectId = session?.projectId ?? null;
         // 三个独立准备步骤并行执行——都只依赖 sandbox/remotePath，互不阻塞。
-        const [, preparedAttachments, agentResources] = await observed(
+        const [, preparedAttachments, agentResources, longTermMemory] = await observed(
           'preparation.parallel',
           () =>
             Promise.all([
@@ -549,6 +716,13 @@ export function createRunProcessor(
                   services.config.AGENT_SKILLS_DIR,
                 ),
               ),
+              // 长期记忆：仅 start 轮按本轮用户消息检索并写入 profile.md；
+              // 续跑沿用 checkpointer 中已有上下文，避免重复注入。
+              job.kind === 'start'
+                ? observed('memory.retrieve', () =>
+                    buildLongTermMemory(services, job, projectId, job.message),
+                  )
+                : Promise.resolve(undefined),
             ]),
         );
         // Langfuse 按 run 采样：命中则在当前 job span 上下文内建一个 LangChain
@@ -573,6 +747,7 @@ export function createRunProcessor(
             agentTelemetry,
             langchainCallbacks,
             agentResources,
+            longTermMemory,
           ),
         );
         if (telemetry) {

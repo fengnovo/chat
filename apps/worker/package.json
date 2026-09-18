@@ -19,6 +19,7 @@
     "@repo/artifacts": "workspace:*",
     "@repo/contracts": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/memory-core": "workspace:*",
     "@repo/observability": "workspace:*",
     "bullmq": "^5.58.5",
     "ioredis": "^5.7.0",

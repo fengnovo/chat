@@ -100,6 +100,14 @@ export interface HeadlessAgentOptions {
   knowledgeMcp?: { url: string; token: string; timeoutMs: number; enabled: boolean };
   skills?: string[];
   memory?: string[];
+  longTermMemory?: {
+    store: unknown;
+    namespace: string[];
+    profilePath?: string;
+    context?: string;
+    remember?: (input: { content: string; kind?: string; normalizedKey?: string }) => Promise<string>;
+    forget?: (memoryId: string) => Promise<boolean>;
+  };
   autoApproveTools?: boolean;
   /** 单次运行允许的 LangGraph super-step 上限；多步长任务需要足够余量。 */
   recursionLimit?: number;
