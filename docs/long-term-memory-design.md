@@ -325,3 +325,38 @@ apps/memory-service/
 DeepAgent 还提供受控的 `remember_fact` / `forget_memory` 工具：只有用户明确要求记住或忘记时才使用，工具写入仍经过敏感信息过滤、tenant/user 校验和审计字段记录。
 
 后台自动提取也会读取会话所属项目，自动记忆写入对应的 `project:<projectId>` scope；无项目会话才写入全局 scope。
+
+```
+
+```       
+这 6 个变量是**长期记忆的语义索引（Qdrant）配置，全部可选**。不用动它们，记忆功能也能完整运行——E2E 验证的 remember/forget、跨会话召回、后台提取、冲突替换走的都是 PostgreSQL，不依赖这些变量。
+
+## 配与不配的区别
+
+| | 不配置（当前默认，全注释） | 配置后 |
+|---|---|---|
+| 记忆存取/召回 | PostgreSQL 精确召回（按 importance、更新时间取最近 12 条） | PG 召回 **+ Qdrant 语义向量召回** |
+| 触发条件 | — | 5 个必填项必须**全部存在**，缺一个自动降级为 PG-only（[memory-index.ts:14](file:///Users/keen/Desktop/code/projects/chat/apps/worker/src/memory-index.ts#L14)） |
+| 故障影响 | — | 索引 upsert/search 全部 fail-open，PG 永远是真相源 |
+
+语义召回的实际收益：用户换个说法（比如存的是"我住在北京"，以后问"我这边天气"），纯 PG 召回匹配不上，有向量索引就能按语义捞回来。
+
+## 如果要开启，按你本地已有的服务填
+
+`.env.example` 里 138-141 行的 OpenAI 地址只是占位示例。你的 `.env` 里已经有本地 Qdrant 和百炼 embedding，对应值应该是（写到 `.env`，不是 .env.example）：
+
+```bash
+MEMORY_QDRANT_URL=http://127.0.0.1:56333
+# MEMORY_QDRANT_API_KEY=   # 本地 Qdrant 无鉴权，不设
+MEMORY_EMBEDDING_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings
+MEMORY_EMBEDDING_API_KEY=<复用现有 EMBEDDING_API_KEY>
+MEMORY_EMBEDDING_MODEL=qwen3.7-text-embedding
+MEMORY_EMBEDDING_DIM=1024
+```
+
+两个注意点：
+1. `MEMORY_EMBEDDING_URL` 要填**完整的 /embeddings 端点**（代码直接 POST 这个 URL），而 `EMBEDDING_BASE_URL` 是不带后缀的基地址，两者不一样。
+2. 这些变量只有 **worker** 读取；collection 会自动建为 `agent_memory_1024`，和知识库的 `knowledge*` collection 不冲突。
+3. 生产环境 Qdrant 地址/鉴权按部署实际值填，不要用 127.0.0.1。
+
+`.env.example` 本身建议保持通用占位（别把百炼私有地址写死进模板），但可以补一行注释说明"5 项必须同时配置否则自动关闭、URL 需含 /embeddings"。
