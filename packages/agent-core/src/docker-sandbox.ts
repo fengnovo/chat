@@ -34,6 +34,49 @@ const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
 const CONTAINER_USER = '65532:65532';
 const IMAGE_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$/;
 
+/**
+ * 沙箱内不可被 shell 命令修改的关键路径前缀（容器内视角）。
+ * 用于对破坏性命令做前置告警（纵深防御；真正的拦截由只读 bind mount 保证）。
+ */
+const PROTECTED_CONTAINER_PATHS: readonly string[] = [
+  '/mnt/user-data',
+  '/mnt/user-data/workspace',
+  '/mnt/user-data/outputs',
+  '/mnt/user-data/previews',
+  '/skills',
+  '/mnt/skills',
+  '/large_tool_results',
+];
+
+/**
+ * 检测 shell 命令是否包含针对关键路径的破坏性操作（rm / mv / chmod / chown）。
+ * 仅用于审计日志，不阻断执行——内核级只读挂载才是真正的安全边界。
+ */
+const detectDangerousCommand = (command: string): string | null => {
+  // 按管道/分号/逻辑运算符拆分命令片段，逐段检测
+  const segments = command.split(/[|;&]/);
+  for (const segment of segments) {
+    const trimmed = segment.trim();
+    if (!trimmed) continue;
+    const tokens = trimmed.split(/\s+/);
+    const cmd = tokens[0];
+    // 支持 sudo 前缀（虽然容器内无 sudo，但防御应覆盖）
+    const effectiveCmd = cmd === 'sudo' ? tokens[1] : cmd;
+    if (effectiveCmd !== 'rm' && effectiveCmd !== 'mv' &&
+        effectiveCmd !== 'chmod' && effectiveCmd !== 'chown') {
+      continue;
+    }
+    for (const token of tokens) {
+      for (const protectedPath of PROTECTED_CONTAINER_PATHS) {
+        if (token === protectedPath || token.startsWith(`${protectedPath}/`)) {
+          return `${effectiveCmd} ${token}`;
+        }
+      }
+    }
+  }
+  return null;
+};
+
 /** 默认沙箱会话根；位于仓库 data 目录下，已被 .gitignore 忽略。 */
 const DEFAULT_SESSIONS_ROOT = fileURLToPath(
   new URL('../../../data/sandboxes', import.meta.url),
@@ -238,6 +281,15 @@ export class DockerSandboxBackend extends BaseSandbox {
       };
     }
 
+    // 纵深防御：检测针对关键路径的破坏性命令并记录告警。
+    // 真正的拦截由 /mnt/user-data 的只读 bind mount 保证，这里仅用于审计日志。
+    const dangerousHit = detectDangerousCommand(command);
+    if (dangerousHit) {
+      console.warn(
+        `[DockerSandbox] 检测到破坏性命令（沙箱 ${this.id}）: ${dangerousHit} ← ${command.slice(0, 200)}`,
+      );
+    }
+
     const containerName = `${this.id}-${randomUUID().slice(0, 8)}`
       .toLowerCase()
       .slice(0, 63);
@@ -273,8 +325,16 @@ export class DockerSandboxBackend extends BaseSandbox {
       'PYTHONDONTWRITEBYTECODE=1',
       '--workdir',
       DOCKER_SANDBOX_WORKSPACE,
+      // /mnt/user-data 父目录只读：禁止 mv/rm 等对目录结构本身的修改。
+      // 各子目录通过独立的可写 bind mount 覆盖，文件读写不受影响。
       '--mount',
-      `type=bind,src=${this.userDataRoot},dst=/mnt/user-data`,
+      `type=bind,src=${this.userDataRoot},dst=/mnt/user-data,ro`,
+      '--mount',
+      `type=bind,src=${this.workspaceRoot},dst=/mnt/user-data/workspace`,
+      '--mount',
+      `type=bind,src=${this.outputsRoot},dst=/mnt/user-data/outputs`,
+      '--mount',
+      `type=bind,src=${this.previewsRoot},dst=/mnt/user-data/previews`,
       '--mount',
       `type=bind,src=${this.skillsRoot},dst=/skills,readonly`,
       '--mount',

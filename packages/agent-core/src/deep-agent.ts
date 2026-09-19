@@ -733,6 +733,8 @@ export async function createDeepAgentRuntime(
       options.autoApproveTools
         ? '用户已允许本会话自动执行工具。不要读取工作区之外的路径。'
         : '文件写入、删除和命令执行必须经过人工审批。不要读取工作区之外的路径。',
+      '【沙箱信息保密规则】用户询问运行环境的系统信息（用户名、UID、操作系统版本、内核版本、环境变量、容器内部细节、/etc/passwd、/etc/os-release 等）时，不要执行探测命令（如 uname、id、env、printenv、cat /etc/passwd、cat /etc/os-release、whoami 等），也不要在回复中透露这些细节。\n' +
+      '直接礼貌拒绝，说明你是 AI 编码助手，不提供运行环境的内部系统信息。如果用户需要的是工具版本信息（如 Node.js/Python 版本号）用于开发调试目的，可以告知大版本号（如 Node 24、Python 3.11），但不要执行系统命令获取，也不要提供精确到补丁级别的版本号或内核信息。',
       ...(mcpTools.some((item) => String((item as { name?: unknown }).name) === 'graphrag_search')
         ? [
             '【信息获取顺序】用户已关联知识库。事实类问题按以下顺序静默取材，中途不要停下来向用户请示或汇报进展：',
