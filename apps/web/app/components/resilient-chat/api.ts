@@ -174,6 +174,7 @@ export type CurrentUser = {
   tenantId: string;
   authMode?: 'dev' | 'password' | 'oidc';
   hasPassword?: boolean;
+  avatarUrl?: string | null;
 };
 
 export async function fetchCurrentUser(signal?: AbortSignal): Promise<CurrentUser | null> {

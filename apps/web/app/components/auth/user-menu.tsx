@@ -219,6 +219,18 @@ export function UserMenu() {
     }
   };
 
+  // 有头像时渲染图片，无头像时回退到默认图标。
+  const avatarSmall = user.avatarUrl ? (
+    <img className="user-badge-avatar-img" src={user.avatarUrl} alt="" width={18} height={18} />
+  ) : (
+    <Icon name="user" size={18} />
+  );
+  const avatarLarge = user.avatarUrl ? (
+    <img className="user-badge-avatar-img" src={user.avatarUrl} alt="" width={22} height={22} />
+  ) : (
+    <Icon name="user" size={22} />
+  );
+
   return (
     <div className={`user-badge ${open ? 'is-open' : ''}`} ref={rootRef}>
       <button
@@ -230,7 +242,7 @@ export function UserMenu() {
         onClick={() => setOpen((current) => !current)}
       >
         <span className="user-badge-avatar" aria-hidden="true">
-          <Icon name="user" size={18} />
+          {avatarSmall}
         </span>
         <span className="user-badge-name">{user.displayName}</span>
       </button>
@@ -238,7 +250,7 @@ export function UserMenu() {
       <div className="user-badge-popover" role="menu">
         <div className="user-badge-head">
           <span className="user-badge-avatar is-lg" aria-hidden="true">
-            <Icon name="user" size={22} />
+            {avatarLarge}
           </span>
           <div className="user-badge-meta">
             <p className="user-badge-display-name">{user.displayName}</p>

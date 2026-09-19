@@ -1587,6 +1587,23 @@ export class AgentRepository {
     return result.rows[0] ? String(result.rows[0].display_name) : null;
   }
 
+  async getUserAvatarUrl(tenantId: string, userId: string): Promise<string | null> {
+    const result = await this.pool.query(
+      `SELECT u.avatar_url FROM users u
+       JOIN tenant_memberships tm ON tm.user_id = u.id
+       WHERE u.id = $2 AND tm.tenant_id = $1`,
+      [tenantId, userId],
+    );
+    return result.rows[0]?.avatar_url ? String(result.rows[0].avatar_url) : null;
+  }
+
+  async updateUserAvatarUrl(userId: string, avatarUrl: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE users SET avatar_url = $1 WHERE id = $2`,
+      [avatarUrl, userId],
+    );
+  }
+
   // 自助修改密码时校验原密码：无成员关系或账号没有密码（非密码模式账号）时返回 null。
   async getUserPasswordHash(tenantId: string, userId: string): Promise<string | null> {
     const result = await this.pool.query(
@@ -1876,8 +1893,8 @@ export class AgentRepository {
       const userId = randomUUID();
       const accountId = randomUUID();
       await client.query(
-        `INSERT INTO users (id, display_name) VALUES ($1, $2)`,
-        [userId, input.displayName],
+        `INSERT INTO users (id, display_name, avatar_url) VALUES ($1, $2, $3)`,
+        [userId, input.displayName, input.avatarUrl],
       );
       await client.query(
         `INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)`,

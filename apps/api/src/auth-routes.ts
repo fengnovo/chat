@@ -150,6 +150,10 @@ export async function registerAuthRoutes(app: FastifyInstance, services: Service
       auth.tenantId,
       auth.userId,
     );
+    const avatarUrl = await services.repository.getUserAvatarUrl(
+      auth.tenantId,
+      auth.userId,
+    );
     const passwordHash = await services.repository.getUserPasswordHash(
       auth.tenantId,
       auth.userId,
@@ -164,6 +168,7 @@ export async function registerAuthRoutes(app: FastifyInstance, services: Service
         authMode: services.config.AUTH_MODE,
         // OAuth 登录用户没有密码，前端据此隐藏"修改密码"入口。
         hasPassword: passwordHash !== null,
+        avatarUrl,
       },
     };
   });

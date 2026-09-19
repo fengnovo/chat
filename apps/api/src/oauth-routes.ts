@@ -315,6 +315,9 @@ export async function registerOAuthRoutes(app: FastifyInstance, services: Servic
           tenantId,
           role: created.role,
         };
+      } else if (profile.avatarUrl) {
+        // 已有用户登录时同步最新头像。
+        await repository.updateUserAvatarUrl(oauthUser.userId, profile.avatarUrl);
       }
 
       // 签发会话 Cookie
