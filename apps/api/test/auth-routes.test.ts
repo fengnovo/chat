@@ -143,6 +143,7 @@ test('/api/auth/me resolves the display name from the repository', async () => {
   const app = await makeApp({
     getUserDisplayName: async (tenant: string, user: string) =>
       tenant === tenantId && user === userId ? '超级管理员' : null,
+    getUserPasswordHash: async () => 'scrypt$fake-hash',
   });
   const response = await app.inject({ method: 'GET', url: '/api/auth/me' });
   assert.equal(response.statusCode, 200);
@@ -152,6 +153,7 @@ test('/api/auth/me resolves the display name from the repository', async () => {
     role: 'admin',
     tenantId,
     authMode: 'dev',
+    hasPassword: true,
   });
   await app.close();
 });
