@@ -73,6 +73,7 @@ function Sidebar({
             alt="Keen Agent"
             className="brand-logo"
             height={32}
+            priority
             src="/keen-ai-logo.png"
             width={32}
           />
@@ -114,6 +115,13 @@ function Sidebar({
       <button
         aria-label={creating ? '正在创建对话' : '新建对话'}
         className="new-chat-button"
+        data-tooltip={
+          collapsed
+            ? creating
+              ? '正在创建…'
+              : sessions.find((s) => s.id === activeChatId)?.title ?? '新建对话'
+            : undefined
+        }
         disabled={creating}
         type="button"
         onClick={onNewChat}

@@ -248,7 +248,7 @@
     transform: translateX(105%);
     transition: transform 240ms ease;
     width: calc(100% - 42px);
-    z-index: 21;
+    z-index: 210;
   }
 
   .app-shell.is-files-open .file-panel {
@@ -284,10 +284,6 @@
 
   .topbar {
     padding: 0 12px;
-  }
-
-  .topbar .icon-button {
-    display: none;
   }
 
   .message-list {

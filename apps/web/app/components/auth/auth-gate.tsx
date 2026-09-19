@@ -15,6 +15,7 @@ export function AuthLoading() {
         alt="正在加载"
         className="auth-gate-logo"
         height={150}
+        priority
         src="/keen-ai-logo.png"
         width={150}
       />

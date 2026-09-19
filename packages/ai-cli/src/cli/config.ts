@@ -54,15 +54,12 @@ export function createCliSettings(): CliSettings {
   mkdirSync(args.cwd, { recursive: true });
 
   const skillsHostDir = path.join(projectDir, 'skills');
-  // 开发环境用 firecrawl（mcp.dev.json），测试/生产用 anysearch（mcp.json）。
-  const nodeEnv = process.env.NODE_ENV;
-  const mcpFile =
-    nodeEnv === 'test' || nodeEnv === 'production' ? 'mcp.json' : 'mcp.dev.json';
+
   return {
     ...args,
     projectDir,
     skillsHostDir,
-    mcpConfigPath: path.join(projectDir, 'mcp', mcpFile),
+    mcpConfigPath: path.join(projectDir, 'mcp', 'mcp.json'),
     memoryHostFile: path.join(projectDir, 'AGENTS.md'),
     skillCount: countSkills(skillsHostDir),
   };

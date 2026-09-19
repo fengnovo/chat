@@ -149,7 +149,7 @@ export function KnowledgeConsole() {
         <aside className="kc-sidebar">
           <div className="kc-brand">
             <span className="kc-brand-icon">
-              <Image alt="Keen Agent" height={34} src="/keen-ai-logo.png" width={34} />
+              <Image alt="Keen Agent" height={34} priority src="/keen-ai-logo.png" width={34} />
             </span>
             <strong>知识库平台</strong>
           </div>

@@ -121,6 +121,7 @@ function LoginForm() {
             alt="Keen Agent"
             className="login-logo"
             height={64}
+            priority
             src="/keen-ai-logo.png"
             width={64}
           />

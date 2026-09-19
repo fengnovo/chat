@@ -96,6 +96,12 @@ export async function runCli(): Promise<void> {
     if (settings.oneShotTask) {
       try {
         await taskRunner.run(settings.oneShotTask);
+        // 单次任务完成后，若终端可用则转入交互模式，方便继续对话。
+        if (process.stdin.isTTY) {
+          tuiShowStartLine('▶ 单任务完成，已转入交互模式（输入 /exit 退出）');
+          await runRepl(taskRunner);
+          return;
+        }
         return;
       } catch (error) {
         if (!process.stdin.isTTY || !isRecoverableNetworkError(error)) throw error;

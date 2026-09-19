@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = dirname(scriptDirectory);
 
-const ports = [...new Set(['PORT', 'API_PORT'].map((name) => {
+const ports = [...new Set(['PORT', 'API_PORT', 'KNOWLEDGE_SERVICE_PORT'].map((name) => {
   const value = process.env[name];
   if (!value) throw new Error(`[dev] ${name} must be set in .env`);
 
@@ -61,8 +61,27 @@ function releasePorts() {
 // 绝对路径「…/apps/worker/src/worker.ts」、构建产物 dist/worker.js。
 const WORKER_ENTRY_PATTERN =
   /(?:^|[\s/\\])(?:apps[/\\]worker[/\\])?(?:src[/\\]worker\.ts|dist[/\\]worker\.js)(?:\s|$)/;
+// 兼容三种形态：相对路径「--watch src/main.ts」（src 前是空格）、
+// 绝对路径「…/apps/knowledge-service/src/main.ts」、构建产物 dist/main.js。
+const KNOWLEDGE_ENTRY_PATTERN =
+  /(?:^|[\s/\\])(?:apps[/\\]knowledge-service[/\\])?(?:src[/\\]main\.ts|dist[/\\]main\.js)(?:\s|$)/;
 const CONFIRM_TIMEOUT_MS = 15_000;
 const TERM_GRACE_MS = 3_000;
+
+function pgrepKnowledgeCandidates() {
+  try {
+    return execFileSync('pgrep', ['-f', 'main\\.(ts|js)'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split(/\s+/)
+      .map(Number)
+      .filter(Boolean)
+      .filter((pid) => pid !== process.pid);
+  } catch {
+    return [];
+  }
+}
 
 function pgrepWorkerCandidates() {
   // 宽匹配入口文件名（dev 进程命令行是相对路径「src/worker.ts」，不带 apps/worker 前缀，
@@ -112,6 +131,21 @@ function cwdOf(pid) {
 
 function isWithinRepository(path) {
   return path === repositoryRoot || path.startsWith(`${repositoryRoot}/`);
+}
+
+/** 列出确认属于本仓库的残留 knowledge-service：命令行命中入口 + cwd/命令行落在仓库内。 */
+function listStaleKnowledgeServices() {
+  const stale = [];
+  for (const pid of pgrepKnowledgeCandidates()) {
+    const details = processDetails(pid);
+    if (!details || !KNOWLEDGE_ENTRY_PATTERN.test(details.command)) continue;
+    const cwd = cwdOf(pid);
+    const belongsToRepo =
+      (cwd && isWithinRepository(cwd)) || details.command.includes(repositoryRoot);
+    if (!belongsToRepo) continue;
+    stale.push({ pid, ...details, cwd });
+  }
+  return stale;
 }
 
 /** 列出确认属于本仓库的残留 worker：命令行命中 worker 入口 + cwd/命令行落在仓库内。 */
@@ -198,10 +232,11 @@ async function confirmCleanup(count) {
  * 否则新 worker 与残留 worker 同时连队列，正是要消除的多 worker 局面。
  */
 const staleWorkers = listStaleWorkers();
+const staleKnowledge = listStaleKnowledgeServices();
 const occupiedPorts = ports
   .map((port) => ({ port, pids: listeningPids(port) }))
   .filter((item) => item.pids.length > 0);
-const blockerCount = staleWorkers.length + occupiedPorts.reduce((sum, item) => sum + item.pids.length, 0);
+const blockerCount = staleWorkers.length + staleKnowledge.length + occupiedPorts.reduce((sum, item) => sum + item.pids.length, 0);
 
 if (blockerCount > 0) {
   const lines = [
@@ -211,6 +246,13 @@ if (blockerCount > 0) {
   ];
   for (const { port, pids } of occupiedPorts) {
     lines.push(`│  端口 ${port} 占用：PID ${pids.join(', ')}`);
+  }
+  for (const item of staleKnowledge) {
+    const tail =
+      item.command.length > 46 ? `…${item.command.slice(item.command.length - 45)}` : item.command;
+    lines.push(
+      `│  knowledge PID ${String(item.pid).padEnd(7)} 已运行 ${item.elapsed.padEnd(9)} ${tail}`,
+    );
   }
   for (const item of staleWorkers) {
     // 命令行公共前缀都是仓库路径，保留尾段才能看出是 watch 父子进程还是 dist 产物。
@@ -235,9 +277,10 @@ if (blockerCount > 0) {
 // 确认之后才动手：避免出现「端口已杀、用户却选择跳过」的半破坏状态。
 releasePorts();
 
-if (staleWorkers.length > 0) {
+if (staleWorkers.length > 0 || staleKnowledge.length > 0) {
+  const allStale = [...staleKnowledge, ...staleWorkers];
   const survivors = [];
-  for (const item of staleWorkers) {
+  for (const item of allStale) {
     if (item.state === 'Z') {
       survivors.push({ ...item, reason: '僵尸进程（需其父进程退出或重启机器）' });
       continue;

@@ -67,7 +67,7 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await apiFetch(input, init);
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
-    throw new Error(payload?.error || payload?.message || `HTTP ${response.status}`);
+    throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;

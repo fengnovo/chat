@@ -139,8 +139,34 @@
 
 .sidebar.is-collapsed .new-chat-button {
   height: 32px;
+  min-height: 0;
   padding: 0;
+  position: relative;
   width: 32px;
+}
+
+.sidebar.is-collapsed .new-chat-button::after {
+  background: #1e1b26;
+  border-radius: 999px;
+  color: #fff;
+  content: attr(data-tooltip);
+  font-size: 13px;
+  font-weight: 500;
+  left: calc(100% + 10px);
+  opacity: 0;
+  padding: 6px 14px;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  transition: opacity 150ms ease, transform 150ms ease;
+  white-space: nowrap;
+  z-index: 200;
+}
+
+.sidebar.is-collapsed .new-chat-button:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
 }
 
 .sidebar.is-collapsed .brand {

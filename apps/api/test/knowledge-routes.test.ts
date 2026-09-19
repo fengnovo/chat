@@ -184,6 +184,32 @@ test('retrieval and ask report 503 when the knowledge service is not configured'
   await app.close();
 });
 
+test('retrieval returns 502 with structured error when knowledge-service call fails', async () => {
+  const app = Fastify();
+  app.decorateRequest('auth');
+  app.addHook('preHandler', async (request) => { request.auth = { tenantId, userId, roles: [] }; });
+  await registerKnowledgeRoutes(app, {
+    repository: {
+      getKnowledgeBase: async () => ({ id: kbId, tenantId, visibility: 'tenant', ownerUserId: userId }),
+    } as any,
+    artifacts: {},
+    knowledgeQueue: { add: async () => ({}) },
+    config: {
+      KNOWLEDGE_DOCUMENT_MAX_BYTES: 10,
+      KNOWLEDGE_MCP: { url: 'http://127.0.0.1:1/mcp', secret: 'test-secret', timeoutMs: 500 },
+    },
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/retrieval`,
+    payload: { query: 'test query' },
+  });
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.json().error, 'knowledge_retrieval_failed');
+  assert.ok(typeof response.json().message === 'string');
+  await app.close();
+});
+
 test('document rename returns the updated row or 404', async () => {
   const app = await makeApp({
     renameKnowledgeDocument: async () => ({ id: documentId, name: 'renamed.md' }),

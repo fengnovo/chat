@@ -186,11 +186,18 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     const kb = await services.repository.getKnowledgeBase(request.auth as any, kbId);
     if (!kb) return notFound(reply, 'knowledge_base_not_found');
     const input = retrievalInputSchema.parse(body ?? {});
-    const result = await searchKnowledge(
-      mcp,
-      { tenantId: request.auth.tenantId, userId: request.auth.userId, kbIds: [kbId] },
-      { query: input.query, topK: input.topK },
-    );
+    let result;
+    try {
+      result = await searchKnowledge(
+        mcp,
+        { tenantId: request.auth.tenantId, userId: request.auth.userId, kbIds: [kbId] },
+        { query: input.query, topK: input.topK },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // knowledge-service 连接失败或 MCP 调用异常时返回 502，带结构化 error body。
+      return reply.code(502).send({ error: 'knowledge_retrieval_failed', message: message.slice(0, 200) });
+    }
     const minScore = input.minScore ?? 0;
     const citations = result.citations.filter((citation) => citation.score >= minScore);
     return { ...result, citations };
