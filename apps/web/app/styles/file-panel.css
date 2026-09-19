@@ -64,7 +64,41 @@
 
 .file-panel-head .icon-button {
   height: 36px;
+  position: relative;
   width: 36px;
+}
+
+.file-panel-head .icon-button::after {
+  background: #1e1b26;
+  border-radius: 999px;
+  color: #fff;
+  content: attr(data-tooltip);
+  font-size: 12px;
+  font-weight: 500;
+  left: 50%;
+  opacity: 0;
+  padding: 5px 12px;
+  pointer-events: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  transform: translateX(-50%) translateY(-4px);
+  transition: opacity 150ms ease, transform 150ms ease;
+  white-space: nowrap;
+  z-index: 200;
+}
+
+.file-panel-head .icon-button:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.file-panel-head .expand-toggle svg {
+  transition: transform 200ms ease;
+  transform: rotate(180deg);
+}
+
+.file-panel-head .expand-toggle.is-active svg {
+  transform: rotate(0deg);
 }
 
 .file-panel-title {

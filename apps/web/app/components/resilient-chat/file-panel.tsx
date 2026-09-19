@@ -479,6 +479,9 @@ function FilePanel({
   onClose,
   onResize,
   onResetWidth,
+  onExpand,
+  isWide,
+  onToggleWide,
   selectedPath,
   onSelectPath,
   onHideSidebar,
@@ -489,6 +492,12 @@ function FilePanel({
   onClose: () => void;
   onResize: (width: number) => void;
   onResetWidth: () => void;
+  /** 展开文件面板至宽屏模式（70% 视口）。 */
+  onExpand: () => void;
+  /** 当前是否为宽屏展开状态（由父组件控制）。 */
+  isWide: boolean;
+  /** 切换宽屏/默认宽度。 */
+  onToggleWide: () => void;
   /** 外部受控选中路径：从聊天消息的文件链接跳转时由父组件设置。 */
   selectedPath: string | null;
   onSelectPath: (path: string) => void;
@@ -550,12 +559,21 @@ function FilePanel({
           <span className="file-panel-count">{files.length}</span>
         </div>
         <div className="file-panel-actions">
+          <button
+            aria-label={isWide ? '收起文件面板' : '展开文件面板'}
+            className={`icon-button expand-toggle${isWide ? ' is-active' : ''}`}
+            data-tooltip={isWide ? '收起面板' : '展开面板'}
+            type="button"
+            onClick={onToggleWide}
+          >
+            <Icon name="chevron" size={15} />
+          </button>
           {sessionId && (
             <button
               aria-label="构建预览"
               className={`icon-button${buildPreview ? ' is-active' : ''}`}
+              data-tooltip={buildPreview ? '关闭预览' : '开启预览'}
               type="button"
-              title={buildPreview ? '显示构建产物预览' : '打开构建预览'}
               onClick={() => setBuildPreview((v) => !v)}
             >
               <Icon name="home" size={15} />
@@ -565,8 +583,8 @@ function FilePanel({
             <button
               aria-label="重新构建"
               className={`icon-button${rebuilding ? ' is-active' : ''}`}
+              data-tooltip="刷新预览"
               type="button"
-              title="重新构建项目并刷新预览"
               disabled={rebuilding}
               onClick={async () => {
                 setRebuilding(true);
@@ -586,8 +604,8 @@ function FilePanel({
           <button
             aria-label={treeVisible ? '隐藏文件目录' : '显示文件目录'}
             className="icon-button"
+            data-tooltip={treeVisible ? '隐藏文件目录' : '显示文件目录'}
             type="button"
-            title={treeVisible ? '隐藏文件目录' : '显示文件目录'}
             onClick={() => setTreeVisible((v) => !v)}
           >
             <Icon name="panel" size={15} />
@@ -595,8 +613,8 @@ function FilePanel({
           <button
             aria-label={isFullscreen ? '退出全屏' : '全屏浏览'}
             className="icon-button"
+            data-tooltip={isFullscreen ? '退出全屏' : '全屏浏览'}
             type="button"
-            title={isFullscreen ? '退出全屏' : '全屏浏览'}
             onClick={() => setIsFullscreen((v) => !v)}
           >
             <Icon name="maximize" size={15} />
@@ -604,6 +622,7 @@ function FilePanel({
           <button
             aria-label="关闭文件面板"
             className="icon-button"
+            data-tooltip="关闭面板"
             type="button"
             onClick={onClose}
           >

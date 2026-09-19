@@ -132,6 +132,7 @@ function ChatRuntime() {
   const [traceOpen, setTraceOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesWidth, setFilesWidth] = useState(DEFAULT_FILES_WIDTH);
+  const [filesWide, setFilesWide] = useState(false);
   /** 文件面板中当前选中的文件路径；从聊天消息的文件链接跳转时由外部设置。 */
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   /** 外部触发 FilePanel 打开构建预览的计数器，每次 +1 触发 useEffect。 */
@@ -931,10 +932,13 @@ function ChatRuntime() {
     setFilesOpen(true);
   }
 
-  /** 用户点击聊天消息中的页面预览按钮：打开文件面板并启用构建预览。 */
+  /** 用户点击聊天消息中的页面预览按钮：打开文件面板、展开至 70%、隐藏左侧导航并启用构建预览。 */
   function handlePreviewPage() {
     setSelectedFilePath(null);
     setFilesOpen(true);
+    setFilesWide(true);
+    setSidebarHidden(true);
+    setFilesWidth(Math.round(window.innerWidth * 0.7));
     setOpenBuildPreviewCount((c) => c + 1);
   }
 
@@ -1672,7 +1676,20 @@ function ChatRuntime() {
           files={touchedFiles}
           onClose={() => { setFilesOpen(false); setSidebarHidden(false); }}
           onResize={setFilesWidth}
-          onResetWidth={() => setFilesWidth(DEFAULT_FILES_WIDTH)}
+          onResetWidth={() => { setFilesWide(false); setSidebarHidden(false); setFilesWidth(DEFAULT_FILES_WIDTH); }}
+          onExpand={() => { setFilesWide(true); setSidebarHidden(true); setFilesWidth(Math.round(window.innerWidth * 0.7)); }}
+          isWide={filesWide}
+          onToggleWide={() => {
+            const next = !filesWide;
+            setFilesWide(next);
+            if (next) {
+              setSidebarHidden(true);
+              setFilesWidth(Math.round(window.innerWidth * 0.7));
+            } else {
+              setSidebarHidden(false);
+              setFilesWidth(DEFAULT_FILES_WIDTH);
+            }
+          }}
           selectedPath={selectedFilePath}
           onSelectPath={setSelectedFilePath}
           onHideSidebar={() => setSidebarHidden(true)}
