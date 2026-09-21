@@ -27,6 +27,7 @@ type IconName =
   | 'shield'
   | 'shuffle'
   | 'square'
+  | 'support'
   | 'trash'
   | 'triangle'
   | 'user'
@@ -68,6 +69,12 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     shield: <><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z" /><path d="m9 12 2 2 4-4" /></>,
     shuffle: <><path d="m18 14 4 4-4 4" /><path d="m18 2 4 4-4 4" /><path d="M2 18h1.4a8 8 0 0 0 6.7-3.6l3.8-5.8A8 8 0 0 1 20.6 5H22M2 6h1.9a8 8 0 0 1 6.7 3.6l.7 1" /></>,
     square: <rect width="12" height="12" x="6" y="6" rx="1" fill="currentColor" stroke="none" />,
+    support: (
+      <>
+        <path d="M18 5a3 3 0 0 0-3-3H9a3 3 0 0 0-3 3v5a3 3 0 0 0 3 3h1v2a1 1 0 0 0 1.7.7l2.8-2.8H15a3 3 0 0 0 3-3V5Z" />
+        <path d="M4 10v1a7 7 0 0 0 7 7h1" />
+      </>
+    ),
     trash: <><path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 4v7m4-7v7" /></>,
     triangle: <><path d="M21.7 16 14 2.7a2.3 2.3 0 0 0-4 0L2.3 16A2.3 2.3 0 0 0 4.3 19h15.4a2.3 2.3 0 0 0 2-3Z" /><path d="M12 9v4m0 3h.01" /></>,
     user: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>,

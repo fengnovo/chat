@@ -21,7 +21,8 @@ export class InMemoryGraphStore implements GraphStore {
       const source = normalizeEntityKey(rel.source), target = normalizeEntityKey(rel.target), type = rel.type.trim();
       const id = relationId(source, type, target); const existing = this.relations.get(id);
       if (existing) { if (!existing.sourceChunkIds.includes(chunkId)) existing.sourceChunkIds.push(chunkId); }
-      else this.relations.set(id, { id, source, target, type, sourceChunkIds: [chunkId] });
+      // 新建的关系暂记 hop=0，traverse 时再覆盖为 BFS 真实跳数；这里只为通过类型校验。
+      else this.relations.set(id, { id, source, target, type, sourceChunkIds: [chunkId], hop: 0 });
     }
     const docs = this.documents.get(documentId) ?? new Set<string>(); docs.add(chunkId); this.documents.set(documentId, docs);
   }
@@ -42,7 +43,7 @@ export class InMemoryGraphStore implements GraphStore {
       const adjacent = [...this.relations.values()].filter((r) => r.source === current.key || r.target === current.key).slice(0, limits.maxFanout);
       for (const relation of adjacent) {
         if (selected.length >= limits.maxRelations) break;
-        if (!selected.some((r) => r.id === relation.id)) selected.push({ ...relation, sourceChunkIds: [...relation.sourceChunkIds] });
+        if (!selected.some((r) => r.id === relation.id)) selected.push({ ...relation, hop: current.hop + 1, sourceChunkIds: [...relation.sourceChunkIds] });
         const next = relation.source === current.key ? relation.target : relation.source;
         if (!seen.has(next)) { seen.add(next); queue.push({ key: next, hop: current.hop + 1 }); }
       }

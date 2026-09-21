@@ -106,6 +106,7 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
     let frontier = [...seenKeys];
     let hops = 0;
     while (frontier.length && hops < maxHops && relationsById.size < limits.maxRelations) {
+      const currentHop = hops + 1; // 种子实体本身不算 hop，邻接边记为 hop=1
       const rows = await deps.pool.query<{ source_key: string; target_key: string; relation: string; chunk_ids: string[] }>(
         `SELECT source_key, target_key, relation, chunk_ids FROM graph_relationships
          WHERE tenant_id = $1 AND kb_id = ANY($2::uuid[])
@@ -121,7 +122,14 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
         const type = row.relation.trim();
         const id = relationId(source, type, target);
         if (!relationsById.has(id)) {
-          relationsById.set(id, { id, source, target, type, sourceChunkIds: [...(row.chunk_ids ?? [])] });
+          relationsById.set(id, {
+            id,
+            source,
+            target,
+            type,
+            sourceChunkIds: [...(row.chunk_ids ?? [])],
+            hop: currentHop,
+          });
           if (relationsById.size >= limits.maxRelations) break;
         }
         for (const key of [source, target]) {

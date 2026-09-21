@@ -43,6 +43,7 @@ import {
   toggleKnowledgeBase,
 } from './knowledge-base-picker';
 import { UserMenu } from '../auth/user-menu';
+import { AiServiceWidget } from '../ai-service-widget';
 import { useAuth } from '../auth/auth-context';
 import { apiFetch } from './api';
 import { PendingInteraction } from './pending-interaction';
@@ -186,6 +187,7 @@ function ChatRuntime() {
   const [sessionDialogError, setSessionDialogError] = useState<string | null>(null);
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [aiServiceOpen, setAiServiceOpen] = useState(false);
   // Markdown 渲染增强开关：语法高亮 + Mermaid 图表，默认开启；持久化到 localStorage。
   const [highlightMarkdown, setHighlightMarkdown] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
@@ -1495,7 +1497,7 @@ function ChatRuntime() {
             >
               <Icon name="panel" size={16} />
             </button> */}
-            <UserMenu />
+            <UserMenu onAiServiceClick={() => setAiServiceOpen((open) => !open)} />
           </div>
         </header>
 
@@ -1719,6 +1721,12 @@ function ChatRuntime() {
       )}
 
       <Lightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
+
+      <AiServiceWidget
+        open={aiServiceOpen}
+        onOpen={() => setAiServiceOpen(true)}
+        onClose={() => setAiServiceOpen(false)}
+      />
     </main>
   );
 }

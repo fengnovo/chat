@@ -151,7 +151,7 @@ function ChangePasswordDialog({
 
 // 右上角头像菜单：悬停/聚焦展开浮层，展示角色与导航，提供修改密码与退出登录。
 // 触屏无 hover 时可点击头像切换；Esc 或点击外部关闭。
-export function UserMenu() {
+export function UserMenu({ onAiServiceClick }: { onAiServiceClick?: () => void } = {}) {
   const { user, refresh } = useAuth();
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -272,6 +272,19 @@ export function UserMenu() {
               <Icon name="layers" size={15} />
               知识库
             </Link>
+          )}
+          {onAiServiceClick && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onAiServiceClick();
+              }}
+            >
+              <Icon name="support" size={15} />
+              AI 客服
+            </button>
           )}
           {user.role === 'admin' && (
             <Link href="/admin/users" onClick={() => setOpen(false)}>

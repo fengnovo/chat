@@ -1,0 +1,81 @@
+{
+  "datasetId": "customer-service-example",
+  "version": "1.0.0",
+  "kbId": "00000000-0000-4000-8000-000000000000",
+  "indexConfig": {
+    "chunkSize": 800,
+    "chunkOverlap": 100,
+    "topK": 10,
+    "maxHops": 2,
+    "graphEnabled": true
+  },
+  "corpus": {
+    "documents": 3,
+    "chunks": 42,
+    "indexedAt": "2026-09-20T00:00:00Z"
+  },
+  "cases": [
+    {
+      "id": "q-001",
+      "query": "腾讯云当前的优惠活动有哪些？",
+      "type": "semantic",
+      "answerable": true,
+      "relevantChunkIds": ["<chunk-id-1>", "<chunk-id-2>"],
+      "evidence": [
+        {
+          "documentId": "<doc-id-1>",
+          "text": "新用户首购可享受云服务器 CVM 低至 1 折优惠",
+          "graded": 2
+        }
+      ],
+      "expectedDocuments": ["<doc-id-1>"],
+      "difficulty": "easy",
+      "notes": "测试语义召回"
+    },
+    {
+      "id": "q-002",
+      "query": "CVM 的标准型 S5 实例 CPU 型号是什么？",
+      "type": "exact-term",
+      "answerable": true,
+      "relevantChunkIds": ["<chunk-id-3>"],
+      "evidence": [
+        {
+          "documentId": "<doc-id-2>",
+          "text": "标准型 S5 采用 Intel Xeon Cascade Lake 处理器",
+          "graded": 2
+        }
+      ],
+      "expectedDocuments": ["<doc-id-2>"],
+      "difficulty": "medium",
+      "notes": "测试专有名词精确召回"
+    },
+    {
+      "id": "q-003",
+      "query": "对象存储 COS 和云服务器 CVM 之间如何免费传输数据？",
+      "type": "multi-hop",
+      "answerable": true,
+      "relevantChunkIds": ["<chunk-id-4>", "<chunk-id-5>"],
+      "evidence": [
+        {
+          "documentId": "<doc-id-3>",
+          "text": "同一地域内的 COS 与 CVM 之间通过内网传输流量免费",
+          "graded": 2
+        }
+      ],
+      "expectedDocuments": ["<doc-id-3>"],
+      "difficulty": "hard",
+      "notes": "测试跨文档/跨段落关联"
+    },
+    {
+      "id": "q-004",
+      "query": "亚马逊 AWS 的 EC2 价格是多少？",
+      "type": "unanswerable",
+      "answerable": false,
+      "relevantChunkIds": [],
+      "evidence": [],
+      "expectedDocuments": [],
+      "difficulty": "easy",
+      "notes": "知识库外问题，测试拒答能力"
+    }
+  ]
+}

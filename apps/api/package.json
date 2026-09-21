@@ -9,7 +9,8 @@
     "build": "tsup --config tsup.config.ts",
     "start:prod": "node --env-file-if-exists=../../.env --import ../../packages/observability/dist/register.js dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --conditions=development --import tsx --test test/**/*.test.ts"
+    "test": "node --conditions=development --import tsx --test test/**/*.test.ts",
+    "eval:rag": "node --env-file-if-exists=../../.env --conditions=development --import tsx scripts/eval-rag.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.0",

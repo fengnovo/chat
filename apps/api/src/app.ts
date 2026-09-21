@@ -17,6 +17,7 @@ import { registerOAuthRoutes } from './oauth-routes.js';
 import { RunOutboxDispatcher } from './outbox.js';
 import { registerRoutes } from './routes.js';
 import { registerKnowledgeRoutes } from './knowledge-routes.js';
+import { registerRagRoutes } from './rag-routes.js';
 import { StreamSubscriptionHub } from './stream-subscriptions.js';
 import { loadObservabilityConfig, startObservability, redactTelemetryValue } from '@repo/observability';
 import { apiFastifyOptions, createApiObservability, registerApiObservabilityHooks, type ApiObservability } from './observability.js';
@@ -216,6 +217,10 @@ export async function buildApp(options: BuildAppOptions) {
     repository: options.knowledgeRepository,
     knowledgeQueue,
     artifacts,
+  });
+  await registerRagRoutes(app, {
+    config: options.config,
+    knowledgeRepository: options.knowledgeRepository,
   });
   registerAuthRoutes(app, {
     config: options.config,

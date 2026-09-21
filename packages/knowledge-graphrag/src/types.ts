@@ -12,7 +12,7 @@ export interface GraphEntity { name: string; key?: string }
 export interface GraphRelationship { source: string; target: string; type: string }
 export interface GraphExtraction { entities: GraphEntity[]; relationships: GraphRelationship[] }
 export interface GraphLimits { maxHops: number; maxFanout: number; maxRelations: number }
-export interface GraphRelation { id: string; source: string; target: string; type: string; sourceChunkIds: string[] }
+export interface GraphRelation { id: string; source: string; target: string; type: string; sourceChunkIds: string[]; hop: number }
 export interface GraphTraversal { entityKeys: string[]; relations: GraphRelation[]; chunkIds: string[] }
 export interface GraphStore {
   addExtraction(documentId: string, chunkId: string, extraction: GraphExtraction): void;

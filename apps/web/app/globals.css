@@ -15,6 +15,8 @@
 @import "./styles/skeleton.css";
 @import "./styles/responsive.css";
 @import "./styles/knowledge.css";
+@import "./styles/customer-service.css";
+@import "./styles/ai-service-widget.css";
 @import "./styles/admin.css";
 @import "./styles/user-menu.css";
 @import "./styles/auth.css";
