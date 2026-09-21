@@ -58,6 +58,8 @@ const schema = z
     QDRANT_COLLECTION_PREFIX: z.string().trim().min(1).default('knowledge'),
     RATE_LIMIT_REQUESTS: z.coerce.number().int().positive().default(300),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    // 知识库上传预签名 / 确认单独计数：整目录导入会连续产生大量请求，避免挤占交互式配额。
+    KNOWLEDGE_UPLOAD_RATE_LIMIT_REQUESTS: z.coerce.number().int().positive().default(3_000),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(500),
     OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
     OUTBOX_LEASE_MS: z.coerce.number().int().min(1_000).default(30_000),
@@ -96,6 +98,9 @@ const schema = z
     OPENAI_BASE_URL: z.string().url().optional(),
     OPENAI_API_KEY: z.string().optional(),
     MODEL: z.string().optional(),
+    // VLM caption：API 在 asset 确认后向 knowledge-caption 队列投递任务。
+    // 默认关：需在 .env 显式 CAPTION_ENABLED=true 才入队，避免 dev / 生产部署意外消耗 VLM 额度。
+    CAPTION_ENABLED: z.enum(['true', 'false']).optional(),
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === 'production' && value.AUTH_MODE === 'dev') {
@@ -175,6 +180,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
           model: value.MODEL ?? 'deepseek-chat',
         }
       : undefined,
+    CAPTION_ENABLED: value.CAPTION_ENABLED === 'true',
     SANDBOX_SESSIONS_ROOT: path.isAbsolute(sandboxSessionsRoot)
       ? path.normalize(sandboxSessionsRoot)
       : path.resolve(workerRoot, sandboxSessionsRoot),

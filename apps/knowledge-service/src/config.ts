@@ -27,6 +27,22 @@ const configSchema = z.object({
   s3Bucket: z.string().trim().min(1).default('agent-artifacts'),
   s3AccessKey: z.string().trim().min(1).default('agent'),
   s3SecretKey: z.string().trim().min(1).default('agent-local-secret'),
+  // ─── VLM 图片 caption（异步队列 knowledge-caption）────────────────────
+  // 注意：不要用 z.coerce.boolean()——Boolean("false") === true，会让 CAPTION_ENABLED=false
+  // 反而开启 caption（deploy 模板里正是写 false）。此处严格解析 "true"/"false" 字符串。
+  captionEnabled: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  captionProvider: z.enum(['openai-compatible']).default('openai-compatible'),
+  captionBaseUrl: z.string().url().optional(),
+  captionApiKey: z.string().trim().min(1).optional(),
+  captionModel: z.string().trim().min(1).default('qwen-vl-plus'),
+  captionTimeoutMs: z.coerce.number().int().positive().default(60_000),
+  captionMaxChars: z.coerce.number().int().positive().default(240),
+  captionConcurrency: z.coerce.number().int().positive().default(2),
+  captionLeaseMs: z.coerce.number().int().positive().default(180_000),
+  captionMaxAttempts: z.coerce.number().int().positive().default(3),
+  // 混合思考模型（qwen3-omni 等）默认开思考，思考 token 计入 max_tokens 会把 caption 挤空；
+  // 置 true 时向请求体注入 enable_thinking:false。同样严格解析字符串。
+  captionDisableThinking: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
   leaseMs: z.coerce.number().int().positive().default(120_000),
   concurrency: z.coerce.number().int().positive().default(2),
   budget: z.coerce.number().positive().default(1),
@@ -69,6 +85,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KnowledgeServi
     s3Bucket: env.S3_BUCKET,
     s3AccessKey: env.S3_ACCESS_KEY,
     s3SecretKey: env.S3_SECRET_KEY,
+    // caption 默认关：缺省 + CAPTION_ENABLED=true + 三个变量齐备时启用。
+    captionEnabled: env.CAPTION_ENABLED,
+    captionBaseUrl: env.CAPTION_BASE_URL,
+    captionApiKey: env.CAPTION_API_KEY,
+    captionModel: env.CAPTION_MODEL,
+    captionTimeoutMs: env.CAPTION_TIMEOUT_MS,
+    captionMaxChars: env.CAPTION_MAX_CHARS,
+    captionConcurrency: env.CAPTION_CONCURRENCY,
+    captionLeaseMs: env.CAPTION_LEASE_MS,
+    captionMaxAttempts: env.CAPTION_MAX_ATTEMPTS,
+    captionDisableThinking: env.CAPTION_DISABLE_THINKING,
     leaseMs: env.KNOWLEDGE_INDEX_LEASE_MS,
     concurrency: env.KNOWLEDGE_CONCURRENCY,
     budget: env.KNOWLEDGE_BUDGET,

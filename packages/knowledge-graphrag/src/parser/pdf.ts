@@ -25,5 +25,5 @@ export async function parsePdfDocument(bytes: Uint8Array): Promise<ParsedDocumen
       .join(' ');
     parts.push(text);
   }
-  return { text: parts.join('\n'), mime: 'application/pdf', sections: [] };
+  return { text: parts.join('\n'), mime: 'application/pdf', sections: [], imageRefs: [] };
 }

@@ -11,6 +11,7 @@ import { retrievalViaLabel } from './knowledge-helpers';
 import {
   Badge,
   ChatIcon,
+  CitationImages,
   DocIcon,
   QuoteIcon,
   RetrievalParamsPanel,
@@ -170,6 +171,7 @@ export function QaView({ kb }: { kb: KnowledgeBase }) {
                     </span>
                   </header>
                   <p>{citation.passage}</p>
+                  <CitationImages kbId={kb.id} images={citation.images ?? []} />
                   <footer>
                     <Badge tone="violet">{citation.score.toFixed(4)}</Badge>
                     <Badge tone="neutral">{retrievalViaLabel(citation.via)}</Badge>

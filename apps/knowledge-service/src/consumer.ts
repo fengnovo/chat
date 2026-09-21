@@ -109,6 +109,10 @@ export function startConsumer(
             input = { ...job.data, id: job.id, tenantId, leaseToken: claimed!.leaseToken };
           }
           await pipeline.run(input);
+          // 文档索引完成后，把同目录下尚未挂载的资源绑到本文档，便于检索时按 (document_id, rel_path) 命中。
+          if (typeof deps.repository.attachAssetsToDocument === 'function') {
+            safely(() => deps.repository.attachAssetsToDocument(tenantId, kbId, documentId));
+          }
         } catch (error) {
           indexOutcome = 'failure';
           throw error;

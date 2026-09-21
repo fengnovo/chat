@@ -6,6 +6,7 @@ import {
   deleteKnowledgeDocument,
   listKnowledgeDocuments,
   renameKnowledgeDocument,
+  uploadKnowledgeAsset,
   uploadKnowledgeDocument,
   type KnowledgeBase,
   type KnowledgeDocument,
@@ -16,7 +17,8 @@ import {
   documentStatusTone,
   finishKnowledgeUpload,
   formatDateTime,
-  isAcceptedKnowledgeFile,
+  isAcceptedKnowledgeAsset,
+  isAcceptedKnowledgeDocument,
   isDocumentBusy,
   reserveKnowledgeUpload,
   type UploadState,
@@ -26,6 +28,7 @@ import {
   DocIcon,
   EditIcon,
   EmptyState,
+  FolderIcon,
   LayersIcon,
   Modal,
   SearchIcon,
@@ -35,6 +38,13 @@ import {
 } from './knowledge-ui';
 
 const ACTIVE_INDEX_STATUSES = new Set(['pending', 'queued', 'indexing', 'processing']);
+
+/** 从 File.webkitRelativePath 提取去掉文件名的部分；缺失时返回 ''（顶层）。 */
+function directoryOf(file: File): string {
+  const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? '';
+  const idx = rel.lastIndexOf('/');
+  return idx >= 0 ? rel.slice(0, idx) : '';
+}
 
 export function DocumentsView({
   kb,
@@ -56,6 +66,7 @@ export function DocumentsView({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const activeUploads = useRef(new Set<string>());
 
   const refresh = useCallback(async (silent = false) => {
@@ -87,41 +98,45 @@ export function DocumentsView({
     return () => clearInterval(timer);
   }, [documents, refresh]);
 
+  /** 单文件 / 多文件选择入口；按后缀名分流到 document 与 asset。 */
   const selectFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const files = Array.from(input.files ?? []);
+    input.value = '';
     if (!files.length) return;
+    let touchedDocuments = false;
     for (const file of files) {
-      if (!isAcceptedKnowledgeFile(file.name)) {
-        setUploadState({ kind: 'error', message: `${file.name} 不是受支持的 Markdown / TXT 文件，已跳过。` });
-        continue;
-      }
       if (!reserveKnowledgeUpload(activeUploads.current, kb.id)) {
         setUploadState({ kind: 'error', message: '该知识库已有上传任务进行中，请稍候。' });
-        continue;
+        return;
       }
-      setUploadState({ kind: 'uploading', message: `正在上传 ${file.name}…` });
       try {
-        const state = await finishKnowledgeUpload(
-          file.name,
-          () => uploadKnowledgeDocument(kb.id, file),
-          async () => { await refresh(true); },
-        );
-        setUploadState(state);
-        await onChanged();
+        setUploadState({ kind: 'uploading', message: `正在上传 ${file.name}…` });
+        if (isAcceptedKnowledgeAsset(file.name)) {
+          await uploadKnowledgeAsset(kb.id, file, { relPath: directoryOf(file) ? `${directoryOf(file)}/${file.name}` : file.name });
+          setUploadState({ kind: 'success', message: `${file.name} 已上传，正在等待文档关联。` });
+        } else if (isAcceptedKnowledgeDocument(file.name)) {
+          const state = await finishKnowledgeUpload(
+            file.name,
+            () => uploadKnowledgeDocument(kb.id, file, { directory: directoryOf(file) }),
+            async () => { await refresh(true); },
+          );
+          setUploadState(state);
+          touchedDocuments = true;
+        } else {
+          setUploadState({ kind: 'error', message: `${file.name} 不是受支持的文档 / 图片类型，已跳过。` });
+        }
       } catch (caught) {
         setUploadState({
           kind: 'error',
-          message:
-            caught instanceof Error && caught.message
-              ? `${file.name}：${caught.message}`
-              : `${file.name} 上传失败，请重试。`,
+          message: caught instanceof Error && caught.message ? `${file.name}：${caught.message}` : `${file.name} 上传失败，请重试。`,
         });
       } finally {
         activeUploads.current.delete(kb.id);
       }
     }
-    input.value = '';
+    // 整批上传结束后再同步知识库统计。
+    if (touchedDocuments) await onChanged();
   };
 
   const submitRename = async (name: string) => {
@@ -146,8 +161,8 @@ export function DocumentsView({
   };
 
   const filtered = documents.filter((document) =>
-    document.name.toLowerCase().includes(search.trim().toLowerCase()) ||
-    document.id.toLowerCase().includes(search.trim().toLowerCase()),
+    (document.name ?? '').toLowerCase().includes(search.trim().toLowerCase()) ||
+    (document.id ?? '').toLowerCase().includes(search.trim().toLowerCase()),
   );
 
   return (
@@ -158,12 +173,27 @@ export function DocumentsView({
             <button type="button" className="kc-button kc-button-primary" onClick={() => fileInputRef.current?.click()}>
               <UploadIcon /> 上传文档
             </button>
+            <button type="button" className="kc-button" onClick={() => folderInputRef.current?.click()}>
+              <FolderIcon /> 上传文件夹
+            </button>
             <input
               ref={fileInputRef}
               type="file"
               accept={DOCUMENT_ACCEPT}
               multiple
               hidden
+              onChange={(event) => { void selectFiles(event); }}
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              accept={DOCUMENT_ACCEPT}
+              multiple
+              hidden
+              // Chromium / WebKit 系列浏览器专属，IE / Firefox 不支持；会被 React 警告 ignore。
+              // @ts-expect-error webkitdirectory 是非标准属性
+              webkitdirectory=""
+              directory=""
               onChange={(event) => { void selectFiles(event); }}
             />
           </>
@@ -195,7 +225,7 @@ export function DocumentsView({
         <EmptyState
           icon={<DocIcon />}
           title={documents.length === 0 ? '该知识库还没有文档' : '没有匹配的文档'}
-          hint={documents.length === 0 && canWrite ? '上传 Markdown 或 TXT 文档，索引完成后即可检索。' : undefined}
+          hint={documents.length === 0 && canWrite ? '上传 Markdown / TXT / PDF / DOCX 文档，或直接上传包含图片的文件夹，索引完成后即可检索。' : undefined}
         />
       ) : (
         <div className="kc-table-wrap">
@@ -203,6 +233,7 @@ export function DocumentsView({
             <thead>
               <tr>
                 <th>文档名称 / ID</th>
+                <th>目录</th>
                 <th className="kc-col-center">文档状态</th>
                 <th className="kc-col-center">处理策略</th>
                 <th className="kc-col-center">切片数</th>
@@ -222,6 +253,15 @@ export function DocumentsView({
                         <span className="kc-doc-id" title={document.id}>{document.id}</span>
                       </div>
                     </div>
+                  </td>
+                  <td>
+                    {document.directory ? (
+                      <span className="kc-doc-directory" title={document.directory}>
+                        <FolderIcon /> {document.directory}
+                      </span>
+                    ) : (
+                      <span className="kc-muted">根目录</span>
+                    )}
                   </td>
                   <td className="kc-col-center">
                     <Badge tone={documentStatusTone(document.status)}>

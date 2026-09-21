@@ -232,3 +232,104 @@ test('document rename returns the updated row or 404', async () => {
   await app.close();
   await missingApp.close();
 });
+
+test('asset upload rejects payloads below the LFS-pointer floor (1024 bytes)', async () => {
+  const app = Fastify();
+  app.decorateRequest('auth');
+  app.addHook('preHandler', async (request) => { request.auth = { tenantId, userId, roles: [] }; });
+  await registerKnowledgeRoutes(app, {
+    repository: {
+      canWriteKnowledgeBase: async () => true,
+      createAssetUpload: async () => { throw new Error('must not create'); },
+    } as any,
+    artifacts: {},
+    knowledgeQueue: { add: async () => ({}) },
+    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 20_000_000 },
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/uploads`,
+    payload: { name: 'fake.jpeg', mime: 'image/jpeg', sizeBytes: 131, sha256: 'a'.repeat(64), kind: 'asset' },
+  });
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error, 'asset_too_small');
+  await app.close();
+});
+
+test('asset confirm rejects when uploaded bytes do not match declared MIME', async () => {
+  const assetRow = {
+    id: '00000000-0000-4000-8000-000000000099',
+    kbId,
+    objectKey: 'tenants/x/knowledge/kb/assets/a/fake.jpeg',
+    mime: 'image/jpeg',
+    sizeBytes: 4096,
+    sha256: 'c'.repeat(64),
+    captionStatus: 'pending',
+  };
+  // LFS-pointer style head bytes: ASCII text but client claims image/jpeg.
+  const lfsPointerHead = new Uint8Array([
+    0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x20,
+    0x68, 0x74, 0x74, 0x70, 0x73, 0x3a, 0x2f, 0x2f,
+  ]);
+  const app = Fastify();
+  app.decorateRequest('auth');
+  app.addHook('preHandler', async (request) => { request.auth = { tenantId, userId, roles: [] }; });
+  await registerKnowledgeRoutes(app, {
+    repository: {
+      canWriteKnowledgeBase: async () => true,
+      getKnowledgeAsset: async () => assetRow,
+      confirmAssetUpload: async () => { throw new Error('must not confirm'); },
+    } as any,
+    artifacts: {
+      verifyObject: async () => {},
+      getObjectHead: async () => lfsPointerHead,
+    },
+    knowledgeQueue: { add: async () => ({}) },
+    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 20_000_000, CAPTION_ENABLED: false },
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/assets/${assetRow.id}/confirm`,
+    payload: { sizeBytes: 4096, sha256: assetRow.sha256 },
+  });
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error, 'asset_magic_check_failed');
+  await app.close();
+});
+
+test('asset confirm accepts when uploaded bytes match declared MIME', async () => {
+  const assetRow = {
+    id: '00000000-0000-4000-8000-00000000009a',
+    kbId,
+    objectKey: 'tenants/x/knowledge/kb/assets/a/real.png',
+    mime: 'image/png',
+    sizeBytes: 4096,
+    sha256: 'd'.repeat(64),
+    captionStatus: 'pending',
+  };
+  const realPngHead = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+  const app = Fastify();
+  app.decorateRequest('auth');
+  app.addHook('preHandler', async (request) => { request.auth = { tenantId, userId, roles: [] }; });
+  await registerKnowledgeRoutes(app, {
+    repository: {
+      canWriteKnowledgeBase: async () => true,
+      getKnowledgeAsset: async () => assetRow,
+      confirmAssetUpload: async () => ({ asset: { ...assetRow, captionStatus: 'pending' } }),
+      enqueueCaptionJob: async () => null,
+    } as any,
+    artifacts: {
+      verifyObject: async () => {},
+      getObjectHead: async () => realPngHead,
+    },
+    knowledgeQueue: { add: async () => ({}) },
+    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 20_000_000, CAPTION_ENABLED: false },
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/assets/${assetRow.id}/confirm`,
+    payload: { sizeBytes: 4096, sha256: assetRow.sha256 },
+  });
+  assert.equal(response.statusCode, 200);
+  await app.close();
+});

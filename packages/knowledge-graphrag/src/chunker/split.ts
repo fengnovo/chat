@@ -8,6 +8,25 @@ export function stableChunkId(documentId: string, ordinal: number, text: string)
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/**
+ * 给定 chunk 的字符区间和文档的全部图片引用，挑选 offset 落在区间内的引用。
+ * 这样检索时就能把"这张图出现在哪段正文里"挂回 chunk。
+ */
+function attachImageRefs(
+  start: number,
+  end: number,
+  refs: ParsedDocument['imageRefs'],
+): TextChunk['imageRefs'] {
+  if (!refs.length) return [];
+  const matched: TextChunk['imageRefs'] = [];
+  for (const ref of refs) {
+    if (ref.offset >= start && ref.offset < end) {
+      matched.push({ path: ref.path, alt: ref.alt });
+    }
+  }
+  return matched;
+}
+
 export function splitIntoChunks(document: ParsedDocument, options: { size: number; overlap: number }): TextChunk[] {
   if (!Number.isInteger(options.size) || options.size <= 0) throw new Error('size must be positive');
   if (!Number.isInteger(options.overlap) || options.overlap < 0 || options.overlap >= options.size) throw new Error('overlap must be less than size');
@@ -33,9 +52,18 @@ export function splitIntoChunks(document: ParsedDocument, options: { size: numbe
       .sort((a, b) => a.start - b.start).reduce((path, heading) => {
         path[heading.level - 1] = heading.title; return path.slice(0, heading.level);
       }, [] as string[]);
-    chunks.push({ ordinal: chunks.length, text, headingPath: headings });
+    chunks.push({
+      ordinal: chunks.length,
+      text,
+      start,
+      end,
+      headingPath: headings,
+      imageRefs: attachImageRefs(start, end, document.imageRefs ?? []),
+    });
     if (end === document.text.length) break;
     start = end - options.overlap;
   }
+  // 兜底：若文档完全没有 markdown 图片引用，别动 chunk；
+  // 若 chunk 没拿到任何图片但文档里还有图（图片落在 split 边界），仍保留各 chunk 已挂上的内容。
   return chunks;
 }

@@ -56,6 +56,25 @@ test('knowledge API repository exposes authorized CRUD and atomic upload confirm
   assert.ok(queries.some((q) => /knowledge_index_jobs/i.test(q) && /BEGIN|COMMIT|INSERT/i.test(q)));
 });
 
+test('createDocumentUpload reuses the existing document row when the same content hash is imported twice', async () => {
+  const queries: string[] = [];
+  const pool: any = {
+    query: async (text: string) => {
+      queries.push(text);
+      if (/FROM knowledge_bases/i.test(text)) return { rows: [{ id: 'kb' }], rowCount: 1 };
+      if (/INSERT INTO knowledge_documents/i.test(text)) return { rows: [], rowCount: 0 };
+      if (/FROM knowledge_documents/i.test(text)) return { rows: [{ id: 'existing-doc', object_key: 'tenants/t/knowledge/kb/existing-doc/x.md' }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const repo = new KnowledgeRepository(pool);
+  const auth = { tenantId: 'tenant', userId: 'admin', roles: ['admin'] };
+  const reused = await repo.createDocumentUpload(auth, { kbId: 'kb', documentId: 'new-doc', name: 'x.md', mime: 'text/markdown', sizeBytes: 1, sha256: 'a'.repeat(64), objectKey: 'tenants/t/knowledge/kb/new-doc/x.md', directory: 'dishes' });
+  assert.equal(reused?.id, 'existing-doc');
+  assert.ok(queries.some((q) => /INSERT INTO knowledge_documents/i.test(q) && /ON CONFLICT \(kb_id, content_hash\)/i.test(q) && /DO NOTHING/i.test(q)));
+  assert.ok(queries.some((q) => /SELECT \* FROM knowledge_documents WHERE kb_id=\$1 AND content_hash=\$2/i.test(q)));
+});
+
 test('regular tenant members cannot upload or confirm in another owner tenant-visible KB', async () => {
   const queries: string[] = [];
   const pool: any = { query: async (text: string) => { queries.push(text); return { rows: [], rowCount: 0 }; } };
@@ -129,4 +148,27 @@ test('createKnowledgeBase is limited to owner and admin roles', async () => {
       return true;
     },
   );
+});
+
+test('asset confirm and delete bind exactly the placeholders their permission predicate uses', async () => {
+  const queries: Array<{ text: string; values: unknown[] }> = [];
+  const pool: any = {
+    query: async (text: string, values: unknown[] = []) => {
+      queries.push({ text, values });
+      return { rows: [{ id: 'asset' }], rowCount: 1 };
+    },
+  };
+  const repo = new KnowledgeRepository(pool);
+  const auth = { tenantId: 'tenant', userId: 'user', roles: [] };
+
+  await repo.confirmAssetUpload(auth, 'kb', 'asset', { sizeBytes: 1, sha256: 'a'.repeat(64) });
+  await repo.deleteKnowledgeAsset(auth, 'kb', 'asset');
+
+  assert.ok(queries.length >= 3, 'confirm + delete 至少产生 3 条语句');
+  for (const { text, values } of queries) {
+    const placeholders = Array.from(text.matchAll(/\$(\d+)/g), (match) => Number(match[1]));
+    if (!placeholders.length) continue;
+    // 权限片段里写错的占位符编号会让 PG 报 "bind message supplies N parameters"，只会以 500 暴露。
+    assert.equal(values.length, Math.max(...placeholders), `参数数量与占位符不匹配：${text}`);
+  }
 });

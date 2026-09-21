@@ -17,5 +17,5 @@ export function parseXlsxDocument(bytes: Uint8Array): ParsedDocument {
     const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
     parts.push(`# ${sheetName}\n${csv}`);
   }
-  return { text: parts.join('\n\n'), mime: MIME, sections: [] };
+  return { text: parts.join('\n\n'), mime: MIME, sections: [], imageRefs: [] };
 }

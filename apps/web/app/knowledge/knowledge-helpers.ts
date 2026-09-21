@@ -1,6 +1,6 @@
 import type { KnowledgeDocument } from './knowledge-api';
 
-export const DOCUMENT_ACCEPT = '.md,.markdown,.txt,.pdf,.docx,.xlsx,text/markdown,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+export const DOCUMENT_ACCEPT = '.md,.markdown,.txt,.pdf,.docx,.xlsx,image/png,image/jpeg,image/webp,image/gif,text/markdown,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /** 按扩展名把文件名映射到后端接受的 MIME 类型。旧版 .doc/.xls 不支持。 */
 export function detectDocumentMime(name: string, fallbackType = ''): string {
@@ -17,9 +17,33 @@ export function detectDocumentMime(name: string, fallbackType = ''): string {
       return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     case 'xlsx':
       return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    case 'gif':
+      return 'image/gif';
     default:
       return fallbackType || 'application/octet-stream';
   }
+}
+
+/** 是否是支持索引的文档（不含图片）。 */
+export function isAcceptedKnowledgeDocument(name: string) {
+  return /\.(?:md|markdown|txt|pdf|docx|xlsx)$/i.test(name);
+}
+
+/** 是否是支持上传的图片资源。 */
+export function isAcceptedKnowledgeAsset(name: string) {
+  return /\.(?:png|jpe?g|webp|gif)$/i.test(name);
+}
+
+/** 兼容旧名调用，新代码应按 kind 选用。 */
+export function isAcceptedKnowledgeFile(name: string) {
+  return isAcceptedKnowledgeDocument(name) || isAcceptedKnowledgeAsset(name);
 }
 
 export type UploadState = {
@@ -27,13 +51,8 @@ export type UploadState = {
   message: string;
 };
 
-export const DOCUMENT_LOAD_ERROR = '文档加载失败，请点击“刷新文档”重试。';
+export const DOCUMENT_LOAD_ERROR = '文档加载失败，请点击"刷新文档"重试。';
 
-export function isAcceptedKnowledgeFile(name: string) {
-  return /\.(?:md|markdown|txt|pdf|docx|xlsx)$/i.test(name);
-}
-
-/** 同一知识库同一时刻只允许一个上传任务。 */
 export function reserveKnowledgeUpload(active: Set<string>, kbId: string) {
   if (active.has(kbId)) return false;
   active.add(kbId);
@@ -52,7 +71,7 @@ export async function finishKnowledgeUpload(
   } catch {
     return {
       kind: 'error',
-      message: `${fileName} 已上传，但文档列表刷新失败，请点击“刷新文档”重试。`,
+      message: `${fileName} 已上传，但文档列表刷新失败，请点击"刷新文档"重试。`,
     };
   }
 }

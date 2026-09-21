@@ -105,7 +105,9 @@ export function KnowledgeBaseView({
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const filtered = bases.filter((base) => base.name.toLowerCase().includes(search.trim().toLowerCase()));
+  const filtered = bases.filter((base) =>
+    (base.name ?? '').toLowerCase().includes(search.trim().toLowerCase()),
+  );
 
   const submitEditor = async (input: { name: string; description: string; visibility: 'private' | 'tenant' }) => {
     setBusy(true);

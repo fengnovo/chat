@@ -9,5 +9,5 @@ export async function parseDocxDocument(bytes: Uint8Array): Promise<ParsedDocume
   const buffer = bytes instanceof Buffer ? bytes : Buffer.from(bytes);
   const result = await mammoth.extractRawText({ buffer });
   const text = typeof result?.value === 'string' ? result.value : '';
-  return { text, mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sections: [] };
+  return { text, mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sections: [], imageRefs: [] };
 }

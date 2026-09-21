@@ -15,6 +15,12 @@ import { startConsumer } from './consumer.js';
 import { createKnowledgeObservability } from './observability.js';
 import { createLlmGraphExtractor } from './extract.js';
 import { createRetriever } from './retriever.js';
+import {
+  createOpenAICompatibleCaptioner,
+  createNullCaptioner,
+  type ImageCaptioner,
+} from './caption-provider.js';
+import { startCaptionWorker } from './caption-worker.js';
 
 async function main(): Promise<void> {
   const observabilityRuntime = await registeredObservability;
@@ -74,6 +80,65 @@ async function main(): Promise<void> {
   const worker = startConsumer('knowledge-index', redis, runtime, config.concurrency, telemetry);
   const retriever = createRetriever({ pool, embedder: runtime.embedder, vectorStore, repository, logger, tracer: observabilityRuntime.tracer });
 
+  // ── VLM caption worker（仅当 captionEnabled 且 baseUrl + apiKey 都齐备时启动）──
+  const captioner: ImageCaptioner = config.captionEnabled && config.captionBaseUrl && config.captionApiKey
+    ? createOpenAICompatibleCaptioner({
+        baseUrl: config.captionBaseUrl,
+        apiKey: config.captionApiKey,
+        model: config.captionModel,
+        timeoutMs: config.captionTimeoutMs,
+        maxChars: config.captionMaxChars,
+        disableThinking: config.captionDisableThinking,
+      })
+    : createNullCaptioner();
+  let captionWorker: ReturnType<typeof startCaptionWorker> | undefined;
+  let captionQueue: Queue | undefined;
+  if (config.captionEnabled && config.captionBaseUrl && config.captionApiKey) {
+    // 对账循环（index.ts 的 reconcileCaptionJobs）需要 Queue 句柄才能把 DB 里 queued /
+    // 租约过期的任务重新投递。此前只传了 captionWorker，deps.captionQueue 恒为 undefined，
+    // 对账分支被短路 —— DB 里的 caption 任务永远不会被投进 BullMQ。
+    captionQueue = new Queue('knowledge-caption', { connection: redis });
+    captionWorker = startCaptionWorker(
+      'knowledge-caption',
+      redis,
+      {
+        pool,
+        repository,
+        download: (objectKey: string) => artifacts.getObjectBytes(objectKey),
+        captioner,
+        logger,
+        leaseMs: config.captionLeaseMs,
+        modelName: config.captionModel,
+        // caption 写完就入队一条 reindex，让 IndexPipeline 把 caption chunk 加进向量。
+        onCaptionReady: async ({ tenantId, kbId, documentId }) => {
+          const enqueued = await repository.enqueueReindexIfAttached(tenantId, kbId, documentId, 'caption_ready');
+          if (enqueued) {
+            await queue.add(
+              'reindex-document',
+              { tenantId, kbId, documentId },
+              { removeOnComplete: { age: 3600, count: 1000 }, removeOnFail: { age: 86_400 } },
+            );
+            logger.info({ tenantId, kbId, documentId, operation: 'caption.reindex.enqueue' }, 'reindex enqueued after caption ready');
+          }
+        },
+      },
+      config.captionConcurrency,
+      telemetry,
+    );
+    logger.info({ operation: 'caption.startup', model: config.captionModel }, 'caption worker started');
+  } else {
+    logger.info(
+      {
+        operation: 'caption.startup',
+        reason: !config.captionEnabled ? 'disabled' : 'missing_credentials',
+        captionEnabled: config.captionEnabled,
+        hasBaseUrl: Boolean(config.captionBaseUrl),
+        hasApiKey: Boolean(config.captionApiKey),
+      },
+      'caption worker not started; image assets will stay caption_pending',
+    );
+  }
+
   // /ready 探针：只暴露每类依赖的布尔状态，不输出连接串、错误细节等敏感信息。
   const readiness = async (): Promise<Record<string, boolean>> => {
     const checks: Record<string, Promise<boolean>> = {
@@ -92,7 +157,16 @@ async function main(): Promise<void> {
     return Object.fromEntries(result);
   };
 
-  const service = await startKnowledgeService(config, { ...runtime, worker, retriever, logger, telemetry, readiness });
+  const service = await startKnowledgeService(config, {
+    ...runtime,
+    worker,
+    retriever,
+    logger,
+    telemetry,
+    readiness,
+    captionWorker,
+    ...(captionQueue ? { captionQueue } : {}),
+  });
   logger.info(
     { operation: 'knowledge.startup', reason: 'ready' },
     `listening on :${config.port} (queue knowledge-index, extraction model ${config.extractionModel})`,
@@ -105,6 +179,7 @@ async function main(): Promise<void> {
     logger.info({ operation: 'knowledge.shutdown' }, `received ${signal}, shutting down`);
     // 先停业务面（HTTP、消费者、队列、Redis），再停 PG，最后 flush/关闭遥测。
     await service.close();
+    await captionQueue?.close().catch(() => undefined);
     await pool.end().catch(() => undefined);
     try {
       await observabilityRuntime.forceFlush(obs.config.shutdownTimeoutMs);

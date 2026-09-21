@@ -186,6 +186,23 @@ export class S3ArtifactStore {
     return object.Body.transformToByteArray();
   }
 
+  /**
+   * 仅下载对象头部若干字节。S3 支持 Range GET，签名上传端下行带宽开销可忽略。
+   * 用于在 confirm 阶段按 MIME 校验图片魔数，避免把整张图拉回来。
+   */
+  async getObjectHead(objectKey: string, length: number): Promise<Uint8Array> {
+    if (!Number.isInteger(length) || length < 1) throw new Error('Invalid head length');
+    const object = await this.internalClient.send(
+      new GetObjectCommand({
+        Bucket: this.config.bucket,
+        Key: objectKey,
+        Range: `bytes=0-${length - 1}`,
+      }),
+    );
+    if (!object.Body) throw new Error('Object body is empty');
+    return object.Body.transformToByteArray();
+  }
+
   async createDownloadUrl(objectKey: string, expiresInSeconds = 300) {
     return getSignedUrl(
       this.signingClient,
@@ -213,5 +230,47 @@ export class ArtifactVerificationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ArtifactVerificationError';
+  }
+}
+
+/**
+ * 图片魔数表。键为归一化后的 MIME（小写），值为前 N 字节的判定函数。
+ * 任何新增到 knowledge-routes.ts 的 assetMime 类型必须在这里有对应项，否则 confirm 阶段会拒绝。
+ */
+const MIN_IMAGE_HEAD_BYTES = 12;
+
+const IMAGE_MAGIC: Record<string, (bytes: Uint8Array) => boolean> = {
+  'image/png': (b) =>
+    b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+    b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a,
+  'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/jpg': (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/gif': (b) =>
+    b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 &&
+    (b[4] === 0x39 || b[4] === 0x37) && b[5] === 0x61,
+  'image/webp': (b) =>
+    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50,
+};
+
+/**
+ * 按声明的 MIME 校验字节前缀。专门用来挡住 git-lfs pointer 等
+ * 「有合法 MIME 头但其实不是图片」的占位文件，避免污染 caption 队列。
+ * 失败时抛 ArtifactVerificationError，沿用既有 400 处理链。
+ */
+export function assertImageMagic(bytes: Uint8Array, declaredMime: string): void {
+  if (bytes.byteLength < MIN_IMAGE_HEAD_BYTES) {
+    throw new ArtifactVerificationError(
+      `Image payload too small to validate (${bytes.byteLength} bytes, need at least ${MIN_IMAGE_HEAD_BYTES})`,
+    );
+  }
+  const check = IMAGE_MAGIC[declaredMime.toLowerCase()];
+  if (!check) {
+    throw new ArtifactVerificationError(`Unsupported image MIME: ${declaredMime}`);
+  }
+  if (!check(bytes)) {
+    throw new ArtifactVerificationError(
+      `Uploaded bytes do not match declared MIME ${declaredMime}`,
+    );
   }
 }

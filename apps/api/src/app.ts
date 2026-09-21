@@ -15,6 +15,7 @@ import { registerAuthRoutes } from './auth-routes.js';
 import type { ApiConfig } from './config.js';
 import { registerOAuthRoutes } from './oauth-routes.js';
 import { RunOutboxDispatcher } from './outbox.js';
+import { resolveRateLimit } from './rate-limit.js';
 import { registerRoutes } from './routes.js';
 import { registerKnowledgeRoutes } from './knowledge-routes.js';
 import { registerRagRoutes } from './rag-routes.js';
@@ -28,6 +29,7 @@ interface BuildAppOptions {
   publisher?: Redis;
   queue?: Queue;
   knowledgeQueue?: Queue;
+  captionQueue?: Queue;
   memoryIndexQueue?: Queue;
   knowledgeRepository: import('./types.js').KnowledgeRepositoryApi;
   artifacts?: S3ArtifactStore;
@@ -71,6 +73,10 @@ export async function buildApp(options: BuildAppOptions) {
     new Queue('knowledge-index', { connection: knowledgeQueueConnection! });
   const memoryIndexQueueConnection = options.memoryIndexQueue ? null : new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
   const memoryIndexQueue = options.memoryIndexQueue ?? new Queue('agent-memory-index', { connection: memoryIndexQueueConnection! });
+  const captionQueueConnection = options.captionQueue ? null : new Redis(options.config.REDIS_URL, { maxRetriesPerRequest: null });
+  const captionQueue = options.config.CAPTION_ENABLED
+    ? (options.captionQueue ?? new Queue('knowledge-caption', { connection: captionQueueConnection! }))
+    : undefined;
   const artifacts =
     options.artifacts ??
     new S3ArtifactStore({
@@ -159,20 +165,21 @@ export async function buildApp(options: BuildAppOptions) {
       cookie: request.headers.cookie,
     });
     await options.repository.ensureIdentity(request.auth);
-    const rateKey = `rate:api:${request.auth.tenantId}:${request.auth.userId}`;
+    // 知识库上传预签名 / 确认走独立限流桶，避免整目录导入挤占交互式配额。
+    const scope = resolveRateLimit(pathname, request.auth, options.config);
     const [count, ttl] = (await publisher.eval(
       `local current = redis.call('INCR', KEYS[1])
        if current == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
        return {current, redis.call('PTTL', KEYS[1])}`,
       1,
-      rateKey,
+      scope.key,
       options.config.RATE_LIMIT_WINDOW_MS,
     )) as [number, number];
     reply.header(
       'x-ratelimit-remaining',
-      String(Math.max(0, options.config.RATE_LIMIT_REQUESTS - count)),
+      String(Math.max(0, scope.limit - count)),
     );
-    if (count > options.config.RATE_LIMIT_REQUESTS) {
+    if (count > scope.limit) {
       reply.header('retry-after', String(Math.max(1, Math.ceil(ttl / 1_000))));
       return reply.code(429).send({ error: 'rate_limit_exceeded' });
     }
@@ -209,6 +216,7 @@ export async function buildApp(options: BuildAppOptions) {
     outbox,
     streamSubscriptions,
     knowledgeQueue,
+    ...(captionQueue ? { captionQueue } : {}),
     memoryIndexQueue,
     observability,
   });
@@ -216,6 +224,7 @@ export async function buildApp(options: BuildAppOptions) {
     config: options.config,
     repository: options.knowledgeRepository,
     knowledgeQueue,
+    ...(captionQueue ? { captionQueue } : {}),
     artifacts,
   });
   await registerRagRoutes(app, {
@@ -243,8 +252,10 @@ export async function buildApp(options: BuildAppOptions) {
     await queue.close();
     await knowledgeQueue.close();
     await memoryIndexQueue.close();
+    if (captionQueue) await captionQueue.close();
     await queueConnection?.quit();
     await knowledgeQueueConnection?.quit();
+    await captionQueueConnection?.quit();
     await memoryIndexQueueConnection?.quit();
     await publisher.quit();
     artifacts.destroy();

@@ -25,7 +25,10 @@ export interface ProductionRetrieverDeps {
   pool: Pick<Pool, 'query'>;
   embedder: Embedder;
   vectorStore: Pick<QdrantChunkStore, 'search' | 'ensureCollection'>;
-  repository?: { appendRetrievalLog?(input: unknown): Promise<void> };
+  repository?: {
+    appendRetrievalLog?(input: unknown): Promise<void>;
+    listAssetsByRefs?(auth: { tenantId: string; userId: string; roles: string[] }, kbId: string, refs: Array<{ documentId: string; relPath: string }>): Promise<Map<string, unknown>>;
+  };
   logger?: { error?(error: unknown): void };
   tracer?: Tracer;
   limits?: Partial<GraphLimits> & { maxCandidates?: number; fanoutPerHop?: number; passageChars?: number };
@@ -191,9 +194,9 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
         'knowledge.chunks.fetch',
         () =>
           deps.pool.query<{
-            id: string; document_id: string; ordinal: number; heading: string | null; text: string; document_name: string;
+            id: string; document_id: string; ordinal: number; heading: string | null; text: string; metadata: any; document_name: string; document_directory: string;
           }>(
-            `SELECT c.id, c.document_id, c.ordinal, c.heading, c.text, d.name AS document_name
+            `SELECT c.id, c.document_id, c.ordinal, c.heading, c.text, c.metadata, d.name AS document_name, d.directory AS document_directory
              FROM knowledge_chunks c
              JOIN knowledge_documents d ON d.id = c.document_id
              WHERE c.tenant_id = $1 AND c.id = ANY($2::uuid[]) AND d.deleted_at IS NULL`,
@@ -204,8 +207,40 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
       const chunksById = new Map(chunkRows.rows.map((row) => [row.id, row]));
       const validCandidates = candidates.filter((candidate) => chunksById.has(candidate.chunkId));
 
+      // 收集每个 chunk 命中的图片引用，拼接为 asset 的 kb 级 rel_path，一次批量查出对应 asset。
+      const refLookup = new Map<string, { documentId: string; relPath: string; alt: string }>();
+      for (const row of chunkRows.rows) {
+        const imageRefs = Array.isArray(row.metadata?.imageRefs) ? row.metadata.imageRefs : [];
+        for (const ref of imageRefs as Array<{ path: string; alt?: string }>) {
+          if (!ref?.path) continue;
+          const relPath = row.document_directory ? `${row.document_directory}/${ref.path}` : ref.path;
+          const key = `${row.document_id}::${relPath}`;
+          if (!refLookup.has(key)) refLookup.set(key, { documentId: row.document_id, relPath, alt: ref.alt ?? '' });
+        }
+      }
+      const assetRows = await (deps.repository?.listAssetsByRefs && refLookup.size
+        ? deps.repository.listAssetsByRefs(
+            { tenantId: params.tenantId, userId: params.userId ?? '00000000-0000-0000-0000-000000000000', roles: [] } as any,
+            kbs.map((kb) => kb.id)[0]!,
+            Array.from(refLookup.values()),
+          )
+        : Promise.resolve(new Map<string, any>()));
+      const citationImages = new Map<string, Array<{ assetId: string; name: string; mime: string; alt: string; relPath: string }>>();
+      for (const [key, ref] of refLookup) {
+        const asset = assetRows.get(key);
+        if (!asset) continue;
+        const list = citationImages.get(ref.documentId) ?? [];
+        list.push({ assetId: String(asset.id), name: String(asset.name), mime: String(asset.mime), alt: ref.alt, relPath: ref.relPath });
+        citationImages.set(ref.documentId, list);
+      }
+
       const citations = validCandidates.map((candidate) => {
         const row = chunksById.get(candidate.chunkId)!;
+        const images = citationImages.get(row.document_id)?.filter((image) => {
+          // 只保留确实由这个 chunk 引用的图（再次过滤避免重提）。
+          const imageRefs = Array.isArray(row.metadata?.imageRefs) ? row.metadata.imageRefs : [];
+          return imageRefs.some((ref: any) => ref?.path && image.relPath === (row.document_directory ? `${row.document_directory}/${ref.path}` : ref.path));
+        }) ?? [];
         return {
           chunkId: row.id,
           documentId: row.document_id,
@@ -215,6 +250,7 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
           score: Math.max(-1, Math.min(1, candidate.score)),
           via: candidate.via === 'vector+graph' ? 'both' : candidate.via,
           passage: row.text.slice(0, limits.passageChars),
+          images,
         };
       });
 

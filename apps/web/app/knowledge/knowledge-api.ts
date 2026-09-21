@@ -30,6 +30,7 @@ export type KnowledgeDocument = {
   chunkCount: number;
   errorMessage: string | null;
   indexedAt: string | null;
+  directory: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -41,8 +42,17 @@ export type KnowledgeChunk = {
   text: string;
   tokenCount: number;
   heading: string | null;
+  metadata?: { headingPath?: string[]; imageRefs?: Array<{ path: string; alt?: string }> };
   createdAt: string;
   documentName: string;
+};
+
+export type KnowledgeCitationImage = {
+  assetId: string;
+  name: string;
+  mime: string;
+  alt: string;
+  relPath: string;
 };
 
 export type KnowledgeCitation = {
@@ -54,6 +64,19 @@ export type KnowledgeCitation = {
   score: number;
   via: string;
   passage: string;
+  images?: KnowledgeCitationImage[];
+};
+
+export type KnowledgeAsset = {
+  id: string;
+  kbId: string;
+  documentId: string | null;
+  relPath: string;
+  name: string;
+  mime: string;
+  sizeBytes: number;
+  caption: string | null;
+  createdAt: string;
 };
 
 export type KnowledgeSearchResult = {
@@ -63,8 +86,23 @@ export type KnowledgeSearchResult = {
   stats: { vectorHits?: number; graphHops?: number; durationMs?: number; [key: string]: unknown };
 };
 
+// 目录导入时前端会在短时间内发出大量请求，被限流的请求按 Retry-After 退避后自动重放。
+const RATE_LIMIT_RETRY_ATTEMPTS = 4;
+const RATE_LIMIT_MAX_WAIT_MS = 15_000;
+
+function rateLimitWaitMs(response: Response, attempt: number): number {
+  const seconds = Number(response.headers.get('retry-after'));
+  const suggested = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 0;
+  return Math.min(Math.max(suggested, 2 ** attempt * 500), RATE_LIMIT_MAX_WAIT_MS);
+}
+
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
-  const response = await apiFetch(input, init);
+  let response = await apiFetch(input, init);
+  // body 在本模块内始终是字符串，可直接复用同一 init 重放。
+  for (let attempt = 1; response.status === 429 && attempt < RATE_LIMIT_RETRY_ATTEMPTS; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, rateLimitWaitMs(response, attempt - 1)));
+    response = await apiFetch(input, init);
+  }
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
     throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
@@ -103,8 +141,23 @@ function normalizeDocument(row: Record<string, unknown>): KnowledgeDocument {
     chunkCount: Number(row.chunk_count ?? 0),
     errorMessage: (row.error_message as string | null) ?? null,
     indexedAt: (row.indexed_at as string | null) ?? null,
+    directory: String(row.directory ?? ''),
     createdAt: String(row.created_at ?? ''),
     updatedAt: String(row.updated_at ?? row.created_at ?? ''),
+  };
+}
+
+function normalizeAsset(row: Record<string, unknown>): KnowledgeAsset {
+  return {
+    id: String(row.id),
+    kbId: String(row.kb_id ?? ''),
+    documentId: (row.document_id as string | null) ?? null,
+    relPath: String(row.rel_path ?? ''),
+    name: String(row.name ?? ''),
+    mime: String(row.mime ?? ''),
+    sizeBytes: Number(row.size_bytes ?? 0),
+    caption: (row.caption as string | null) ?? null,
+    createdAt: String(row.created_at ?? ''),
   };
 }
 
@@ -116,6 +169,7 @@ function normalizeChunk(row: Record<string, unknown>): KnowledgeChunk {
     text: String(row.text ?? ''),
     tokenCount: Number(row.token_count ?? 0),
     heading: (row.heading as string | null) ?? null,
+    metadata: (row.metadata as KnowledgeChunk['metadata']) ?? undefined,
     createdAt: String(row.created_at ?? ''),
     documentName: String(row.document_name ?? ''),
   };
@@ -194,7 +248,16 @@ export async function listDocumentChunks(
 }
 
 /** 预签名上传 → PUT 到对象存储 → confirm 触发索引，与后端上传契约保持单一实现。 */
-export async function uploadKnowledgeDocument(kbId: string, file: File): Promise<KnowledgeDocument> {
+export async function uploadKnowledgeDocument(kbId: string, file: File, options: { directory?: string } = {}): Promise<KnowledgeDocument> {
+  return uploadKnowledgeEntity(kbId, file, { directory: options.directory, kind: 'document' }) as Promise<KnowledgeDocument>;
+}
+
+/** 通用上传工具：document / asset 共用同一套预签名 + confirm 流程。 */
+async function uploadKnowledgeEntity(
+  kbId: string,
+  file: File,
+  options: { kind: 'document' | 'asset'; directory?: string; relPath?: string },
+): Promise<KnowledgeDocument | KnowledgeAsset> {
   const content = new Uint8Array(await file.arrayBuffer());
   const digest = await crypto.subtle.digest('SHA-256', content);
   const sha256 = [...new Uint8Array(digest)]
@@ -203,12 +266,22 @@ export async function uploadKnowledgeDocument(kbId: string, file: File): Promise
   const mime = detectDocumentMime(file.name, file.type);
 
   const presign = await requestJson<{
-    document: Record<string, unknown>;
+    document?: Record<string, unknown>;
+    asset?: Record<string, unknown>;
     upload?: { uploadUrl?: string; url?: string; headers?: Record<string, string> };
   }>(`/api/knowledge-bases/${kbId}/documents/uploads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: file.name, mime, sizeBytes: file.size, sha256 }),
+    body: JSON.stringify({
+      name: file.name,
+      mime,
+      sizeBytes: file.size,
+      sha256,
+      kind: options.kind,
+      ...(options.kind === 'document'
+        ? options.directory ? { directory: options.directory } : {}
+        : { relPath: options.relPath ?? file.name }),
+    }),
   });
   const uploadUrl = presign.upload?.uploadUrl ?? presign.upload?.url;
   if (!uploadUrl) throw new Error('上传地址缺失');
@@ -226,8 +299,19 @@ export async function uploadKnowledgeDocument(kbId: string, file: File): Promise
   }
   if (!putResponse.ok) throw new Error(`对象存储上传失败 HTTP ${putResponse.status}`);
 
+  if (options.kind === 'asset') {
+    const confirmed = await requestJson<Record<string, unknown>>(
+      `/api/knowledge-bases/${kbId}/assets/${String(presign.asset?.id)}/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sizeBytes: file.size, sha256 }),
+      },
+    );
+    return normalizeAsset(confirmed);
+  }
   const confirmed = await requestJson<Record<string, unknown>>(
-    `/api/knowledge-bases/${kbId}/documents/${String(presign.document.id)}/confirm`,
+    `/api/knowledge-bases/${kbId}/documents/${String(presign.document?.id)}/confirm`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -235,6 +319,35 @@ export async function uploadKnowledgeDocument(kbId: string, file: File): Promise
     },
   );
   return normalizeDocument(confirmed);
+}
+
+export async function uploadKnowledgeAsset(
+  kbId: string,
+  file: File,
+  options: { relPath: string } = { relPath: file.name },
+): Promise<KnowledgeAsset> {
+  return uploadKnowledgeEntity(kbId, file, { kind: 'asset', relPath: options.relPath }) as Promise<KnowledgeAsset>;
+}
+
+export async function listKnowledgeAssets(
+  kbId: string,
+  options: { documentId?: string } = {},
+): Promise<KnowledgeAsset[]> {
+  const query = new URLSearchParams();
+  if (options.documentId) query.set('documentId', options.documentId);
+  const payload = await requestJson<{ data: Array<Record<string, unknown>> }>(
+    `/api/knowledge-bases/${kbId}/assets?${query.toString()}`,
+  );
+  return payload.data.map(normalizeAsset);
+}
+
+export async function deleteKnowledgeAsset(kbId: string, assetId: string): Promise<void> {
+  await requestJson<void>(`/api/knowledge-bases/${kbId}/assets/${assetId}`, { method: 'DELETE' });
+}
+
+/** 走 API 代理读取图片二进制，避免预签名 URL 过期 + CORS 问题。 */
+export function getKnowledgeAssetContentUrl(kbId: string, assetId: string): string {
+  return `/api/knowledge-bases/${kbId}/assets/${assetId}/content`;
 }
 
 export async function retrieveKnowledge(

@@ -2,6 +2,8 @@
 
 import { useEffect, type ReactNode } from 'react';
 
+import { getKnowledgeAssetContentUrl, type KnowledgeCitationImage } from './knowledge-api';
+
 type IconProps = { className?: string };
 
 function svg(path: ReactNode, viewBox = '0 0 24 24') {
@@ -32,6 +34,8 @@ export const ChevronDownIcon = svg(<><path d="m6 9 6 6 6-6" /></>);
 export const SlidersIcon = svg(<><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3" /><path d="M1 14h6M9 8h6M17 16h6" /></>);
 export const QuoteIcon = svg(<><path d="M10 7H6a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2" /><path d="M20 7h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2" /></>);
 export const ArrowLeftIcon = svg(<><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></>);
+export const FolderIcon = svg(<><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></>);
+export const ImageIcon = svg(<><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-5-5L5 21" /></>);
 
 export function Spinner({ className }: IconProps) {
   return <span className={`kc-spinner${className ? ` ${className}` : ''}`} aria-label="加载中" />;
@@ -182,5 +186,31 @@ export function RetrievalParamsPanel({
         <input className="kc-text-input" value="0.50" disabled readOnly aria-label="Dense Weight" />
       </div>
     </section>
+  );
+}
+
+/** 命中切片关联的图片缩略图列表。点击放大查看大图。 */
+export function CitationImages({ kbId, images }: { kbId: string; images: KnowledgeCitationImage[] }) {
+  if (!images?.length) return null;
+  return (
+    <div className="kc-citation-images" aria-label="切片关联图片">
+      <span className="kc-citation-images-label">
+        <ImageIcon /> 关联图片 {images.length}
+      </span>
+      <div className="kc-citation-images-grid">
+        {images.map((image) => (
+          <a
+            key={image.assetId}
+            className="kc-citation-image"
+            href={getKnowledgeAssetContentUrl(kbId, image.assetId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={image.alt || image.name}
+          >
+            <img src={getKnowledgeAssetContentUrl(kbId, image.assetId)} alt={image.alt || image.name} loading="lazy" />
+          </a>
+        ))}
+      </div>
+    </div>
   );
 }

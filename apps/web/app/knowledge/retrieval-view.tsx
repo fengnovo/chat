@@ -11,6 +11,7 @@ import {
 import { retrievalViaLabel } from './knowledge-helpers';
 import {
   Badge,
+  CitationImages,
   DocIcon,
   EmptyState,
   HistoryIcon,
@@ -141,7 +142,7 @@ export function RetrievalView({ kb }: { kb: KnowledgeBase }) {
                 {typeof stats?.graphHops === 'number' && <> · 图谱跳数 {Number(stats.graphHops)}</>}
               </p>
               {result.citations.map((citation) => (
-                <RetrievalCard key={citation.chunkId} citation={citation} query={searchedQuery} />
+                <RetrievalCard key={citation.chunkId} kbId={kb.id} citation={citation} query={searchedQuery} />
               ))}
             </div>
           )
@@ -157,7 +158,7 @@ export function RetrievalView({ kb }: { kb: KnowledgeBase }) {
   );
 }
 
-function RetrievalCard({ citation, query }: { citation: KnowledgeCitation; query: string }) {
+function RetrievalCard({ kbId, citation, query }: { kbId: string; citation: KnowledgeCitation; query: string }) {
   return (
     <article className="retrieval-card">
       <header className="retrieval-card-head">
@@ -170,6 +171,7 @@ function RetrievalCard({ citation, query }: { citation: KnowledgeCitation; query
       <div className="retrieval-card-body">
         {citation.heading && <p className="chunk-heading">{citation.heading}</p>}
         <p className="chunk-text">{highlight(citation.passage, query)}</p>
+        <CitationImages kbId={kbId} images={citation.images ?? []} />
       </div>
       <footer className="retrieval-card-foot">
         <span className="chunk-id" title={citation.chunkId}>{citation.chunkId}</span>

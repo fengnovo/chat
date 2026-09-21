@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   listDocumentChunks,
+  listKnowledgeAssets,
   listKnowledgeDocuments,
+  type KnowledgeAsset,
   type KnowledgeBase,
   type KnowledgeChunk,
   type KnowledgeDocument,
@@ -12,6 +14,7 @@ import {
 import { formatDateTime } from './knowledge-helpers';
 import {
   ChevronDownIcon,
+  CitationImages,
   EmptyState,
   GridIcon,
   LayersIcon,
@@ -32,10 +35,27 @@ export function ChunksView({
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [chunks, setChunks] = useState<KnowledgeChunk[]>([]);
+  const [assets, setAssets] = useState<KnowledgeAsset[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+
+  useEffect(() => {
+    if (!documentId) { setAssets([]); return; }
+    let cancelled = false;
+    listKnowledgeAssets(kb.id, { documentId })
+      .then((rows) => { if (!cancelled) setAssets(rows); })
+      .catch(() => { if (!cancelled) setAssets([]); });
+    return () => { cancelled = true; };
+  }, [kb.id, documentId]);
+
+  /** 同一文档内 basename 通常唯一；用于把 chunk 内 imageRefs.path 解析到 asset id 渲染缩略图。 */
+  const assetsByBasename = useMemo(() => {
+    const map = new Map<string, KnowledgeAsset>();
+    for (const asset of assets) map.set(asset.name, asset);
+    return map;
+  }, [assets]);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,23 +172,33 @@ export function ChunksView({
         <EmptyState icon={<LayersIcon />} title={debouncedSearch ? '没有匹配的切片' : '该文档暂无切片'} />
       ) : (
         <div className={viewMode === 'grid' ? 'chunk-grid' : 'chunk-list'}>
-          {chunks.map((chunk) => (
-            <article key={chunk.id} className="chunk-card">
-              <header className="chunk-card-head">
-                <span className="chunk-order">#{chunk.ordinal + 1}</span>
-                <span className="chunk-id" title={chunk.id}>{chunk.id}</span>
-              </header>
-              <div className="chunk-body">
-                {chunk.heading && <p className="chunk-heading">{chunk.heading}</p>}
-                <p className="chunk-text">{chunk.text}</p>
-              </div>
-              <footer className="chunk-foot">
-                <span title={selectedDocumentName}>{chunk.documentName}</span>
-                <span>字符 {chunk.text.length}</span>
-                <span>更新于 {formatDateTime(chunk.createdAt)}</span>
-              </footer>
-            </article>
-          ))}
+          {chunks.map((chunk) => {
+            const chunkImages = (chunk.metadata?.imageRefs ?? [])
+              .map((ref) => {
+                const basename = (ref.path ?? '').split('/').pop() ?? '';
+                const asset = assetsByBasename.get(basename);
+                return asset ? { assetId: asset.id, name: asset.name, mime: asset.mime, alt: ref.alt ?? '', relPath: asset.relPath } : null;
+              })
+              .filter((image): image is NonNullable<typeof image> => image !== null);
+            return (
+              <article key={chunk.id} className="chunk-card">
+                <header className="chunk-card-head">
+                  <span className="chunk-order">#{chunk.ordinal + 1}</span>
+                  <span className="chunk-id" title={chunk.id}>{chunk.id}</span>
+                </header>
+                <div className="chunk-body">
+                  {chunk.heading && <p className="chunk-heading">{chunk.heading}</p>}
+                  <p className="chunk-text">{chunk.text}</p>
+                  <CitationImages kbId={kb.id} images={chunkImages} />
+                </div>
+                <footer className="chunk-foot">
+                  <span title={selectedDocumentName}>{chunk.documentName}</span>
+                  <span>字符 {chunk.text.length}</span>
+                  <span>更新于 {formatDateTime(chunk.createdAt)}</span>
+                </footer>
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
