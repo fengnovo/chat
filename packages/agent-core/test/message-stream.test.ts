@@ -33,11 +33,43 @@ test('structured GraphRAG output becomes a bounded retrieval event', () => {
 test('retrieval structured content is bounded', () => {
   const event = extractRetrievalEvent(
     '11111111-1111-4111-8111-111111111111', 'call-1', 'graphrag_search',
-    { structuredContent: { retrievalId: '22222222-2222-4222-8222-222222222222', knowledgeBaseIds: [], query: 'q', citations: Array.from({ length: 30 }, () => ({ chunkId: '33333333-3333-4333-8333-333333333333', documentId: '44444444-4444-4444-8444-444444444444', documentName: 'd', ordinal: 0, score: 0, via: 'vector' })), relations: [], stats: { vectorHits: 30, graphHops: 0, searchedKbs: 0, durationMs: 1, truncated: false } } },
+    { structuredContent: { retrievalId: '22222222-2222-4222-8222-222222222222', knowledgeBaseIds: [], query: 'q', citations: Array.from({ length: 30 }, () => ({ chunkId: '33333333-3333-4333-8333-333333333333', kbId: '55555555-5555-4555-8555-555555555555', documentId: '44444444-4444-4444-8444-444444444444', documentName: 'd', ordinal: 0, score: 0, via: 'vector' })), relations: [], stats: { vectorHits: 30, graphHops: 0, searchedKbs: 0, durationMs: 1, truncated: false } } },
   );
   assert.ok(event);
   assert.equal(event?.type, 'retrieval.completed');
   if (event?.type === 'retrieval.completed') assert.ok(event.citations.length <= 20);
+});
+
+test('retrieval structured content keeps image attachments on each citation', () => {
+  const event = extractRetrievalEvent(
+    '11111111-1111-4111-8111-111111111111',
+    'call-1',
+    'graphrag_search',
+    { structuredContent: {
+      retrievalId: '22222222-2222-4222-8222-222222222222',
+      knowledgeBaseIds: [],
+      query: 'q',
+      citations: [{
+        chunkId: '33333333-3333-4333-8333-333333333333',
+        kbId: '55555555-5555-4555-8555-555555555555',
+        documentId: '44444444-4444-4444-8444-444444444444',
+        documentName: 'd',
+        ordinal: 0,
+        score: 0,
+        via: 'vector',
+        images: [
+          { assetId: '66666666-6666-4666-8666-666666666666', name: '000.jpg', mime: 'image/jpeg', alt: '成品图', relPath: '菜谱/000.jpg' },
+        ],
+      }],
+      relations: [],
+      stats: { vectorHits: 1, graphHops: 0, searchedKbs: 0, durationMs: 1, truncated: false },
+    } },
+  );
+  assert.ok(event && event.type === 'retrieval.completed');
+  if (event && event.type === 'retrieval.completed') {
+    assert.equal(event.citations[0]?.images?.length, 1);
+    assert.equal(event.citations[0]?.images?.[0]?.relPath, '菜谱/000.jpg');
+  }
 });
 
 test('only assistant messages are exposed as assistant text', () => {

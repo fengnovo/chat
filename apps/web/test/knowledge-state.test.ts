@@ -36,7 +36,7 @@ test('knowledge menu links to the knowledge management page', () => {
 test('history citation part is available to message rendering', () => {
   const [message] = messagesFromHistory([{
     id: 'message-1', runId: 'run-1', role: 'assistant', text: 'answer', createdAt: new Date().toISOString(),
-    citations: [{ chunkId: 'c', documentId: 'd', documentName: 'doc.md', ordinal: 1, score: 0.8, via: 'graph' }],
+    citations: [{ chunkId: 'c', kbId: 'kb-1', documentId: 'd', documentName: 'doc.md', ordinal: 1, score: 0.8, via: 'graph' }],
   }]);
-  assert.deepEqual(message.parts.at(-1), { type: 'data-citations', data: { citations: [{ chunkId: 'c', documentId: 'd', documentName: 'doc.md', ordinal: 1, score: 0.8, via: 'graph' }] } });
+  assert.deepEqual(message.parts.at(-1), { type: 'data-citations', data: { citations: [{ chunkId: 'c', kbId: 'kb-1', documentId: 'd', documentName: 'doc.md', ordinal: 1, score: 0.8, via: 'graph' }] } });
 });

@@ -33,7 +33,27 @@ function chunksFrom(runId: string, events: PersistedAgentEvent[]): UiChunk[] {
     let agentData: PersistedAgentEvent = event;
     if (event.type === 'retrieval.completed') {
       // Keep the process trace, while also persisting an auditable citation part.
-      chunks.push({ type: 'data-citations', data: { ...event, citations: event.citations.map(({ chunkId, documentId, documentName, ordinal, heading, score, via }) => ({ chunkId, documentId, documentName, ordinal, ...(heading ? { heading } : {}), score, via })) }, transient: false });
+      chunks.push({
+        type: 'data-citations',
+        data: {
+          ...event,
+          citations: event.citations.map((citation) => {
+            const { chunkId, kbId, documentId, documentName, ordinal, heading, score, via, images } = citation;
+            return {
+              chunkId,
+              ...(kbId ? { kbId } : {}),
+              documentId,
+              documentName,
+              ordinal,
+              ...(heading ? { heading } : {}),
+              score,
+              via,
+              ...(Array.isArray(images) && images.length ? { images } : {}),
+            };
+          }),
+        },
+        transient: false,
+      });
       const { citations: _citations, ...traceEvent } = event;
       agentData = traceEvent as PersistedAgentEvent;
     }

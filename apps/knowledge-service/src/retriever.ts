@@ -72,6 +72,38 @@ const MAX_CITATIONS = 20;
 const MAX_RELATIONS_OUTPUT = 20;
 const MAX_RELATION_CHUNKS = 10;
 
+const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\(\s*<?([^)>\s]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+
+/**
+ * 把 chunk 里记录的图片引用路径拼成 asset 的 kb 级 rel_path。
+ * 正文 chunk 的 path 是相对文档目录的（`000.jpg`），要拼上 directory；
+ * 图片 caption chunk 的 path 已经是 kb 级 rel_path，不能重复拼接。
+ */
+function resolveAssetRelPath(directory: string | null | undefined, path: string): string {
+  if (directory && path !== '' && !path.startsWith(`${directory}/`)) return `${directory}/${path}`;
+  return path;
+}
+
+/**
+ * 剔除 passage 里匹配不到任何资产的本地图片引用（文档引用了图片但图片从未上传）。
+ * 不剔的话模型会把 `![alt](./000.jpg)` 原样照抄进回答，前端渲染出死链并反复 404。
+ * 外链（http/https/data:）原样保留。
+ */
+export function stripDanglingImages(
+  passage: string,
+  images: Array<{ relPath: string }> | undefined,
+): string {
+  if (!passage || !passage.includes('![')) return passage;
+  const matched = new Set(
+    (images ?? []).map((image) => image.relPath.split('/').pop()?.toLowerCase() ?? ''),
+  );
+  return passage.replace(MARKDOWN_IMAGE_RE, (match, _alt: string, src: string) => {
+    if (/^(https?:|data:)/i.test(src)) return match;
+    const base = src.split('/').pop()?.toLowerCase() ?? '';
+    return matched.has(base) ? match : '';
+  });
+}
+
 function relationId(source: string, type: string, target: string): string {
   return createHash('sha256').update(`${source}\0${type}\0${target}`).digest('hex').slice(0, 32);
 }
@@ -194,9 +226,9 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
         'knowledge.chunks.fetch',
         () =>
           deps.pool.query<{
-            id: string; document_id: string; ordinal: number; heading: string | null; text: string; metadata: any; document_name: string; document_directory: string;
+            id: string; kb_id: string; document_id: string; ordinal: number; heading: string | null; text: string; metadata: any; document_name: string; document_directory: string;
           }>(
-            `SELECT c.id, c.document_id, c.ordinal, c.heading, c.text, c.metadata, d.name AS document_name, d.directory AS document_directory
+            `SELECT c.id, c.kb_id, c.document_id, c.ordinal, c.heading, c.text, c.metadata, d.name AS document_name, d.directory AS document_directory
              FROM knowledge_chunks c
              JOIN knowledge_documents d ON d.id = c.document_id
              WHERE c.tenant_id = $1 AND c.id = ANY($2::uuid[]) AND d.deleted_at IS NULL`,
@@ -213,7 +245,7 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
         const imageRefs = Array.isArray(row.metadata?.imageRefs) ? row.metadata.imageRefs : [];
         for (const ref of imageRefs as Array<{ path: string; alt?: string }>) {
           if (!ref?.path) continue;
-          const relPath = row.document_directory ? `${row.document_directory}/${ref.path}` : ref.path;
+          const relPath = resolveAssetRelPath(row.document_directory, ref.path);
           const key = `${row.document_id}::${relPath}`;
           if (!refLookup.has(key)) refLookup.set(key, { documentId: row.document_id, relPath, alt: ref.alt ?? '' });
         }
@@ -239,17 +271,18 @@ export function createRetriever(deps: ProductionRetrieverDeps) {
         const images = citationImages.get(row.document_id)?.filter((image) => {
           // 只保留确实由这个 chunk 引用的图（再次过滤避免重提）。
           const imageRefs = Array.isArray(row.metadata?.imageRefs) ? row.metadata.imageRefs : [];
-          return imageRefs.some((ref: any) => ref?.path && image.relPath === (row.document_directory ? `${row.document_directory}/${ref.path}` : ref.path));
+          return imageRefs.some((ref: any) => ref?.path && image.relPath === resolveAssetRelPath(row.document_directory, ref.path));
         }) ?? [];
         return {
           chunkId: row.id,
+          kbId: row.kb_id,
           documentId: row.document_id,
           documentName: row.document_name,
           ordinal: row.ordinal,
           ...(row.heading ? { heading: row.heading.slice(0, 500) } : {}),
           score: Math.max(-1, Math.min(1, candidate.score)),
           via: candidate.via === 'vector+graph' ? 'both' : candidate.via,
-          passage: row.text.slice(0, limits.passageChars),
+          passage: stripDanglingImages(row.text.slice(0, limits.passageChars), images),
           images,
         };
       });

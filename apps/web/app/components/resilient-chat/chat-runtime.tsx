@@ -1314,7 +1314,15 @@ function ChatRuntime() {
         const payload = (await response.json().catch(() => null)) as
           | { error?: string }
           | null;
-        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+        const code = payload?.error ?? `HTTP ${response.status}`;
+        // 孤儿审批：run 已不在等待状态（如 Worker 重启导致审批悬挂），
+        // 卡片永远无法成功提交，自动移除避免卡死交互。
+        if (code === 'run_not_waiting_for_approval' || code === 'run_not_found') {
+          setPendingInterrupt(null);
+          setNotice('该任务已结束，待审批卡片已自动移除');
+          return;
+        }
+        throw new Error(code);
       }
       setPendingInterrupt(null);
       const sessionApprovalGranted =

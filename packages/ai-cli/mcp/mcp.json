@@ -3,7 +3,7 @@
     "firecrawl": {
       "type": "http",
       "url": "http://localhost:3089/mcp",
-      "defaultToolTimeout": 45000
+      "defaultToolTimeout": 20000
     }
   }
 }

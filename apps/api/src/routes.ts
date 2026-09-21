@@ -851,7 +851,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   const chatRequestSchema = z.object({
     chat_id: z.string().min(1).max(200).optional(),
     project_id: z.uuid().optional(),
-    knowledge_base_ids: knowledgeBaseIdsSchema.default([]),
+    knowledge_base_ids: knowledgeBaseIdsSchema.optional(),
     messages: z.array(z.record(z.string(), z.unknown())),
     attachment_ids: z.array(z.uuid()).max(MAX_CHAT_ATTACHMENTS).default([]),
     continuation: z.boolean().optional(),
@@ -952,10 +952,19 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
         : null;
       let result;
       try {
+        // 未显式传知识库时（前端 race / 列表接口失败），兜底检索用户可见的全部库；
+        // 显式传 [] 表示用户主动清空，保持不检索。
+        let knowledgeBaseIds = input.knowledge_base_ids;
+        if (!knowledgeBaseIds) {
+          const bases = services.knowledgeRepository
+            ? await services.knowledgeRepository.listKnowledgeBases(request.auth)
+            : [];
+          knowledgeBaseIds = bases.map((base) => (base as { id: string }).id);
+        }
         result = await services.repository.createRun(request.auth, {
           sessionId: session.id,
           message: message.trim(),
-          knowledgeBaseIds: input.knowledge_base_ids,
+          knowledgeBaseIds,
           attachments: attachmentRefs,
           continuation,
           ...(enqueue ? { observabilityContext: enqueue.observabilityContext } : {}),

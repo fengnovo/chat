@@ -368,6 +368,7 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
     const answer = await answerWithCitations(services.config.KNOWLEDGE_QA_MODEL, {
       question: body.question,
       citations: (retrieved as { citations: any[] }).citations,
+      kbId,
     });
     return reply.send({ answer, retrieval: retrieved });
   });

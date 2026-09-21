@@ -84,18 +84,28 @@ export class OpenAICompatibleEmbedder implements Embedder {
     }
 
     const vectors = new Array<number[]>(texts.length);
-    for (const raw of data) {
-      const item = raw as Partial<EmbeddingResponseItem>;
-      if (!Number.isInteger(item.index) || item.index! < 0 || item.index! >= texts.length || vectors[item.index!]) {
+    const items = data as Partial<EmbeddingResponseItem>[];
+    // 某些兼容实现（如 dashscope qwen embedding flash）批量返回的 index 恒为 0，
+    // 实际按输入顺序返回向量；此时退化为按顺序对应，其余错序仍视为错误。
+    const first = items[0];
+    const sequentialFallback =
+      texts.length > 1 && first !== undefined && items.every((item) => item.index === first.index);
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (!item) {
+        throw new Error(`Embedding batch ${batchNumber} response was missing an entry`);
+      }
+      const index = sequentialFallback ? i : item.index;
+      if (!Number.isInteger(index) || index! < 0 || index! >= texts.length || vectors[index!]) {
         throw new Error(`Embedding batch ${batchNumber} response contained an invalid index`);
       }
       if (!Array.isArray(item.embedding) || !item.embedding.every((value) => typeof value === 'number' && Number.isFinite(value))) {
-        throw new Error(`Embedding batch ${batchNumber} response at index ${item.index} was not a numeric vector`);
+        throw new Error(`Embedding batch ${batchNumber} response at index ${index} was not a numeric vector`);
       }
       if (item.embedding.length !== this.profile.dimension) {
-        throw new Error(`Embedding batch ${batchNumber} dimension mismatch at index ${item.index}: expected ${this.profile.dimension}, received ${item.embedding.length}`);
+        throw new Error(`Embedding batch ${batchNumber} dimension mismatch at index ${index}: expected ${this.profile.dimension}, received ${item.embedding.length}`);
       }
-      vectors[item.index!] = item.embedding;
+      vectors[index!] = item.embedding;
     }
     return vectors;
   }

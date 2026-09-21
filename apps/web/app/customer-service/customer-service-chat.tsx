@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Icon } from '../components/resilient-chat/icon';
+import { Lightbox, type LightboxImage } from '../components/resilient-chat/lightbox';
 import { MarkdownContent } from '../components/resilient-chat/message';
+import { getKnowledgeAssetContentUrl } from '../knowledge/knowledge-api';
 import { streamRagAnswer, fetchKnowledgeBases } from './rag-api';
 import type { KnowledgeBase, RagCitation, RagMessage, RagStep } from './types';
 
@@ -49,9 +51,18 @@ function ThinkingCard({ steps }: { steps: RagStep[] }) {
   );
 }
 
-function CitationList({ citations }: { citations: RagCitation[] }) {
+function CitationList({
+  citations,
+  kbId,
+  onPreviewImage,
+}: {
+  citations: RagCitation[];
+  kbId: string;
+  onPreviewImage: (url: string, filename?: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
+  const imageCount = citations.reduce((sum, c) => sum + (c.images?.length ?? 0), 0);
   return (
     <div className="cs-citations">
       <button
@@ -59,7 +70,10 @@ function CitationList({ citations }: { citations: RagCitation[] }) {
         className={`cs-citations-header ${expanded ? 'is-open' : ''}`}
         onClick={() => setExpanded((v) => !v)}
       >
-        <span>参考来源（{citations.length}）</span>
+        <span className="cs-citations-title">
+          参考来源（{citations.length}）
+          {imageCount > 0 ? <span className="cs-citations-images-badge">含 {imageCount} 张图</span> : null}
+        </span>
         <span className="cs-citations-chevron">
           <Icon name="chevron" size={14} />
         </span>
@@ -68,10 +82,32 @@ function CitationList({ citations }: { citations: RagCitation[] }) {
         <div className="cs-citation-list">
           {citations.map((c, i) => (
             <div key={c.chunkId} className="cs-citation-item">
-              <span className="cs-citation-index">[{i + 1}]</span>
-              <span className="cs-citation-doc">{c.documentName}</span>
-              {c.heading ? <span className="cs-citation-heading">/ {c.heading}</span> : null}
-              <span className={`cs-citation-via cs-citation-via-${c.via}`}>{c.via}</span>
+              <span className="cs-citation-pill">
+                <span className="cs-citation-index">[{i + 1}]</span>
+                <span className="cs-citation-doc">{c.documentName}</span>
+                {c.heading ? <span className="cs-citation-heading">/ {c.heading}</span> : null}
+                <span className={`cs-citation-via cs-citation-via-${c.via}`}>{c.via}</span>
+              </span>
+              {c.images && c.images.length > 0 ? (
+                <div className="cs-citation-images">
+                  {c.images.map((image) => {
+                    const url = getKnowledgeAssetContentUrl(kbId, image.assetId);
+                    const label = image.alt || image.name;
+                    return (
+                      <button
+                        type="button"
+                        key={image.assetId}
+                        className="cs-citation-image"
+                        onClick={() => onPreviewImage(url, label)}
+                        aria-label={`查看图片 ${label}`}
+                        title={label}
+                      >
+                        <img src={url} alt={label} loading="lazy" />
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
@@ -80,7 +116,15 @@ function CitationList({ citations }: { citations: RagCitation[] }) {
   );
 }
 
-function MessageBubble({ message }: { message: RagMessage }) {
+function MessageBubble({
+  message,
+  kbId,
+  onPreviewImage,
+}: {
+  message: RagMessage;
+  kbId: string;
+  onPreviewImage: (url: string, filename?: string) => void;
+}) {
   const isUser = message.role === 'user';
   return (
     <div className={`cs-message ${isUser ? 'cs-message-user' : 'cs-message-assistant'}`}>
@@ -95,13 +139,20 @@ function MessageBubble({ message }: { message: RagMessage }) {
         ) : (
           <div className="cs-message-text cs-message-markdown markdown-content">
             {message.content ? (
-              <MarkdownContent content={message.content} onPreviewImage={() => {}} highlight />
+              <MarkdownContent
+                content={message.content}
+                citations={message.citations?.map((c) => ({ kbId, images: c.images }))}
+                onPreviewImage={onPreviewImage}
+                highlight
+              />
             ) : null}
             {message.isStreaming ? <span className="cs-cursor" /> : null}
           </div>
         )}
         {message.error ? <div className="cs-message-error">{message.error}</div> : null}
-        {message.citations ? <CitationList citations={message.citations} /> : null}
+        {message.citations ? (
+          <CitationList citations={message.citations} kbId={kbId} onPreviewImage={onPreviewImage} />
+        ) : null}
       </div>
     </div>
   );
@@ -121,6 +172,7 @@ export default function CustomerServiceChat({ className = 'cs-page', onClose }: 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [kbOpen, setKbOpen] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<RagMessage[]>(messages);
@@ -154,6 +206,11 @@ export default function CustomerServiceChat({ className = 'cs-page', onClose }: 
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, [kbOpen]);
+
+  // 正文 markdown 图片与引用来源缩略图共用同一个大图浮层。
+  const handlePreviewImage = useCallback((url: string, filename?: string) => {
+    setLightboxImage({ url, filename });
+  }, []);
 
   const buildHistory = useCallback((question: string) => {
     return [
@@ -330,7 +387,12 @@ export default function CustomerServiceChat({ className = 'cs-page', onClose }: 
 
     <main className="cs-chat">
         {messages.map((m) => (
-          <MessageBubble key={m.id} message={m} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            kbId={selectedKbId}
+            onPreviewImage={handlePreviewImage}
+          />
         ))}
         <div ref={messagesEndRef} />
       </main>
@@ -371,6 +433,8 @@ export default function CustomerServiceChat({ className = 'cs-page', onClose }: 
         </div>
         <div className="cs-footer-note">回答由 AI 生成，仅供参考，请以官方文档为准。</div>
       </footer>
+
+      <Lightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
     </div>
   );
 }

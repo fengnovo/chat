@@ -417,22 +417,83 @@
   transform: rotate(90deg);
 }
 
+.cs-citations-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cs-citations-images-badge {
+  background: var(--violet-soft);
+  color: var(--violet-dark);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* 每条来源一行：来源 pill +（可选）关联图片缩略图 */
 .cs-citation-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 8px;
   margin-top: 8px;
 }
 
 .cs-citation-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cs-citation-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
   background: var(--violet-soft);
   color: var(--violet-dark);
   padding: 3px 8px;
   border-radius: 999px;
   font-size: 11px;
+}
+
+/* 关联图片缩略图：点击弹出大图，与正文 markdown 图片共用同一个 lightbox */
+.cs-citation-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cs-citation-image {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  overflow: hidden;
+  cursor: zoom-in;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+.cs-citation-image:hover {
+  border-color: var(--violet);
+  transform: translateY(-1px);
+}
+
+.cs-citation-image:focus-visible {
+  outline: none;
+  border-color: var(--violet);
+  box-shadow: 0 0 0 3px rgb(109 74 255 / 14%);
+}
+
+.cs-citation-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .cs-citation-index {

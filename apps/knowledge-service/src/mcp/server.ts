@@ -24,9 +24,53 @@ import { verifyRunToken } from '../run-token.js';
 export const MAX_CONTENT_CHARS = 20_000;
 export const MAX_EVIDENCE_CHARS = 2_000;
 
+const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\(\s*<?([^)>\s]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+
+function knowledgeAssetContentUrl(kbId: string | undefined, assetId: string): string {
+  // 相对路径：浏览器渲染时同源 cookie 自动带上鉴权；走 env 域名也无须调整。
+  return `/api/knowledge-bases/${kbId ?? ''}/assets/${assetId}/content`;
+}
+
+/**
+ * 把 passage 里指向知识库资产的 markdown 图片（如 `![成品图](./000.jpg)`）替换成可访问
+ * 的代理 URL。模型原样照抄就能让前端直接渲染图片。
+ */
+function inlineCitationImageUrls(
+  passage: string,
+  images: Array<{ assetId: string; relPath: string; alt: string; name: string }> | undefined,
+  kbId: string | undefined,
+): string {
+  if (!passage || !Array.isArray(images) || !images.length) return passage;
+  const byName = new Map<string, string>();
+  for (const image of images) {
+    const base = image.relPath.split('/').pop();
+    if (base) byName.set(base.toLowerCase(), knowledgeAssetContentUrl(kbId, image.assetId));
+  }
+  if (byName.size === 0) return passage;
+  return passage.replace(MARKDOWN_IMAGE_RE, (match, alt: string, src: string) => {
+    const base = src.split('/').pop()?.toLowerCase() ?? '';
+    const url = byName.get(base);
+    if (!url) return match;
+    return `![${alt || '配图'}](${url})`;
+  });
+}
+
 export function formatBoundedEvidence(result: any): string {
-  const citations = Array.isArray(result?.citations) ? result.citations : [];
-  let out = citations.map((c: any, i: number) => `[S${i + 1}] ${String(c.passage ?? c.text ?? c.documentName ?? '').slice(0, MAX_EVIDENCE_CHARS)}`).join('\n');
+  const citations: any[] = Array.isArray(result?.citations) ? result.citations : [];
+  const blocks = citations.map((c: any, i: number) => {
+    const passage = String(c.passage ?? c.text ?? c.documentName ?? '');
+    const inlined = inlineCitationImageUrls(passage, c.images, c.kbId);
+    const remaining = Array.isArray(c.images)
+      ? c.images.filter((image: any) => !inlined.includes(knowledgeAssetContentUrl(c.kbId, image.assetId)))
+      : [];
+    const imageLine = remaining.length
+      ? `\n配图：${remaining.map((image: any) => `![${image.alt || image.name}](${knowledgeAssetContentUrl(c.kbId, image.assetId)})`).join(' ')}`
+      : '';
+    // 头尾切片前的内容（包括正文+配图清单）整体限制在 MAX_EVIDENCE_CHARS 内。
+    const body = `${inlined}${imageLine}`.slice(0, MAX_EVIDENCE_CHARS);
+    return `[S${i + 1}] ${body}`;
+  });
+  let out = blocks.join('\n');
   if (out.length > MAX_CONTENT_CHARS) out = out.slice(0, MAX_CONTENT_CHARS);
   return out;
 }
@@ -41,7 +85,17 @@ export function boundedRetrievalMetadata(result: any, options: { includePassage?
     delete y.text;
     return y;
   };
-  return { retrievalId: result.retrievalId, citations: (result.citations ?? []).slice(0, 20).map(tidy), relations: (result.relations ?? []).slice(0, 20), stats: result.stats };
+  // 限制图片数量，避免极端文档把 metadata 撑爆。
+  const capImages = (citation: any) => ({
+    ...citation,
+    images: Array.isArray(citation.images) ? citation.images.slice(0, 20) : citation.images,
+  });
+  return {
+    retrievalId: result.retrievalId,
+    citations: (result.citations ?? []).slice(0, 20).map((c: any) => capImages(tidy(c))),
+    relations: (result.relations ?? []).slice(0, 20),
+    stats: result.stats,
+  };
 }
 
 export interface McpTelemetry {

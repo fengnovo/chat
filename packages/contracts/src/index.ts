@@ -42,14 +42,24 @@ export const knowledgeBaseIdsSchema = z
     message: 'knowledge base ids must be unique',
   });
 
+export const citationImageSchema = z.object({
+  assetId: z.uuid(),
+  name: z.string().trim().min(1).max(255),
+  mime: z.string().trim().min(1).max(127),
+  alt: z.string().trim().max(500),
+  relPath: z.string().trim().min(1).max(1024),
+});
+
 export const citationSchema = z.object({
   chunkId: z.uuid(),
+  kbId: z.uuid(),
   documentId: z.uuid(),
   documentName: z.string().trim().min(1).max(255),
   ordinal: z.number().int().nonnegative(),
   heading: z.string().trim().max(500).optional(),
   score: z.number().finite().min(-1).max(1),
   via: z.enum(['vector', 'graph', 'both']),
+  images: z.array(citationImageSchema).max(20).optional(),
 });
 
 export const relationCitationSchema = z.object({

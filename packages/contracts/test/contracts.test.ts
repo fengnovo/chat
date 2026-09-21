@@ -47,6 +47,7 @@ test('validates bounded retrieval completed events', () => {
     citations: [
       {
         chunkId: '00000000-0000-4000-8000-000000000004',
+        kbId: '00000000-0000-4000-8000-000000000003',
         documentId: '00000000-0000-4000-8000-000000000005',
         documentName: 'services.md',
         ordinal: 2,

@@ -397,7 +397,10 @@ export class KnowledgeRepository {
        FROM knowledge_documents d
        WHERE a.tenant_id = $1 AND a.kb_id = $2 AND a.document_id IS NULL AND a.deleted_at IS NULL
          AND d.id = $3 AND d.tenant_id = a.tenant_id AND d.kb_id = a.kb_id AND d.deleted_at IS NULL
-         AND d.directory <> '' AND a.rel_path LIKE d.directory || '/%'
+         AND d.directory <> ''
+         -- 精确匹配「文档目录 + 资源文件名」。前缀 LIKE 会让放在父目录的文档
+         -- （如 dishes/condiment/xxx.md）把子文件夹（草莓酱/油泼辣子…）的资源全部抢走。
+         AND a.rel_path = d.directory || '/' || a.name
        RETURNING a.id`,
       [tenantId, kbId, documentId],
     );

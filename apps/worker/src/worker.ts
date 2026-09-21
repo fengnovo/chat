@@ -61,6 +61,9 @@ if (config.MCP_CONFIG_PATH) {
 const database = createDatabase(config.DATABASE_URL);
 await migrateDatabase(database.pool);
 
+// 启动时刻：用于孤儿 run 清理的 cutoff（早于本进程的活跃态 run 均无法恢复）。
+const startedAt = new Date();
+
 const checkpointer = PostgresSaver.fromConnString(config.DATABASE_URL, {
   schema: 'public',
 });
@@ -71,6 +74,17 @@ const memoryStore = PostgresStore.fromConnString(config.DATABASE_URL, {
 await memoryStore.setup();
 
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+
+// 孤儿 run 清理：上次进程遗留的 running / waiting_approval / waiting_question
+// 无法恢复，标记为 failed，前端轮询到终态后自动解除悬挂的审批卡。
+const orphanRuns = await database.repository.failOrphanRunsBefore(startedAt);
+if (orphanRuns > 0) {
+  logger.warn(
+    { count: orphanRuns, operation: 'worker.startup', reason: 'orphan-runs' },
+    `marked ${orphanRuns} orphan run(s) as failed after restart`,
+  );
+}
+
 const publisher = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const cancellationSubscriber = new Redis(config.REDIS_URL, {
   maxRetriesPerRequest: null,

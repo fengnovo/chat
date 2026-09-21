@@ -6,9 +6,54 @@
 }
 
 .citation-list { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
-.citation-list h4 { margin: 0 0 6px; font-size: 12px; }
-.citation-list ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink-soft); }
-.citation-list li { display: flex; flex-wrap: wrap; gap: 7px; }
+.citation-list-header { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; }
+.citation-list h4 { margin: 0; font-size: 12px; }
+.citation-list-badge {
+  background: var(--violet-soft);
+  border-radius: 999px;
+  color: var(--violet-dark);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+}
+.citation-list ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink-soft); }
+.citation-list li { display: flex; flex-direction: column; gap: 6px; }
+.citation-row { display: flex; flex-wrap: wrap; gap: 7px; }
+
+/* 来源附带的图片缩略图：与正文 markdown 图片共用同一个 lightbox */
+.citation-images { display: flex; flex-wrap: wrap; gap: 6px; }
+.citation-image {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  overflow: hidden;
+  cursor: zoom-in;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+.citation-image:hover { border-color: var(--violet); transform: translateY(-1px); }
+.citation-image:focus-visible {
+  outline: none;
+  border-color: var(--violet);
+  box-shadow: 0 0 0 3px rgb(109 74 255 / 14%);
+}
+.citation-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* 原文引用了但知识库里没有的图片：占位提示，不发请求（避免死链 404 反复重放） */
+.markdown-image-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  vertical-align: middle;
+}
 
 .message-row {
   align-items: flex-start;

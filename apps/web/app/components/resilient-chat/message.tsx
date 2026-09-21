@@ -1,6 +1,6 @@
 import { AIBoundary } from '@cognicatch/react';
 import { isValidElement, useEffect, useRef, useState, type ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 
@@ -8,7 +8,13 @@ import { triggerAttachmentDownload } from './lightbox';
 import { Icon } from './icon';
 import { messageText } from './utils';
 import type { AgentTodo, InsightCard, ResilientMessage } from './types';
-import { CitationList } from './citation-list';
+import { CitationList, getKnowledgeAssetContentUrl } from './citation-list';
+
+/** MarkdownContent 解析相对路径图片所需的最小引用结构（完整 Citation 可结构化赋值）。 */
+type CitationImageSource = {
+  kbId: string;
+  images?: Array<{ assetId: string; relPath: string }>;
+};
 
 // Mermaid 仅在客户端动态加载，避免 SSR 报错与首屏体积膨胀。
 let mermaidInitialized = false;
@@ -250,6 +256,7 @@ function Message({
             ) : (
               <MarkdownContent
                 content={text}
+                citations={citations}
                 onFileLinkClick={onFileLinkClick}
                 onPreviewPage={onPreviewPage}
                 onPreviewDiagram={onPreviewDiagram}
@@ -289,7 +296,7 @@ function Message({
             ) : null,
           )}
 
-        {!isUser && <CitationList citations={citations} />}
+        {!isUser && <CitationList citations={citations} onPreviewImage={onPreviewImage} />}
 
         {!isUser && text && !streaming && (
           <div className="message-actions">
@@ -413,6 +420,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 
 function MarkdownContent({
   content,
+  citations,
   onFileLinkClick,
   onPreviewPage,
   onPreviewDiagram,
@@ -420,6 +428,8 @@ function MarkdownContent({
   highlight,
 }: {
   content: string;
+  /** 本条消息的引用来源：用于把模型照抄的相对路径图片解析回可访问的代理地址。 */
+  citations?: CitationImageSource[];
   /** 点击正文里的文件路径链接时触发，由父组件打开文件面板并定位。 */
   onFileLinkClick?: (path: string) => void;
   /** 点击页面预览按钮时触发，由父组件打开文件面板的构建预览。 */
@@ -433,6 +443,91 @@ function MarkdownContent({
   const previewLinkRegex = /\[?📺?\s*打开页面预览\]?\(preview:\/\/open\)|📺\s*打开页面预览|打开页面预览|preview_page/;
   const hasPreviewLink = onPreviewPage && previewLinkRegex.test(content);
 
+  // 引用图片索引：basename → 代理地址。模型偶尔会把知识库原文里的相对路径
+  // （如 `./000.jpg`）照抄进回答，直接渲染必然 404；这里按文件名映射回资产代理地址。
+  const citationImageMap = new Map<string, string>();
+  for (const citation of citations ?? []) {
+    for (const image of citation.images ?? []) {
+      const base = image.relPath.split('/').pop()?.toLowerCase();
+      if (base && !citationImageMap.has(base)) {
+        citationImageMap.set(base, getKnowledgeAssetContentUrl(citation.kbId, image.assetId));
+      }
+    }
+  }
+  const resolveImageSrc = (src: string): string | null => {
+    if (src.startsWith('/') || /^(https?:|data:|blob:)/i.test(src)) return src;
+    const base = src.split('?')[0]?.split('#')[0].split('/').pop()?.toLowerCase() ?? '';
+    return citationImageMap.get(base) ?? null;
+  };
+
+  const markdownComponents: Components = {
+    a: ({ children, href }) => {
+      const filePath = fileLinkPath(href);
+      if (filePath && onFileLinkClick) {
+        return (
+          <button
+            type="button"
+            className="file-link"
+            onClick={() => onFileLinkClick(filePath)}
+            title={`在文件浏览器中定位：${filePath}`}
+          >
+            {children}
+          </button>
+        );
+      }
+      const safe = safeExternalUrl(href);
+      if (!safe) return <span>{children}</span>;
+      return (
+        <a href={safe} rel="noopener noreferrer" target="_blank">
+          {children}
+        </a>
+      );
+    },
+    code: ({ className, children }) => {
+      if (highlight && className && /language-mermaid/i.test(className)) {
+        const chart = String(children).replace(/\n$/, '');
+        return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+      }
+      return <code className={className}>{children}</code>;
+    },
+    pre: ({ children }) => {
+      const child = Array.isArray(children) ? children[0] : children;
+      const codeProps = isValidElement(child)
+        ? (child.props as { className?: string; children?: unknown })
+        : null;
+      if (
+        highlight &&
+        codeProps?.className &&
+        /language-mermaid/i.test(codeProps.className)
+      ) {
+        const chart = String(codeProps.children ?? '').replace(/\n$/, '');
+        return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+      }
+      return <CodeBlock>{children}</CodeBlock>;
+    },
+    img: ({ src, alt }) => {
+      if (!src) return null;
+      const url = typeof src === 'string' ? resolveImageSrc(src) : URL.createObjectURL(src);
+      // 相对路径且映射不到任何引用图片：说明文档引用的图片从未上传，渲染占位符，
+      // 绝不发 <img> 请求——死链 404 会被 lazy loading 在流式重排时反复重放。
+      if (!url) {
+        return (
+          <span className="markdown-image-missing" title="原文引用的图片未上传到知识库">
+            🖼️ {alt || '图片缺失'}
+          </span>
+        );
+      }
+      return (
+        <img
+          src={url}
+          alt={alt ?? ''}
+          loading="lazy"
+          onClick={() => onPreviewImage(url, alt ?? undefined)}
+        />
+      );
+    },
+  };
+
   if (hasPreviewLink) {
     // 分割内容：预览链接之前、之后
     const parts = content.split(previewLinkRegex);
@@ -442,64 +537,7 @@ function MarkdownContent({
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={highlight ? [rehypeHighlight] : []}
-            components={{
-              a: ({ children, href }) => {
-                const filePath = fileLinkPath(href);
-                if (filePath && onFileLinkClick) {
-                  return (
-                    <button
-                      type="button"
-                      className="file-link"
-                      onClick={() => onFileLinkClick(filePath)}
-                      title={`在文件浏览器中定位：${filePath}`}
-                    >
-                      {children}
-                    </button>
-                  );
-                }
-                const safe = safeExternalUrl(href);
-                if (!safe) return <span>{children}</span>;
-                return (
-                  <a href={safe} rel="noopener noreferrer" target="_blank">
-                    {children}
-                  </a>
-                );
-              },
-              code: ({ className, children }) => {
-                if (highlight && className && /language-mermaid/i.test(className)) {
-                  const chart = String(children).replace(/\n$/, '');
-                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-                }
-                return <code className={className}>{children}</code>;
-              },
-              pre: ({ children }) => {
-                const child = Array.isArray(children) ? children[0] : children;
-                const codeProps = isValidElement(child)
-                  ? (child.props as { className?: string; children?: unknown })
-                  : null;
-                if (
-                  highlight &&
-                  codeProps?.className &&
-                  /language-mermaid/i.test(codeProps.className)
-                ) {
-                  const chart = String(codeProps.children ?? '').replace(/\n$/, '');
-                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-                }
-                return <CodeBlock>{children}</CodeBlock>;
-              },
-              img: ({ src, alt }) => {
-                if (!src) return null;
-                const url = typeof src === 'string' ? src : URL.createObjectURL(src);
-                return (
-                  <img
-                    src={url}
-                    alt={alt ?? ''}
-                    loading="lazy"
-                    onClick={() => onPreviewImage(url, alt ?? undefined)}
-                  />
-                );
-              },
-            }}
+            components={markdownComponents}
           >
             {parts[0]}
           </ReactMarkdown>
@@ -515,64 +553,7 @@ function MarkdownContent({
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={highlight ? [rehypeHighlight] : []}
-            components={{
-              a: ({ children, href }) => {
-                const filePath = fileLinkPath(href);
-                if (filePath && onFileLinkClick) {
-                  return (
-                    <button
-                      type="button"
-                      className="file-link"
-                      onClick={() => onFileLinkClick(filePath)}
-                      title={`在文件浏览器中定位：${filePath}`}
-                    >
-                      {children}
-                    </button>
-                  );
-                }
-                const safe = safeExternalUrl(href);
-                if (!safe) return <span>{children}</span>;
-                return (
-                  <a href={safe} rel="noopener noreferrer" target="_blank">
-                    {children}
-                  </a>
-                );
-              },
-              code: ({ className, children }) => {
-                if (highlight && className && /language-mermaid/i.test(className)) {
-                  const chart = String(children).replace(/\n$/, '');
-                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-                }
-                return <code className={className}>{children}</code>;
-              },
-              pre: ({ children }) => {
-                const child = Array.isArray(children) ? children[0] : children;
-                const codeProps = isValidElement(child)
-                  ? (child.props as { className?: string; children?: unknown })
-                  : null;
-                if (
-                  highlight &&
-                  codeProps?.className &&
-                  /language-mermaid/i.test(codeProps.className)
-                ) {
-                  const chart = String(codeProps.children ?? '').replace(/\n$/, '');
-                  return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-                }
-                return <CodeBlock>{children}</CodeBlock>;
-              },
-              img: ({ src, alt }) => {
-                if (!src) return null;
-                const url = typeof src === 'string' ? src : URL.createObjectURL(src);
-                return (
-                  <img
-                    src={url}
-                    alt={alt ?? ''}
-                    loading="lazy"
-                    onClick={() => onPreviewImage(url, alt ?? undefined)}
-                  />
-                );
-              },
-            }}
+            components={markdownComponents}
           >
             {parts[1]}
           </ReactMarkdown>
@@ -585,70 +566,7 @@ function MarkdownContent({
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={highlight ? [rehypeHighlight] : []}
-      components={{
-        a: ({ children, href }) => {
-          const filePath = fileLinkPath(href);
-          if (filePath && onFileLinkClick) {
-            return (
-              <button
-                type="button"
-                className="file-link"
-                onClick={() => onFileLinkClick(filePath)}
-                title={`在文件浏览器中定位：${filePath}`}
-              >
-                {children}
-              </button>
-            );
-          }
-          const safe = safeExternalUrl(href);
-          if (!safe) {
-            return <span>{children}</span>;
-          }
-          return (
-            <a
-              href={safe}
-              rel="noopener noreferrer"
-              target="_blank"
-            >
-              {children}
-            </a>
-          );
-        },
-        code: ({ className, children }) => {
-          if (highlight && className && /language-mermaid/i.test(className)) {
-            const chart = String(children).replace(/\n$/, '');
-            return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-          }
-          return <code className={className}>{children}</code>;
-        },
-        pre: ({ children }) => {
-          const child = Array.isArray(children) ? children[0] : children;
-          const codeProps = isValidElement(child)
-            ? (child.props as { className?: string; children?: unknown })
-            : null;
-          if (
-            highlight &&
-            codeProps?.className &&
-            /language-mermaid/i.test(codeProps.className)
-          ) {
-            const chart = String(codeProps.children ?? '').replace(/\n$/, '');
-            return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-          }
-          return <CodeBlock>{children}</CodeBlock>;
-        },
-        img: ({ src, alt }) => {
-          if (!src) return null;
-          const url = typeof src === 'string' ? src : URL.createObjectURL(src);
-          return (
-            <img
-              src={url}
-              alt={alt ?? ''}
-              loading="lazy"
-              onClick={() => onPreviewImage(url, alt ?? undefined)}
-            />
-          );
-        },
-      }}
+      components={markdownComponents}
     >
       {content}
     </ReactMarkdown>

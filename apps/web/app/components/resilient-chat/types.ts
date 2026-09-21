@@ -162,12 +162,21 @@ type HistoryMessage = {
 
 type Citation = {
   chunkId: string;
+  kbId: string;
   documentId: string;
   documentName: string;
   ordinal: number;
   heading?: string;
   score: number;
   via: 'vector' | 'graph' | 'both';
+  /** 命中切片附带的数据资产（目前是图片）。前端用来渲染缩略图。 */
+  images?: Array<{
+    assetId: string;
+    name: string;
+    mime: string;
+    alt: string;
+    relPath: string;
+  }>;
 };
 
 type SessionHistory = {

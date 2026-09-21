@@ -3,7 +3,13 @@ import { ReadableStream } from 'node:stream/web';
 
 import { z } from 'zod';
 
-import { searchKnowledge, type KnowledgeCitation, type KnowledgeSearchResult } from './knowledge-assistant.js';
+import {
+  buildCitationContext,
+  IMAGE_ANSWER_RULE,
+  searchKnowledge,
+  type KnowledgeCitation,
+  type KnowledgeSearchResult,
+} from './knowledge-assistant.js';
 import type { ApiConfig } from './config.js';
 
 export interface RagQaInput {
@@ -81,7 +87,8 @@ const ANSWER_SYSTEM_PROMPT = `你是专业的智能客服助手，只能依据�
 2. 如果参考资料不足以回答，必须明确说「根据当前知识库无法回答」。
 3. 不要编造参考资料之外的事实、价格、日期、政策。
 4. 优先给出结论，再补充必要解释；回答要简洁、专业、适合客服场景。
-5. 若涉及多个并列要点，使用列表呈现。`;
+5. 若涉及多个并列要点，使用列表呈现。
+6. ${IMAGE_ANSWER_RULE}`;
 
 const EXPANSION_SCHEMA = z.object({
   queries: z.array(z.string().trim().min(1)).min(1).max(3),
@@ -265,11 +272,11 @@ async function* streamAnswer(
   question: string,
   citations: KnowledgeCitation[],
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  kbId: string,
   signal?: AbortSignal,
 ): AsyncGenerator<string, void, unknown> {
-  const context = citations
-    .map((c, index) => `[${index + 1}] 来源：${c.documentName}${c.heading ? ` / ${c.heading}` : ''}\n${c.passage}`)
-    .join('\n\n');
+  // buildCitationContext 会把切片里的图片换成可访问的代理地址，让模型能直接产出图片。
+  const context = buildCitationContext(citations, kbId);
 
   const messages = [
     { role: 'system', content: ANSWER_SYSTEM_PROMPT },
@@ -430,6 +437,7 @@ async function* runRagQa(
       input.question,
       filtered,
       input.history ?? [],
+      input.kbId,
       signal,
     )) {
       yield { type: 'delta', delta };

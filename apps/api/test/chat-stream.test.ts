@@ -142,6 +142,7 @@ test('retrieval completion keeps the transient trace and emits bounded persisten
     query: 'hello',
     citations: [{
       chunkId: '00000000-0000-4000-8000-000000000003',
+      kbId: '00000000-0000-4000-8000-000000000005',
       documentId: '00000000-0000-4000-8000-000000000004',
       documentName: 'guide.md',
       ordinal: 2,

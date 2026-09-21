@@ -5,6 +5,15 @@ export interface RagStep {
   detail?: string;
 }
 
+/** 命中切片关联的知识库图片。assetId 配合 kbId 可换取代理访问地址。 */
+export interface RagCitationImage {
+  assetId: string;
+  name: string;
+  mime: string;
+  alt: string;
+  relPath: string;
+}
+
 export interface RagCitation {
   chunkId: string;
   documentId: string;
@@ -14,6 +23,7 @@ export interface RagCitation {
   score: number;
   via: 'vector' | 'graph' | 'both' | string;
   passage: string;
+  images?: RagCitationImage[];
 }
 
 export interface RagMessage {

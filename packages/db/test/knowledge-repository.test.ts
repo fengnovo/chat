@@ -11,6 +11,18 @@ test('repository methods include tenant predicates and bound retrieval citations
   assert.ok(queries.some((q) => /tenant_id/i.test(q)));
 });
 
+test('asset attach matches the exact document directory + file name, never a directory prefix', async () => {
+  const queries: Array<{ text: string; values: unknown[] }> = [];
+  const pool: any = { query: async (text: string, values: unknown[]) => { queries.push({ text, values }); return { rows: [{ id: 'a1' }], rowCount: 1 }; } };
+  const repo = new KnowledgeRepository(pool);
+  await repo.attachAssetsToDocument('tenant', 'kb', 'doc');
+  const attach = queries.find((q) => /UPDATE knowledge_assets/i.test(q.text));
+  assert.ok(attach);
+  // 前缀 LIKE 会让父目录文档抢走子文件夹资源（草莓酱图片被简易版炒糖色.md 领走的事故）。
+  assert.doesNotMatch(attach.text, /LIKE\s+d\.directory/);
+  assert.match(attach.text, /a\.rel_path\s*=\s*d\.directory \|\| '\/' \|\| a\.name/);
+});
+
 test('claim returns a lease token and stale worker transitions are rejected', async () => {
   const queries: Array<{ text: string; values: unknown[] }> = [];
   const pool: any = { query: async (text: string, values: unknown[]) => { queries.push({ text, values }); return { rows: [{ id: 'job' }], rowCount: 1 }; } };
@@ -171,4 +183,65 @@ test('asset confirm and delete bind exactly the placeholders their permission pr
     // 权限片段里写错的占位符编号会让 PG 报 "bind message supplies N parameters"，只会以 500 暴露。
     assert.equal(values.length, Math.max(...placeholders), `参数数量与占位符不匹配：${text}`);
   }
+});
+
+test('listPendingOrphanCaptionAssets queries only pending assets without a caption job and respects the 1024-byte floor', async () => {
+  const queries: Array<{ text: string; values: unknown[] }> = [];
+  const rows = [
+    { id: 'a-1', kb_id: 'kb-1', tenant_id: 'tenant-1' },
+    { id: 'a-2', kb_id: 'kb-2', tenant_id: 'tenant-1' },
+  ];
+  const pool: any = {
+    query: async (text: string, values: unknown[] = []) => {
+      queries.push({ text, values });
+      // 仅匹配孤儿扫描的 SELECT，避免被其他 mock 路径误吞。
+      if (/FROM knowledge_assets a[\s\S]+NOT EXISTS/i.test(text)) return { rows, rowCount: rows.length };
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const repo = new KnowledgeRepository(pool);
+  const result = await repo.listPendingOrphanCaptionAssets(50);
+
+  // 1) 谓词四件套齐全：未删除 + pending + size 下限 + 无对应 job。
+  const scan = queries.find((q) => /FROM knowledge_assets a/i.test(q.text))!;
+  assert.ok(scan, 'listPendingOrphanCaptionAssets 必须发出对 knowledge_assets 的查询');
+  assert.match(scan.text, /deleted_at IS NULL/);
+  assert.match(scan.text, /caption_status\s*=\s*'pending'/);
+  assert.match(scan.text, /size_bytes\s*>=\s*\$2/);
+  assert.match(scan.text, /NOT EXISTS\s*\([\s\S]*knowledge_caption_jobs/i);
+  assert.match(scan.text, /ORDER BY a\.created_at ASC/);
+
+  // 2) 默认 minSizeBytes = 1024（与 API 上传端 MIN_KNOWLEDGE_ASSET_BYTES 一致，避免给小文件补 job）。
+  assert.equal(scan.values[1], 1024);
+
+  // 3) 返回值映射成 { id, kbId, tenantId }，不泄漏原始 snake_case 列名。
+  assert.deepEqual(result, [
+    { id: 'a-1', kbId: 'kb-1', tenantId: 'tenant-1' },
+    { id: 'a-2', kbId: 'kb-2', tenantId: 'tenant-1' },
+  ]);
+});
+
+test('listPendingOrphanCaptionAssets forwards custom minSizeBytes to the size predicate', async () => {
+  const queries: Array<{ text: string; values: unknown[] }> = [];
+  const pool: any = {
+    query: async (text: string, values: unknown[] = []) => {
+      queries.push({ text, values });
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const repo = new KnowledgeRepository(pool);
+  await repo.listPendingOrphanCaptionAssets(10, 4096);
+
+  const scan = queries.find((q) => /FROM knowledge_assets a/i.test(q.text))!;
+  assert.equal(scan.values[0], 10, 'limit 必须作为 $1');
+  assert.equal(scan.values[1], 4096, '自定义 minSizeBytes 必须作为 $2');
+});
+
+test('listPendingOrphanCaptionAssets rejects non-positive and non-integer limits', async () => {
+  const pool: any = { query: async () => ({ rows: [], rowCount: 0 }) };
+  const repo = new KnowledgeRepository(pool);
+
+  await assert.rejects(repo.listPendingOrphanCaptionAssets(0), /Invalid limit/);
+  await assert.rejects(repo.listPendingOrphanCaptionAssets(-5), /Invalid limit/);
+  await assert.rejects(repo.listPendingOrphanCaptionAssets(1.5), /Invalid limit/);
 });

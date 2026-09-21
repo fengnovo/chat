@@ -1542,6 +1542,26 @@ export class AgentRepository {
     await this.pool.query('DELETE FROM chat_attachments WHERE id = $1', [attachmentId]);
   }
 
+  /**
+   * Worker 启动时清理孤儿 run：running / waiting_approval / waiting_question
+   * 是进程内存态，Worker 重启后无法恢复。全部标记为 failed（单实例假设，
+   * cutoff 取本进程启动时间，避免误杀并发实例的活跃 run）。
+   * 前端轮询拿到终态后即可解除悬挂的审批卡。
+   */
+  async failOrphanRunsBefore(cutoff: Date): Promise<number> {
+    const result = await this.pool.query(
+      `UPDATE agent_runs
+       SET status = 'failed',
+           error_code = 'worker_restarted',
+           error_message = 'Worker 重启导致任务中断，请重新发送',
+           updated_at = now()
+       WHERE status IN ('running', 'waiting_approval', 'waiting_question')
+         AND updated_at < $1`,
+      [cutoff],
+    );
+    return result.rowCount ?? 0;
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
