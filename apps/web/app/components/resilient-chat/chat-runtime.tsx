@@ -22,6 +22,7 @@ import {
   writeSessionCache,
 } from '@/app/lib/persistence';
 import { ResilientSession } from '@/app/lib/session';
+import { scheduleMicrotask } from '@/app/lib/schedule-microtask';
 
 import { AgentStatusPanel } from './agent-status';
 import { fetchKnowledgeBases, fetchSessionFiles, fetchSessionPage, responseError } from './api';
@@ -256,7 +257,9 @@ function ChatRuntime() {
   }, [userId]);
   useEffect(() => { void fetchKnowledgeBases().then(setKnowledgeBases).catch(() => undefined); }, []);
   useEffect(() => {
-    setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId) ?? []);
+    scheduleMicrotask(() => {
+      setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId) ?? []);
+    });
   }, [conversation.chatId]);
   // 知识库列表首次加载后，如果该会话从未做过选择，则默认全选并记住；
   // 用户之后主动清空（保存为 []）不会再被覆盖。
@@ -265,24 +268,24 @@ function ChatRuntime() {
     if (knowledgeBaseIdsForChat(conversation.chatId) !== null) return;
     const allIds = knowledgeBases.map((base) => base.id);
     persistKnowledgeBaseIds(conversation.chatId, allIds);
-    setKnowledgeBaseIds(allIds);
+    scheduleMicrotask(() => setKnowledgeBaseIds(allIds));
   }, [knowledgeBases, conversation.chatId]);
 
   const handleToggleKnowledgeBase = useCallback(
     (id: string) => {
       setKnowledgeBaseIds((current) => {
         const next = toggleKnowledgeBase(current, id);
-        persistKnowledgeBaseIds(chatIdRef.current, next);
+        persistKnowledgeBaseIds(conversation.chatId, next);
         return next;
       });
     },
-    [],
+    [conversation.chatId],
   );
 
   const handleChangeKnowledgeBases = useCallback((ids: string[]) => {
-    persistKnowledgeBaseIds(chatIdRef.current, ids);
+    persistKnowledgeBaseIds(conversation.chatId, ids);
     setKnowledgeBaseIds(ids);
-  }, []);
+  }, [conversation.chatId]);
 
   // 当前会话的历史文件记录。运行结束后会重新拉取（refreshHistoryFiles），
   // 否则新一轮 run 一开始清空实时工具记录时，上一轮生成的文件会从面板里消失。
@@ -290,14 +293,9 @@ function ChatRuntime() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
-  const chatIdRef = useRef(conversation.chatId);
-  useEffect(() => {
-    chatIdRef.current = conversation.chatId;
-  }, [conversation.chatId]);
-
   const refreshHistoryFiles = useCallback(async () => {
     const match = sessionsRef.current.find(
-      (session) => session.externalKey === chatIdRef.current,
+      (session) => session.externalKey === conversation.chatId,
     );
     if (!match) return;
     try {
@@ -312,7 +310,7 @@ function ChatRuntime() {
     } catch {
       // 历史文件拉取失败不影响聊天主流程
     }
-  }, []);
+  }, [conversation.chatId]);
 
   // 首次加载（或切换会话）时拉取一次历史文件。
   const historyFilesChatIdRef = useRef<string | null>(null);
@@ -1047,10 +1045,12 @@ function ChatRuntime() {
   useEffect(() => {
     if (status !== 'ready' && status !== 'error') return;
     if (hiddenContinuationIds.size === 0) return;
-    setMessages(
-      messages.filter((message) => !hiddenContinuationIds.has(message.id)),
-    );
-    setHiddenContinuationIds(new Set());
+    scheduleMicrotask(() => {
+      setMessages(
+        messages.filter((message) => !hiddenContinuationIds.has(message.id)),
+      );
+      setHiddenContinuationIds(new Set());
+    });
   }, [status, messages, hiddenContinuationIds, setMessages]);
 
   // 「继续对话」：等价于替用户发起一次"继续"，但不留下任何用户消息记录。

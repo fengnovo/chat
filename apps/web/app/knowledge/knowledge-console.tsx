@@ -20,6 +20,7 @@ import { DocumentsView } from './documents-view';
 import { ChunksView } from './chunks-view';
 import { RetrievalView } from './retrieval-view';
 import { QaView } from './qa-view';
+import { scheduleMicrotask } from '../lib/schedule-microtask';
 
 type ViewKey = 'bases' | 'documents' | 'chunks' | 'retrieval' | 'qa';
 
@@ -52,7 +53,10 @@ export function KnowledgeConsole() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>('bases');
-  const [selectedKbId, setSelectedKbId] = useState<string | null>(null);
+  const [selectedKbId, setSelectedKbId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try { return localStorage.getItem(SELECTED_KB_KEY); } catch { return null; }
+  });
   const [initialDocumentId, setInitialDocumentId] = useState<string | undefined>(undefined);
 
   const refreshBases = useCallback(async () => {
@@ -67,34 +71,28 @@ export function KnowledgeConsole() {
     }
   }, []);
 
-  useEffect(() => { void refreshBases(); }, [refreshBases]);
-
-  // 恢复上次选择的知识库。
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(SELECTED_KB_KEY);
-      if (saved) setSelectedKbId(saved);
-    } catch { /* localStorage 不可用时忽略 */ }
-  }, []);
+  useEffect(() => { scheduleMicrotask(() => { void refreshBases(); }); }, [refreshBases]);
 
   const selectedKb = bases.find((base) => base.id === selectedKbId) ?? null;
 
-  // 当前选中的知识库被删除或失去访问权限时，回到知识库列表并清理选择。
-  useEffect(() => {
-    if (!loading && selectedKbId && !selectedKb) {
-      selectKb(null);
-      setView('bases');
-    }
-  }, [loading, selectedKbId, selectedKb]);
-
-  const selectKb = (base: KnowledgeBase | null) => {
+  const selectKb = useCallback((base: KnowledgeBase | null) => {
     setSelectedKbId(base?.id ?? null);
     setInitialDocumentId(undefined);
     try {
       if (base) localStorage.setItem(SELECTED_KB_KEY, base.id);
       else localStorage.removeItem(SELECTED_KB_KEY);
     } catch { /* 忽略存储失败 */ }
-  };
+  }, []);
+
+  // 当前选中的知识库被删除或失去访问权限时，回到知识库列表并清理选择。
+  useEffect(() => {
+    if (!loading && selectedKbId && !selectedKb) {
+      scheduleMicrotask(() => {
+        selectKb(null);
+        setView('bases');
+      });
+    }
+  }, [loading, selectedKbId, selectedKb, selectKb]);
 
   const goView = (next: ViewKey) => {
     if (next !== 'bases' && !selectedKb) {

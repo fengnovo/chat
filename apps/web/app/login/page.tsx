@@ -76,15 +76,13 @@ function LoginForm() {
     fetchOAuthProviders().then(setOAuthProviders);
   }, []);
 
-  // 处理 OAuth 回调错误。
-  useEffect(() => {
-    const oauthError = searchParams.get('error');
-    const detail = searchParams.get('detail');
-    if (oauthError) {
-      const msg = OAUTH_ERROR_MESSAGES[oauthError] ?? '登录失败，请稍后重试';
-      setError(detail ? `${msg}（${detail}）` : msg);
-    }
-  }, [searchParams]);
+  // 处理 OAuth 回调错误；从 URL 派生，避免首帧后再写入表单错误状态。
+  const oauthError = searchParams.get('error');
+  const oauthDetail = searchParams.get('detail');
+  const oauthErrorMessage = oauthError
+    ? `${OAUTH_ERROR_MESSAGES[oauthError] ?? '登录失败，请稍后重试'}${oauthDetail ? `（${oauthDetail}）` : ''}`
+    : null;
+  const visibleError = error ?? oauthErrorMessage;
 
   // 鉴权态未决时只显示加载屏；已登录则留空白帧等待 replace('/')，
   // 避免刷新过程中登录表单一闪而过。
@@ -173,9 +171,9 @@ function LoginForm() {
           onChange={(event) => setPassword(event.target.value)}
           required
         />
-        {error && (
+        {visibleError && (
           <p className="login-error" role="alert">
-            {error}
+            {visibleError}
           </p>
         )}
         <button type="submit" disabled={submitting}>

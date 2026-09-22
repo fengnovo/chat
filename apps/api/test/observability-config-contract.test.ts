@@ -76,8 +76,8 @@ test('examples use safe capture defaults and valid sampling rates', () => {
 
 test('public health contract requires sanitized summaries without internal details', () => {
   for (const phrase of [
-    'sanitized status, version, and component summaries',
-    'never expose secrets, DSNs, raw errors, stack traces, hostnames',
+    '公开健康检查响应仅暴露脱敏后的状态、版本和组件摘要',
+    '绝不能暴露密钥、DSN、原始错误、堆栈跟踪、主机名或其他内部连接细节',
   ]) {
     assert.ok(securityPolicy.includes(phrase), `health policy must include: ${phrase}`);
   }

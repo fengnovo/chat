@@ -7,6 +7,7 @@ import { AuthGate } from '../components/auth/auth-gate';
 import { UserMenu } from '../components/auth/user-menu';
 import { apiFetch } from '../components/resilient-chat/api';
 import { Icon } from '../components/resilient-chat/icon';
+import { scheduleMicrotask } from '../lib/schedule-microtask';
 
 type Memory = { id: string; kind: string; scope: string; content: string; importance: number; confidence: number; updatedAt: string };
 
@@ -30,7 +31,7 @@ function MemoryPageContent() {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { scheduleMicrotask(() => { void load(); }); }, []);
 
   const remove = async (id: string) => {
     await apiFetch(`/api/agent/memories/${encodeURIComponent(id)}`, { method: 'DELETE' });

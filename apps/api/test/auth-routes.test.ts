@@ -48,9 +48,13 @@ function makeApp(repository: Record<string, unknown>, config: ApiConfig = makeCo
     }
     return reply.code(500).send({ error: 'internal_error' });
   });
+  const repositoryWithDefaults = {
+    getUserAvatarUrl: async () => null,
+    ...repository,
+  };
   return registerAuthRoutes(app, {
     config,
-    repository: repository as unknown as AgentRepository,
+    repository: repositoryWithDefaults as unknown as AgentRepository,
   }).then(() => app);
 }
 
@@ -143,6 +147,8 @@ test('/api/auth/me resolves the display name from the repository', async () => {
   const app = await makeApp({
     getUserDisplayName: async (tenant: string, user: string) =>
       tenant === tenantId && user === userId ? '超级管理员' : null,
+    getUserAvatarUrl: async (tenant: string, user: string) =>
+      tenant === tenantId && user === userId ? 'https://cdn.example/avatar.png' : null,
     getUserPasswordHash: async () => 'scrypt$fake-hash',
   });
   const response = await app.inject({ method: 'GET', url: '/api/auth/me' });
@@ -154,6 +160,7 @@ test('/api/auth/me resolves the display name from the repository', async () => {
     tenantId,
     authMode: 'dev',
     hasPassword: true,
+    avatarUrl: 'https://cdn.example/avatar.png',
   });
   await app.close();
 });

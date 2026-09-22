@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import hljs from 'highlight.js';
 
+import { scheduleMicrotask } from '@/app/lib/schedule-microtask';
+
 import { Icon } from './icon';
 
 type TouchedFile = {
@@ -327,9 +329,11 @@ function PanelResizer({
   const onResizeRef = useRef(onResize);
   const onCloseRef = useRef(onClose);
   const onHideSidebarRef = useRef(onHideSidebar);
-  onResizeRef.current = onResize;
-  onCloseRef.current = onClose;
-  onHideSidebarRef.current = onHideSidebar;
+  useEffect(() => {
+    onResizeRef.current = onResize;
+    onCloseRef.current = onClose;
+    onHideSidebarRef.current = onHideSidebar;
+  }, [onResize, onClose, onHideSidebar]);
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -416,8 +420,10 @@ function TreeResizer({
   const hiddenRef = useRef(false);
   const onResizeRef = useRef(onResize);
   const onHideSidebarRef = useRef(onHideSidebar);
-  onResizeRef.current = onResize;
-  onHideSidebarRef.current = onHideSidebar;
+  useEffect(() => {
+    onResizeRef.current = onResize;
+    onHideSidebarRef.current = onHideSidebar;
+  }, [onResize, onHideSidebar]);
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -526,15 +532,17 @@ function FilePanel({
 
   // 切换会话时 files 变化，重置树宽度避免布局错乱
   useEffect(() => {
-    setTreeWidth(200);
+    scheduleMicrotask(() => setTreeWidth(200));
   }, [files]);
 
   // 外部触发打开构建预览（用户点击聊天消息中的预览按钮）
   useEffect(() => {
     console.log('[FilePanel] openBuildPreview changed:', { openBuildPreview, buildPreview });
     if (openBuildPreview && openBuildPreview > 0) {
-      setBuildPreview(true);
-      setPreviewRefreshKey((k) => k + 1);
+      scheduleMicrotask(() => {
+        setBuildPreview(true);
+        setPreviewRefreshKey((k) => k + 1);
+      });
     }
   }, [openBuildPreview]);
 

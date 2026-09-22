@@ -9,6 +9,7 @@ import {
   type KnowledgeSearchResult,
 } from './knowledge-api';
 import { retrievalViaLabel } from './knowledge-helpers';
+import { scheduleMicrotask } from '../lib/schedule-microtask';
 import {
   Badge,
   CitationImages,
@@ -58,11 +59,13 @@ export function RetrievalView({ kb }: { kb: KnowledgeBase }) {
   const [history, setHistory] = useState<string[]>([]);
 
   useEffect(() => {
-    setResult(null);
-    setError(null);
-    setQuery('');
-    setSearchedQuery('');
-    setHistory(loadHistory(kb.id));
+    scheduleMicrotask(() => {
+      setResult(null);
+      setError(null);
+      setQuery('');
+      setSearchedQuery('');
+      setHistory(loadHistory(kb.id));
+    });
   }, [kb.id]);
 
   const runSearch = async (rawQuery: string) => {

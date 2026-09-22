@@ -9,6 +9,8 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { scheduleMicrotask } from '@/app/lib/schedule-microtask';
+
 import { apiFetch } from './api';
 import { Icon } from './icon';
 
@@ -47,6 +49,7 @@ function Lightbox({
   // Mermaid SVG 只有 viewBox + width:100%，放进收缩包裹容器会解析成 0 尺寸；
   // 因此按 viewBox 宽高比与视口上限算出确定的卡片像素尺寸。
   const [diagramSize, setDiagramSize] = useState<{ width: number; height: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(
     null,
   );
@@ -60,7 +63,7 @@ function Lightbox({
   // 切换图片时复位；Esc 关闭并锁定背景滚动；wheel 走原生 listener 可显式 passive: false。
   useEffect(() => {
     if (!image) return;
-    reset();
+    scheduleMicrotask(reset);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
@@ -91,7 +94,7 @@ function Lightbox({
   // SVG 浮层：注入后读 viewBox 计算与内容等比的白底卡片尺寸；窗口缩放时重算。
   useEffect(() => {
     if (!image?.svg) {
-      setDiagramSize(null);
+      scheduleMicrotask(() => setDiagramSize(null));
       return;
     }
     const CARD_PADDING = 22;
@@ -135,7 +138,7 @@ function Lightbox({
   // 图片与 SVG 图表共用同一套缩放/拖动交互。
   const mediaStyle: CSSProperties = {
     transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-    cursor: scale > 1 ? (dragRef.current ? 'grabbing' : 'grab') : 'default',
+    cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default',
   };
   const mediaHandlers = {
     onClick: (event: ReactMouseEvent) => event.stopPropagation(),
@@ -148,6 +151,7 @@ function Lightbox({
         baseX: offset.x,
         baseY: offset.y,
       };
+      setIsDragging(true);
     },
     onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
       const drag = dragRef.current;
@@ -159,6 +163,7 @@ function Lightbox({
     },
     onPointerUp: (event: ReactPointerEvent<HTMLElement>) => {
       dragRef.current = null;
+      setIsDragging(false);
       event.currentTarget.releasePointerCapture?.(event.pointerId);
     },
     onDoubleClick: () => {

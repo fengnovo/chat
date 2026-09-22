@@ -18,6 +18,7 @@ import { Icon } from '../../components/resilient-chat/icon';
 import { useAuth } from '../../components/auth/auth-context';
 import { AuthGate } from '../../components/auth/auth-gate';
 import { UserMenu } from '../../components/auth/user-menu';
+import { scheduleMicrotask } from '../../lib/schedule-microtask';
 
 const ROLE_OPTIONS: Array<{ value: AdminUser['role']; label: string }> = [
   { value: 'admin', label: '管理员' },
@@ -43,7 +44,7 @@ function AdminUsersView() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    scheduleMicrotask(() => { void refresh(); });
   }, [refresh]);
 
   if (user && user.role !== 'admin') {

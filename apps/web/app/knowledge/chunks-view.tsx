@@ -12,6 +12,7 @@ import {
   type KnowledgeDocument,
 } from './knowledge-api';
 import { formatDateTime } from './knowledge-helpers';
+import { scheduleMicrotask } from '../lib/schedule-microtask';
 import {
   ChevronDownIcon,
   CitationImages,
@@ -42,7 +43,7 @@ export function ChunksView({
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   useEffect(() => {
-    if (!documentId) { setAssets([]); return; }
+    if (!documentId) { scheduleMicrotask(() => setAssets([])); return; }
     let cancelled = false;
     listKnowledgeAssets(kb.id, { documentId })
       .then((rows) => { if (!cancelled) setAssets(rows); })
@@ -99,7 +100,7 @@ export function ChunksView({
     }
   }, [kb.id, documentId, debouncedSearch]);
 
-  useEffect(() => { void loadChunks(); }, [loadChunks]);
+  useEffect(() => { scheduleMicrotask(() => { void loadChunks(); }); }, [loadChunks]);
 
   const selectedDocumentName = useMemo(
     () => documents.find((row) => row.id === documentId)?.name ?? '',

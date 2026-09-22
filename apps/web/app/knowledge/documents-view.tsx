@@ -36,6 +36,7 @@ import {
   TrashIcon,
   UploadIcon,
 } from './knowledge-ui';
+import { scheduleMicrotask } from '../lib/schedule-microtask';
 
 const ACTIVE_INDEX_STATUSES = new Set(['pending', 'queued', 'indexing', 'processing']);
 
@@ -83,11 +84,13 @@ export function DocumentsView({
   }, [kb.id]);
 
   useEffect(() => {
-    setDocuments([]);
-    setSearch('');
-    setConfirmDeleteId(null);
-    setUploadState(null);
-    void refresh();
+    scheduleMicrotask(() => {
+      setDocuments([]);
+      setSearch('');
+      setConfirmDeleteId(null);
+      setUploadState(null);
+      void refresh();
+    });
   }, [refresh]);
 
   // 索引进行中时轮询文档状态，处理完成后同步刷新知识库统计。
