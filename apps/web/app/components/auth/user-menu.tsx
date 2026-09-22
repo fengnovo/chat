@@ -292,6 +292,10 @@ export function UserMenu({ onAiServiceClick }: { onAiServiceClick?: () => void }
               用户管理
             </Link>
           )}
+          <Link href="https://logic-composer.keen-tech.top" target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}>
+              <Icon name="composer" size={15} />
+              Workflow
+          </Link>
           {!isDevMode && user.hasPassword && (
             <button
               type="button"
