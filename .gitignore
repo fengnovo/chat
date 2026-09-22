@@ -11,6 +11,8 @@ deploy/env.*
 .superpowers/
 .trae/
 coverage/
+apps/web/playwright-report/
+apps/web/test-results/
 /data/
 workspace/
 sessions/
