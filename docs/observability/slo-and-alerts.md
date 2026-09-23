@@ -1,4 +1,5 @@
 # SLO 与告警约定
+SLO = Service Level Objective（服务级别目标） ：用数字明确约定“服务应该好到什么程度”，是团队对用户做的内部质量承诺。
 
 负责人：platform team。维护窗口通过 Alertmanager silence 排除（`service` +
 时间窗口），不在 PromQL 中硬编码时间段。所有规则文件：

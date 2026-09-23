@@ -80,7 +80,33 @@ graph TB
 ## 系统流程
 
 ### 会话与运行主流程
-
+```
+浏览器
+  │ POST 创建 Run
+  ▼
+API
+  │ 同一个 PostgreSQL 事务
+  ├─ 写 agent_runs
+  └─ 写 run_dispatch_outbox
+           │
+           ▼
+   Outbox Dispatcher
+           │ 投递，jobId = outboxId
+           ▼
+       BullMQ / Redis
+           │
+           ▼
+         Worker
+           │ Agent 每产生一个事件
+           ├─ 写 PostgreSQL run_events，分配递增 seq
+           └─ Redis Pub/Sub 发送“有新事件”的通知
+                         │
+                         ▼
+                       API SSE
+                         │ 从 PostgreSQL 读取 seq > cursor
+                         ▼
+                       浏览器
+```
 ```mermaid
 graph LR
     A["用户发送消息"] --> B["Web / Desktop"]
