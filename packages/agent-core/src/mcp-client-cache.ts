@@ -99,17 +99,25 @@ function buildEntry(
 ): Promise<SharedMcpEntry> {
   const config = expandEnvPlaceholders(JSON.parse(raw)) as Record<string, unknown>;
   const client = clientFactory(config);
+  // 定时器必须持有事件循环（不 unref）：悬挂的 promise 不会让循环保持存活，
+  // 若循环排空，等待方（如测试进程）会直接被 node:test 以
+  // "Promise resolution is still pending" 强制收尾，超时永远等不到触发。
+  // 生产进程始终有 ref 的 server/连接兜底，不会因此延迟退出；
+  // 竞速结束后立即 clearTimeout，成功建连不会残留满额超时的悬挂定时器。
+  let timer: NodeJS.Timeout;
   const deadline = new Promise<never>((_, reject) => {
-    const timer = setTimeout(
+    timer = setTimeout(
       () => reject(new Error(`MCP connect/tools discovery timed out after ${connectTimeoutMs}ms`)),
       connectTimeoutMs,
     );
-    // 底层握手可能仍在 pending（适配器不可取消）；unref 避免悬挂定时器拖住进程退出。
-    timer.unref?.();
   });
   return Promise.race([client.getTools(), deadline]).then(
-    (tools) => ({ client, tools, createdAt: now() }),
+    (tools) => {
+      clearTimeout(timer);
+      return { client, tools, createdAt: now() };
+    },
     async (error: unknown) => {
+      clearTimeout(timer);
       // 连接/发现失败（含超时）时关闭可能半开的 client，再向上抛——调用方不缓存失败条目。
       await client.close().catch(() => undefined);
       throw error;
