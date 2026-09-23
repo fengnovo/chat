@@ -248,7 +248,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(queue_jobs_completed_total{queue=\"agent-runs\"}[1m]))",
+          "expr": "sum(rate(queue_jobs_completed_total{queue=\"agent-runs\"}[5m]))",
           "range": true,
           "legendFormat": "completed"
         }
@@ -428,7 +428,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (phase) (rate(agent_phase_duration_seconds_count{outcome=\"failure\"}[10m]))",
+          "expr": "sum by (phase) (rate(agent_phase_duration_seconds_count{outcome=\"failure\"}[10m])) or vector(0)",
           "range": true,
           "legendFormat": "{{phase}}"
         }
@@ -473,7 +473,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (tool, operation) (rate(tool_calls_total[1m]))",
+          "expr": "sum by (tool, operation) (rate(tool_calls_total[5m]))",
           "range": true,
           "legendFormat": "{{tool}}/{{operation}}"
         }

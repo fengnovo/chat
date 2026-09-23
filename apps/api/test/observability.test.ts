@@ -19,6 +19,7 @@ type Measurement = { name: string; value: number; attributes?: Record<string, un
 
 function recordingRuntime(options: { throwOnSpanStart?: boolean; throwOnMeasure?: boolean } = {}) {
   const measurements: Measurement[] = [];
+  const histogramUnits: Record<string, string | undefined> = {};
   const parents: Array<string | undefined> = [];
   const spans: Array<{
     name: string;
@@ -39,7 +40,10 @@ function recordingRuntime(options: { throwOnSpanStart?: boolean; throwOnMeasure?
   const meter = {
     createCounter: (name: string) => instrument(name),
     createUpDownCounter: (name: string) => instrument(name),
-    createHistogram: (name: string) => instrument(name),
+    createHistogram: (name: string, options?: { unit?: string }) => {
+      histogramUnits[name] = options?.unit;
+      return instrument(name);
+    },
   } as unknown as Meter;
   const tracer = {
     startSpan(name: string, _options: unknown, parent?: Context) {
@@ -81,10 +85,32 @@ function recordingRuntime(options: { throwOnSpanStart?: boolean; throwOnMeasure?
   return {
     runtime: { tracer, meter, async shutdown() {}, async forceFlush() {} },
     measurements,
+    histogramUnits,
     spans,
     parents,
   };
 }
+
+test('records SSE first-byte latency in seconds', () => {
+  const recording = recordingRuntime();
+  let now = 1_000;
+  const observability = createApiObservability(recording.runtime, {
+    enabled: true,
+    serviceVersion: '1.2.3',
+    exporter: 'configured',
+    now: () => now,
+  });
+
+  const connection = observability.startSse('chat');
+  now = 1_250;
+  connection.firstByte();
+
+  assert.equal(recording.histogramUnits['sse.first_byte.duration'], 's');
+  assert.equal(
+    recording.measurements.find(item => item.name === 'sse.first_byte.duration')?.value,
+    0.25,
+  );
+});
 
 test('request context returns a constrained ID and records the route template', async () => {
   const recording = recordingRuntime();

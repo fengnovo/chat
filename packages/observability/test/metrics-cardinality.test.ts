@@ -33,6 +33,46 @@ test('creates the complete core instrument set', async () => {
   await provider.shutdown();
 });
 
+test('exports duration histograms in seconds while accepting millisecond measurements', async () => {
+  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+  const metrics = createCoreMetrics(provider.getMeter('duration-units'));
+
+  metrics.httpServer({ method: 'GET', route: normalizeRoute('/health/live'), status: '2xx', outcome: 'success', durationMs: 1_500 });
+  metrics.queueJob({ queue: 'agent-runs', job: 'run', outcome: 'completed', durationMs: 2_500 });
+  metrics.queueWait({ queue: 'agent-runs', job: 'run', waitMs: 3_500 });
+  metrics.modelCall({ provider: 'openai', model: 'gpt', operation: 'chat', outcome: 'success', durationMs: 4_500 });
+  metrics.agentPhase({ phase: 'agent.execute', outcome: 'success', durationMs: 5_500 });
+  metrics.toolCall({ tool: 'sandbox', operation: 'execute', outcome: 'success', durationMs: 6_500 });
+  metrics.knowledgeRetrieval({ operation: 'retrieve', outcome: 'success', durationMs: 7_500 });
+  metrics.knowledgeOperation({ operation: 'retrieve', outcome: 'success', durationMs: 8_500 });
+  metrics.memoryOperation?.({ operation: 'retrieve', outcome: 'success', durationMs: 9_500 });
+
+  await provider.forceFlush();
+  const histograms = exporter.getMetrics()
+    .flatMap(resource => resource.scopeMetrics.flatMap(scope => scope.metrics))
+    .filter(metric => metric.descriptor.name.endsWith('.duration'));
+  const expected = new Map([
+    ['http.server.duration', 1.5],
+    ['queue.job.duration', 2.5],
+    ['queue.wait.duration', 3.5],
+    ['model.call.duration', 4.5],
+    ['agent.phase.duration', 5.5],
+    ['tool.call.duration', 6.5],
+    ['knowledge.retrieval.duration', 7.5],
+    ['knowledge.operation.duration', 8.5],
+    ['memory.operation.duration', 9.5],
+  ]);
+
+  for (const [name, sum] of expected) {
+    const metric = histograms.find(item => item.descriptor.name === name);
+    assert.equal(metric?.descriptor.unit, 's', `${name} must use seconds`);
+    const point = metric?.dataPoints[0]?.value;
+    assert.equal((point && typeof point === 'object' && 'sum' in point) ? point.sum : undefined, sum, `${name} must convert milliseconds to seconds`);
+  }
+  await provider.shutdown();
+});
+
 test('one hundred distinct IDs collapse to fixed low-cardinality HTTP series', async () => {
   const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });

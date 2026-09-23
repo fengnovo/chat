@@ -88,7 +88,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (operation, outcome) (rate(knowledge_operation_duration_seconds_count{job=\"knowledge-service\"}[1m]))",
+          "expr": "sum by (operation, outcome) (rate(knowledge_operation_duration_seconds_count{job=\"knowledge-service\"}[5m]))",
           "range": true,
           "legendFormat": "{{operation}}/{{outcome}}"
         }
@@ -178,7 +178,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (http_route, http_response_status_class) (rate(http_server_requests_total{job=\"knowledge-service\"}[1m]))",
+          "expr": "sum by (http_route, http_response_status_class) (rate(http_server_requests_total{job=\"knowledge-service\"}[5m]))",
           "range": true,
           "legendFormat": "{{http_route}} {{http_response_status_class}}"
         }

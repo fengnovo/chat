@@ -105,7 +105,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (http_route) (rate(http_server_requests_total{job=\"agent-api\",http_route=~\"$route\"}[1m]))",
+          "expr": "sum by (http_route) (rate(http_server_requests_total{job=\"agent-api\",http_route=~\"$route\"}[5m]))",
           "range": true,
           "legendFormat": "{{http_route}}"
         }
@@ -150,7 +150,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (http_route) (rate(http_server_requests_total{job=\"agent-api\",http_response_status_class=~\"5xx|other\",http_route=~\"$route\"}[5m]))",
+          "expr": "sum by (http_route) (rate(http_server_requests_total{job=\"agent-api\",http_response_status_class=~\"5xx|other\",http_route=~\"$route\"}[5m])) or vector(0)",
           "range": true,
           "legendFormat": "{{http_route}}"
         }
@@ -330,7 +330,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (reason) (rate(sse_disconnects_total{job=\"agent-api\",reason=~\"server|error|timeout\"}[5m]))",
+          "expr": "sum by (reason) (rate(sse_disconnects_total{job=\"agent-api\",reason=~\"server|error|timeout\"}[5m])) or vector(0)",
           "range": true,
           "legendFormat": "{{reason}}"
         }

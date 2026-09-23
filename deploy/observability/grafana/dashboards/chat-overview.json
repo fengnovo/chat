@@ -236,7 +236,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (job) (rate(http_server_requests_total{job=~\"agent-api|knowledge-service\"}[1m]))",
+          "expr": "sum by (job) (rate(http_server_requests_total{job=~\"agent-api|knowledge-service\"}[5m]))",
           "range": true,
           "legendFormat": "{{job}}"
         }
@@ -281,7 +281,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (job) (rate(http_server_requests_total{job=~\"agent-api|knowledge-service\",http_response_status_class=~\"5xx|other\"}[5m]))",
+          "expr": "sum by (job) (rate(http_server_requests_total{job=~\"agent-api|knowledge-service\",http_response_status_class=~\"5xx|other\"}[5m])) or vector(0)",
           "range": true,
           "legendFormat": "{{job}}"
         }
@@ -416,7 +416,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (provider, model) (rate(model_calls_total[1m]))",
+          "expr": "sum by (provider, model) (rate(model_calls_total[5m]))",
           "range": true,
           "legendFormat": "{{provider}}/{{model}}"
         }
@@ -461,7 +461,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(model_tokens_input_total[1m])) or sum(rate(model_tokens_output_total[1m]))",
+          "expr": "sum(rate(model_tokens_input_total[5m])) or sum(rate(model_tokens_output_total[5m]))",
           "range": true,
           "legendFormat": "input/output"
         }

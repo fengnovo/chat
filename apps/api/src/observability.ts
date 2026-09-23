@@ -73,13 +73,14 @@ function safely(operation: () => void): void {
 
 export function createApiObservability(
   runtime: ObservabilityRuntime,
-  options: { enabled: boolean; serviceVersion: string; exporter: ExporterSummary },
+  options: { enabled: boolean; serviceVersion: string; exporter: ExporterSummary; now?: () => number },
 ): ApiObservability {
   const metrics = createCoreMetrics(runtime.meter);
   const firstByteDuration = runtime.meter.createHistogram('sse.first_byte.duration', {
-    unit: 'ms',
+    unit: 's',
   });
   const requestEvents = runtime.meter.createCounter('http.server.events');
+  const now = options.now ?? (() => performance.now());
   return {
     runtime,
     metrics,
@@ -89,7 +90,7 @@ export function createApiObservability(
       safely(() => requestEvents.add(1, { event, 'http.route': normalizeRoute(request.url, request.routeOptions.url) }));
     },
     startSse(operation) {
-      const startedAt = performance.now();
+      const startedAt = now();
       let finished = false;
       let firstByteRecorded = false;
       let span: Span | undefined;
@@ -102,7 +103,7 @@ export function createApiObservability(
         firstByte() {
           if (firstByteRecorded) return;
           firstByteRecorded = true;
-          safely(() => firstByteDuration.record(performance.now() - startedAt, { operation }));
+          safely(() => firstByteDuration.record((now() - startedAt) / 1000, { operation }));
           safely(() => span?.addEvent('sse.first_byte'));
         },
         finish(reason) {

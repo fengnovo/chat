@@ -73,6 +73,10 @@ function nonNegative(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+function secondsFromMilliseconds(value: unknown): number {
+  return nonNegative(value) / 1000;
+}
+
 function positiveInteger(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
@@ -115,36 +119,36 @@ const AGENT_PHASES: readonly AgentPhase[] = [
 const PHASE_OUTCOMES: readonly PhaseOutcome[] = ['success', 'failure'];
 
 export function createCoreMetrics(meter: Meter): CoreMetrics {
-  const httpDuration = meter.createHistogram('http.server.duration', { unit: 'ms' });
+  const httpDuration = meter.createHistogram('http.server.duration', { unit: 's' });
   const httpRequests = meter.createCounter('http.server.requests', { unit: '{request}' });
   const sseActive = meter.createUpDownCounter('sse.connection.active', { unit: '{connection}' });
   const sseDisconnects = meter.createCounter('sse.disconnects.total', { unit: '{disconnect}' });
   const queueStarted = meter.createCounter('queue.jobs.started', { unit: '{job}' });
   const queueCompleted = meter.createCounter('queue.jobs.completed', { unit: '{job}' });
   const queueFailed = meter.createCounter('queue.jobs.failed', { unit: '{job}' });
-  const queueDuration = meter.createHistogram('queue.job.duration', { unit: 'ms' });
-  const queueWaitDuration = meter.createHistogram('queue.wait.duration', { unit: 'ms' });
+  const queueDuration = meter.createHistogram('queue.job.duration', { unit: 's' });
+  const queueWaitDuration = meter.createHistogram('queue.wait.duration', { unit: 's' });
   const outboxDispatches = meter.createCounter('outbox.dispatch.total', { unit: '{dispatch}' });
   const modelCalls = meter.createCounter('model.calls.total', { unit: '{call}' });
-  const modelDuration = meter.createHistogram('model.call.duration', { unit: 'ms' });
+  const modelDuration = meter.createHistogram('model.call.duration', { unit: 's' });
   const modelInputTokens = meter.createCounter('model.tokens.input', { unit: '{token}' });
   const modelOutputTokens = meter.createCounter('model.tokens.output', { unit: '{token}' });
   const modelRetries = meter.createCounter('model.retries.total', { unit: '{retry}' });
   const modelFallbacks = meter.createCounter('model.fallbacks.total', { unit: '{fallback}' });
   const modelCircuitEvents = meter.createCounter('model.circuit.total', { unit: '{event}' });
-  const agentPhaseDuration = meter.createHistogram('agent.phase.duration', { unit: 'ms' });
+  const agentPhaseDuration = meter.createHistogram('agent.phase.duration', { unit: 's' });
   const toolCalls = meter.createCounter('tool.calls.total', { unit: '{call}' });
-  const toolDuration = meter.createHistogram('tool.call.duration', { unit: 'ms' });
-  const retrievalDuration = meter.createHistogram('knowledge.retrieval.duration', { unit: 'ms' });
+  const toolDuration = meter.createHistogram('tool.call.duration', { unit: 's' });
+  const retrievalDuration = meter.createHistogram('knowledge.retrieval.duration', { unit: 's' });
   const knowledgeOperationDuration = meter.createHistogram('knowledge.operation.duration', {
-    unit: 'ms',
+    unit: 's',
   });
   const exportFailures = meter.createCounter('telemetry.export.failures', { unit: '{failure}' });
-  const memoryDuration = meter.createHistogram('memory.operation.duration', { unit: 'ms' });
+  const memoryDuration = meter.createHistogram('memory.operation.duration', { unit: 's' });
 
   return {
     memoryOperation(measurement) {
-      safeRecord(memoryDuration, nonNegative(measurement.durationMs), {
+      safeRecord(memoryDuration, secondsFromMilliseconds(measurement.durationMs), {
         operation: measurement.operation,
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       });
@@ -156,7 +160,7 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
         'http.response.status_class': enumerated(measurement.status, STATUS_CLASSES, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       };
-      safeRecord(httpDuration, nonNegative(measurement.durationMs), labels);
+      safeRecord(httpDuration, secondsFromMilliseconds(measurement.durationMs), labels);
       safeAdd(httpRequests, 1, labels);
     },
     sseConnection(measurement) {
@@ -179,12 +183,12 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
       if (measurement.outcome === 'started') safeAdd(queueStarted, 1, labels);
       if (measurement.outcome === 'completed') safeAdd(queueCompleted, 1, labels);
       if (measurement.outcome === 'failed') safeAdd(queueFailed, 1, labels);
-      if (measurement.outcome !== 'started') safeRecord(queueDuration, nonNegative(measurement.durationMs), {
+      if (measurement.outcome !== 'started') safeRecord(queueDuration, secondsFromMilliseconds(measurement.durationMs), {
         ...labels, outcome: measurement.outcome === 'completed' ? 'success' : 'failure',
       });
     },
     queueWait(measurement) {
-      safeRecord(queueWaitDuration, nonNegative(measurement.waitMs), {
+      safeRecord(queueWaitDuration, secondsFromMilliseconds(measurement.waitMs), {
         queue: enumerated(measurement.queue, QUEUES, 'other'),
         'job.kind': enumerated(measurement.job, JOBS, 'other'),
       });
@@ -202,7 +206,7 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       };
       safeAdd(modelCalls, 1, labels);
-      safeRecord(modelDuration, nonNegative(measurement.durationMs), labels);
+      safeRecord(modelDuration, secondsFromMilliseconds(measurement.durationMs), labels);
       const inputTokens = positiveInteger(measurement.inputTokens);
       const outputTokens = positiveInteger(measurement.outputTokens);
       const retries = positiveInteger(measurement.retries);
@@ -231,7 +235,7 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
       });
     },
     agentPhase(measurement) {
-      safeRecord(agentPhaseDuration, nonNegative(measurement.durationMs), {
+      safeRecord(agentPhaseDuration, secondsFromMilliseconds(measurement.durationMs), {
         phase: enumerated(measurement.phase, AGENT_PHASES, 'other'),
         outcome: enumerated(measurement.outcome, PHASE_OUTCOMES, 'failure'),
       });
@@ -244,17 +248,17 @@ export function createCoreMetrics(meter: Meter): CoreMetrics {
       };
       safeAdd(toolCalls, 1, labels);
       if (measurement.durationMs !== undefined) {
-        safeRecord(toolDuration, nonNegative(measurement.durationMs), labels);
+        safeRecord(toolDuration, secondsFromMilliseconds(measurement.durationMs), labels);
       }
     },
     knowledgeRetrieval(measurement) {
-      safeRecord(retrievalDuration, nonNegative(measurement.durationMs), {
+      safeRecord(retrievalDuration, secondsFromMilliseconds(measurement.durationMs), {
         operation: enumerated(measurement.operation, KNOWLEDGE_OPERATIONS, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       });
     },
     knowledgeOperation(measurement) {
-      safeRecord(knowledgeOperationDuration, nonNegative(measurement.durationMs), {
+      safeRecord(knowledgeOperationDuration, secondsFromMilliseconds(measurement.durationMs), {
         operation: enumerated(measurement.operation, KNOWLEDGE_OPERATIONS, 'other'),
         outcome: enumerated(measurement.outcome, OUTCOMES, 'other'),
       });
