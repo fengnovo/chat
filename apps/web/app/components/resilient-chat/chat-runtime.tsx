@@ -25,16 +25,18 @@ import { ResilientSession } from '@/app/lib/session';
 import { scheduleMicrotask } from '@/app/lib/schedule-microtask';
 
 import { AgentStatusPanel } from './agent-status';
-import { fetchKnowledgeBases, fetchSessionFiles, fetchSessionPage, responseError } from './api';
+import {
+  fetchKnowledgeBases,
+  fetchSessionFiles,
+  fetchSessionPage,
+  responseError,
+} from './api';
 import { Composer } from './composer';
 import { Lightbox, type LightboxImage } from './lightbox';
 import { initialTrace } from './constants';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
 import { TaskFailureNotice, friendlyError } from './failure-notice';
-import {
-  DEFAULT_FILES_WIDTH,
-  FilePanel,
-} from './file-panel';
+import { DEFAULT_FILES_WIDTH, FilePanel } from './file-panel';
 import type { TouchedFile } from './file-panel';
 import { Icon } from './icon';
 import { Message, ThinkingRow } from './message';
@@ -93,14 +95,14 @@ const CONTINUATION_PLACEHOLDER = '继续';
 
 function AppSkeleton() {
   return (
-    <main className="app-shell is-loading" aria-label="正在加载可靠聊天">
-      <aside className="sidebar skeleton-panel" />
-      <section className="chat-column">
-        <div className="topbar skeleton-line" />
-        <div className="skeleton-center">
-          <div className="skeleton-orb" />
-          <div className="skeleton-copy" />
-          <div className="skeleton-copy short" />
+    <main className='app-shell is-loading' aria-label='正在加载可靠聊天'>
+      <aside className='sidebar skeleton-panel' />
+      <section className='chat-column'>
+        <div className='topbar skeleton-line' />
+        <div className='skeleton-center'>
+          <div className='skeleton-orb' />
+          <div className='skeleton-copy' />
+          <div className='skeleton-copy short' />
         </div>
       </section>
     </main>
@@ -152,11 +154,12 @@ function ChatRuntime() {
   /** 本次运行累计输入 tokens（近似当前上下文占用），随 usage.updated 累加。 */
   const [contextInputTokens, setContextInputTokens] = useState(0);
   /** run.started 携带的运行时能力快照：可调用 MCP 工具、skills 与上下文配置。 */
-  const [runCapabilities, setRunCapabilities] = useState<RunCapabilities | null>(
-    null,
-  );
+  const [runCapabilities, setRunCapabilities] =
+    useState<RunCapabilities | null>(null);
   /** 模型思考过程，按 runId 独立存储，避免被 AI SDK 流式 text-delta 更新覆盖。 */
-  const [reasoningByRunId, setReasoningByRunId] = useState<Map<string, string>>(new Map());
+  const [reasoningByRunId, setReasoningByRunId] = useState<Map<string, string>>(
+    new Map(),
+  );
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
@@ -164,9 +167,12 @@ function ChatRuntime() {
   /** 上下文压缩进行中：deepagents 摘要阶段显示流光指示器，不展示摘要正文。 */
   const [contextCompressing, setContextCompressing] = useState(false);
   /** 续跑占位 user 消息的 id 集合：运行期间隐藏，run 结束后从 store 中移除。 */
-  const [hiddenContinuationIds, setHiddenContinuationIds] =
-    useState<ReadonlySet<string>>(new Set());
-  const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(null);
+  const [hiddenContinuationIds, setHiddenContinuationIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(
+    null,
+  );
   const [restoredSessions] = useState(() =>
     readSessionCache<WebSessionSummary>(userId),
   );
@@ -181,11 +187,17 @@ function ChatRuntime() {
     () => restoredSessions?.nextCursor ?? null,
   );
   const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
-  const [switchingSessionId, setSwitchingSessionId] = useState<string | null>(null);
+  const [switchingSessionId, setSwitchingSessionId] = useState<string | null>(
+    null,
+  );
   const [creatingSession, setCreatingSession] = useState(false);
-  const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(null);
+  const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(
+    null,
+  );
   const [sessionDialogBusy, setSessionDialogBusy] = useState(false);
-  const [sessionDialogError, setSessionDialogError] = useState<string | null>(null);
+  const [sessionDialogError, setSessionDialogError] = useState<string | null>(
+    null,
+  );
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [aiServiceOpen, setAiServiceOpen] = useState(false);
@@ -209,9 +221,13 @@ function ChatRuntime() {
       /* localStorage 不可用时静默，仅本会话生效 */
     }
   }, [highlightMarkdown]);
-  const [knowledgeBases, setKnowledgeBases] = useState<Array<{ id: string; name: string; status?: string }>>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<
+    Array<{ id: string; name: string; status?: string }>
+  >([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>(() =>
-    typeof window === 'undefined' ? [] : knowledgeBaseIdsForChat(conversation.chatId) ?? [],
+    typeof window === 'undefined'
+      ? []
+      : (knowledgeBaseIdsForChat(conversation.chatId) ?? []),
   );
   const sessionRef = useRef(new ResilientSession());
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -248,14 +264,21 @@ function ChatRuntime() {
       setSessions(page.data);
       setSessionsNextCursor(page.nextCursor);
       setSessionsError(null);
-      writeSessionCache({ data: page.data, nextCursor: page.nextCursor }, userId);
+      writeSessionCache(
+        { data: page.data, nextCursor: page.nextCursor },
+        userId,
+      );
     } catch {
       setSessionsError('历史记录加载失败');
     } finally {
       setSessionsLoaded(true);
     }
   }, [userId]);
-  useEffect(() => { void fetchKnowledgeBases().then(setKnowledgeBases).catch(() => undefined); }, []);
+  useEffect(() => {
+    void fetchKnowledgeBases()
+      .then(setKnowledgeBases)
+      .catch(() => undefined);
+  }, []);
   useEffect(() => {
     scheduleMicrotask(() => {
       setKnowledgeBaseIds(knowledgeBaseIdsForChat(conversation.chatId) ?? []);
@@ -282,10 +305,13 @@ function ChatRuntime() {
     [conversation.chatId],
   );
 
-  const handleChangeKnowledgeBases = useCallback((ids: string[]) => {
-    persistKnowledgeBaseIds(conversation.chatId, ids);
-    setKnowledgeBaseIds(ids);
-  }, [conversation.chatId]);
+  const handleChangeKnowledgeBases = useCallback(
+    (ids: string[]) => {
+      persistKnowledgeBaseIds(conversation.chatId, ids);
+      setKnowledgeBaseIds(ids);
+    },
+    [conversation.chatId],
+  );
 
   // 当前会话的历史文件记录。运行结束后会重新拉取（refreshHistoryFiles），
   // 否则新一轮 run 一开始清空实时工具记录时，上一轮生成的文件会从面板里消失。
@@ -327,58 +353,61 @@ function ChatRuntime() {
 
   const transport = useMemo(() => {
     return new WorkflowChatTransport<ResilientMessage>({
-        api: '/api/chat',
-        fetch: createTrackedFetch(userId),
-        maxConsecutiveErrors: 3,
-        initialStartIndex: 0,
-        prepareSendMessagesRequest: ({ id, messages, trigger, body }) => ({
-          body: {
-            messages,
-            chat_id: id,
-            trigger,
-            ...(body?.continuation === true ? { continuation: true } : {}),
-            ...(Array.isArray(body?.attachment_ids) && body.attachment_ids.length > 0
-              ? { attachment_ids: body.attachment_ids }
-              : {}),
-            ...(knowledgeBaseIds.length ? { knowledge_base_ids: knowledgeBaseIds } : {}),
+      api: '/api/chat',
+      fetch: createTrackedFetch(userId),
+      maxConsecutiveErrors: 3,
+      initialStartIndex: 0,
+      prepareSendMessagesRequest: ({ id, messages, trigger, body }) => ({
+        body: {
+          messages,
+          chat_id: id,
+          trigger,
+          ...(body?.continuation === true ? { continuation: true } : {}),
+          ...(Array.isArray(body?.attachment_ids) &&
+          body.attachment_ids.length > 0
+            ? { attachment_ids: body.attachment_ids }
+            : {}),
+          ...(knowledgeBaseIds.length
+            ? { knowledge_base_ids: knowledgeBaseIds }
+            : {}),
+        },
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      prepareReconnectToStreamRequest: ({ api }) => {
+        const persistedRun = readPersistedRun(userId);
+        const pendingRun =
+          persistedRun?.pending && persistedRun.chatId === conversation.chatId
+            ? persistedRun
+            : conversation.resumeRun?.pending
+              ? conversation.resumeRun
+              : null;
+        if (!pendingRun) return { api };
+        return {
+          api: `/api/chat/${encodeURIComponent(pendingRun.runId)}/stream`,
+          headers: { 'x-page-resume': '1' }, // 固定让服务器从0开始全量重放
+        };
+      },
+      onChatSendMessage: (response, options) => {
+        const runId = response.headers.get('x-workflow-run-id');
+        if (!runId) return;
+        writePersistedRun(
+          {
+            chatId: options.chatId,
+            runId,
+            chunkIndex: 0,
+            messages: options.messages,
+            pending: true,
           },
-          headers: { 'Content-Type': 'application/json' },
-        }),
-        prepareReconnectToStreamRequest: ({ api }) => {
-          const persistedRun = readPersistedRun(userId);
-          const pendingRun =
-            persistedRun?.pending && persistedRun.chatId === conversation.chatId
-              ? persistedRun
-              : conversation.resumeRun?.pending
-                ? conversation.resumeRun
-                : null;
-          if (!pendingRun) return { api };
-          return {
-            api: `/api/chat/${encodeURIComponent(pendingRun.runId)}/stream`,
-            headers: { 'x-page-resume': '1' },
-          };
-        },
-        onChatSendMessage: (response, options) => {
-          const runId = response.headers.get('x-workflow-run-id');
-          if (!runId) return;
-          writePersistedRun(
-            {
-              chatId: options.chatId,
-              runId,
-              chunkIndex: 0,
-              messages: options.messages,
-              pending: true,
-            },
-            userId,
-          );
-          void refreshSessions();
-        },
-        onChatEnd: ({ chunkIndex }) => {
-          const current = readPersistedRun(userId);
-          if (!current) return;
-          writePersistedRun({ ...current, chunkIndex }, userId);
-        },
-      });
+          userId,
+        );
+        void refreshSessions();
+      },
+      onChatEnd: ({ chunkIndex }) => {
+        const current = readPersistedRun(userId);
+        if (!current) return;
+        writePersistedRun({ ...current, chunkIndex }, userId);
+      },
+    });
   }, [
     userId,
     conversation.chatId,
@@ -400,7 +429,9 @@ function ChatRuntime() {
   } = useChat<ResilientMessage>({
     id: conversation.chatId,
     messages: conversation.messages,
-    resume: Boolean(conversation.resumeRun?.pending && conversation.resumeRun.runId),
+    resume: Boolean(
+      conversation.resumeRun?.pending && conversation.resumeRun.runId,
+    ),
     throttle: 24,
     transport,
     onData: (part) => {
@@ -596,7 +627,12 @@ function ChatRuntime() {
       if (isAbort) {
         setTrace((current) => [
           ...current.slice(-9),
-          localEvent('transport', 'warning', '生成已由用户停止', '已保留当前可见内容'),
+          localEvent(
+            'transport',
+            'warning',
+            '生成已由用户停止',
+            '已保留当前可见内容',
+          ),
         ]);
       }
     },
@@ -625,7 +661,8 @@ function ChatRuntime() {
     if (!isPageVisible) return;
     const persisted = readPersistedRun(userId);
     const hasActiveRun =
-      (status === 'submitted' || status === 'streaming') ||
+      status === 'submitted' ||
+      status === 'streaming' ||
       (persisted?.pending && persisted.chatId === conversation.chatId);
     if (!hasActiveRun || !persisted) return;
 
@@ -686,7 +723,10 @@ function ChatRuntime() {
         setSessions(page.data);
         setSessionsNextCursor(page.nextCursor);
         setSessionsError(null);
-        writeSessionCache({ data: page.data, nextCursor: page.nextCursor }, userId);
+        writeSessionCache(
+          { data: page.data, nextCursor: page.nextCursor },
+          userId,
+        );
       })
       .catch((caught: unknown) => {
         if (
@@ -775,12 +815,7 @@ function ChatRuntime() {
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [
-    sessionDialog,
-    sessionDialogBusy,
-    sessionMenuId,
-    sidebarOpen,
-  ]);
+  }, [sessionDialog, sessionDialogBusy, sessionMenuId, sidebarOpen]);
 
   // 会话右键菜单（重命名/删除）打开时，点击菜单和"…"按钮以外的区域立即关闭。
   useEffect(() => {
@@ -845,8 +880,9 @@ function ChatRuntime() {
   const latestNarrationText = useMemo(() => {
     const latestNarration = [...agentActivity.entries]
       .reverse()
-      .find((entry): entry is Extract<AgentActivityEntry, { kind: 'narration' }> =>
-        entry.kind === 'narration',
+      .find(
+        (entry): entry is Extract<AgentActivityEntry, { kind: 'narration' }> =>
+          entry.kind === 'narration',
       );
     return latestNarration?.text ?? null;
   }, [agentActivity.entries]);
@@ -861,7 +897,11 @@ function ChatRuntime() {
 
   // 执行面板：嵌入本轮 assistant 消息体顶部，与正文同列、顶边不高于头像。
   const processPanel = (
-    <AgentStatusPanel busy={isBusy} status={agentActivity} subagents={subagentCards} />
+    <AgentStatusPanel
+      busy={isBusy}
+      status={agentActivity}
+      subagents={subagentCards}
+    />
   );
 
   // 从工具调用记录里提取 AI 操作过的文件，按路径去重，保留最后一次操作的内容。
@@ -922,7 +962,9 @@ function ChatRuntime() {
     const match =
       touchedFiles.find((file) => file.path === normalized) ??
       touchedFiles.find((file) => file.path.endsWith(`/${normalized}`)) ??
-      touchedFiles.find((file) => file.path.split('/').pop() === normalized.split('/').pop());
+      touchedFiles.find(
+        (file) => file.path.split('/').pop() === normalized.split('/').pop(),
+      );
     if (match) {
       setSelectedFilePath(match.path);
     } else {
@@ -1032,11 +1074,18 @@ function ChatRuntime() {
     setGeneratedTokens(0);
     sessionRef.current.addUserMessage(trimmed);
     setTrace([
-      localEvent('request', 'running', '正在提交新消息', 'useChat 已锁定输入并创建请求'),
+      localEvent(
+        'request',
+        'running',
+        '正在提交新消息',
+        'useChat 已锁定输入并创建请求',
+      ),
     ]);
     await sendMessage(
       files.length > 0 ? { text: trimmed, files } : { text: trimmed },
-      attachmentIds.length > 0 ? { body: { attachment_ids: attachmentIds } } : undefined,
+      attachmentIds.length > 0
+        ? { body: { attachment_ids: attachmentIds } }
+        : undefined,
     );
   }
 
@@ -1230,7 +1279,9 @@ function ChatRuntime() {
       }
       const updated = (await response.json()) as WebSessionSummary;
       setSessions((current) =>
-        current.map((session) => (session.id === updated.id ? updated : session)),
+        current.map((session) =>
+          session.id === updated.id ? updated : session,
+        ),
       );
       setSessionDialog(null);
       setNotice('会话名称已更新');
@@ -1263,9 +1314,7 @@ function ChatRuntime() {
       const deleted = sessionDialog.session;
       const wasActive = deleted.externalKey === conversation.chatId;
       // 列表按最近更新排序，过滤后的第一个就是左侧第一项。
-      const remaining = sessions.filter(
-        (session) => session.id !== deleted.id,
-      );
+      const remaining = sessions.filter((session) => session.id !== deleted.id);
       setSessions(remaining);
       setSessionDialog(null);
       if (wasActive) {
@@ -1311,13 +1360,16 @@ function ChatRuntime() {
         },
       );
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as
-          | { error?: string }
-          | null;
+        const payload = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
         const code = payload?.error ?? `HTTP ${response.status}`;
         // 孤儿审批：run 已不在等待状态（如 Worker 重启导致审批悬挂），
         // 卡片永远无法成功提交，自动移除避免卡死交互。
-        if (code === 'run_not_waiting_for_approval' || code === 'run_not_found') {
+        if (
+          code === 'run_not_waiting_for_approval' ||
+          code === 'run_not_found'
+        ) {
           setPendingInterrupt(null);
           setNotice('该任务已结束，待审批卡片已自动移除');
           return;
@@ -1368,7 +1420,12 @@ function ChatRuntime() {
       }
       setTrace((current) => [
         ...current.slice(-11),
-        localEvent('transport', 'warning', '正在取消运行', '取消信号已发送至 Worker'),
+        localEvent(
+          'transport',
+          'warning',
+          '正在取消运行',
+          '取消信号已发送至 Worker',
+        ),
       ]);
       if (response.status === 404) await stop();
     } catch {
@@ -1385,7 +1442,7 @@ function ChatRuntime() {
   const persistedForRecovery = error ? readPersistedRun(userId) : null;
   const canResumeConnection = Boolean(
     persistedForRecovery?.pending &&
-      persistedForRecovery.chatId === conversation.chatId,
+    persistedForRecovery.chatId === conversation.chatId,
   );
 
   return (
@@ -1398,103 +1455,101 @@ function ChatRuntime() {
       }
     >
       {!sidebarHidden && (
-      <Sidebar
-        activeChatId={conversation.chatId}
-        busy={isBusy || creatingSession}
-        collapsed={sidebarCollapsed}
-        creating={creatingSession}
-        error={sessionsError}
-        loaded={sessionsLoaded}
-        hasMore={Boolean(sessionsNextCursor)}
-        loadingMore={loadingMoreSessions}
-        menuSessionId={sessionMenuId}
-        inactive={Boolean(sessionDialog)}
-        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
-        onDelete={(session) => {
-          dialogReturnFocusRef.current = document.activeElement
-            ?.closest('.session-item')
-            ?.querySelector<HTMLElement>('.session-more') ?? null;
-          setSessionMenuId(null);
-          setSessionDialogError(null);
-          setSessionDialog({ kind: 'delete', session });
-        }}
-        onLoadMore={() => void loadMoreSessions()}
-        onMenu={setSessionMenuId}
-        onClose={() => setSidebarOpen(false)}
-        onNewChat={() => {
-          setSidebarOpen(false);
-          void handleNewChat();
-        }}
-        onRename={(session) => {
-          dialogReturnFocusRef.current = document.activeElement
-            ?.closest('.session-item')
-            ?.querySelector<HTMLElement>('.session-more') ?? null;
-          setSessionMenuId(null);
-          setSessionDialogError(null);
-          setSessionDialog({ kind: 'rename', session });
-        }}
-        onRefresh={() => void refreshSessions()}
-        onSelect={(session) => {
-          setSidebarOpen(false);
-          void selectSession(session);
-        }}
-        sessions={sessions}
-        open={sidebarOpen}
-        switchingSessionId={switchingSessionId}
-      />
+        <Sidebar
+          activeChatId={conversation.chatId}
+          busy={isBusy || creatingSession}
+          collapsed={sidebarCollapsed}
+          creating={creatingSession}
+          error={sessionsError}
+          loaded={sessionsLoaded}
+          hasMore={Boolean(sessionsNextCursor)}
+          loadingMore={loadingMoreSessions}
+          menuSessionId={sessionMenuId}
+          inactive={Boolean(sessionDialog)}
+          onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+          onDelete={(session) => {
+            dialogReturnFocusRef.current =
+              document.activeElement
+                ?.closest('.session-item')
+                ?.querySelector<HTMLElement>('.session-more') ?? null;
+            setSessionMenuId(null);
+            setSessionDialogError(null);
+            setSessionDialog({ kind: 'delete', session });
+          }}
+          onLoadMore={() => void loadMoreSessions()}
+          onMenu={setSessionMenuId}
+          onClose={() => setSidebarOpen(false)}
+          onNewChat={() => {
+            setSidebarOpen(false);
+            void handleNewChat();
+          }}
+          onRename={(session) => {
+            dialogReturnFocusRef.current =
+              document.activeElement
+                ?.closest('.session-item')
+                ?.querySelector<HTMLElement>('.session-more') ?? null;
+            setSessionMenuId(null);
+            setSessionDialogError(null);
+            setSessionDialog({ kind: 'rename', session });
+          }}
+          onRefresh={() => void refreshSessions()}
+          onSelect={(session) => {
+            setSidebarOpen(false);
+            void selectSession(session);
+          }}
+          sessions={sessions}
+          open={sidebarOpen}
+          switchingSessionId={switchingSessionId}
+        />
       )}
 
       {sidebarHidden && (
         <button
-          aria-label="展开侧边栏"
-          className="sidebar-restore-fab"
-          type="button"
+          aria-label='展开侧边栏'
+          className='sidebar-restore-fab'
+          type='button'
           onClick={() => setSidebarHidden(false)}
         >
-          <Icon name="menu" size={18} />
+          <Icon name='menu' size={18} />
         </button>
       )}
 
       {sidebarOpen && (
         <button
-          aria-label="关闭历史对话"
-          className="sidebar-scrim"
-          type="button"
+          aria-label='关闭历史对话'
+          className='sidebar-scrim'
+          type='button'
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
       <section
-        className="chat-column"
-        inert={
-          sidebarOpen || Boolean(sessionDialog)
-            ? true
-            : undefined
-        }
+        className='chat-column'
+        inert={sidebarOpen || Boolean(sessionDialog) ? true : undefined}
       >
-        <header className="topbar">
-          <div className="topbar-title">
+        <header className='topbar'>
+          <div className='topbar-title'>
             <button
-              className="mobile-icon-button"
+              className='mobile-icon-button'
               ref={mobileMenuButtonRef}
-              type="button"
-              aria-label="打开历史对话"
+              type='button'
+              aria-label='打开历史对话'
               aria-expanded={sidebarOpen}
               onClick={() => setSidebarOpen(true)}
             >
-              <Icon name="menu" />
+              <Icon name='menu' />
             </button>
           </div>
-          <div className="topbar-actions">
+          <div className='topbar-actions'>
             <button
-              className="icon-button"
-              type="button"
+              className='icon-button'
+              type='button'
               aria-label={filesOpen ? '隐藏文件浏览器' : '显示文件浏览器'}
               aria-expanded={filesOpen}
               title={filesOpen ? '隐藏文件浏览器' : '文件浏览器'}
               onClick={() => setFilesOpen((current) => !current)}
             >
-              <Icon name="folder" size={16} />
+              <Icon name='folder' size={16} />
             </button>
             {/* <button
               className="icon-button"
@@ -1505,76 +1560,80 @@ function ChatRuntime() {
             >
               <Icon name="panel" size={16} />
             </button> */}
-            <UserMenu onAiServiceClick={() => setAiServiceOpen((open) => !open)} />
+            <UserMenu
+              onAiServiceClick={() => setAiServiceOpen((open) => !open)}
+            />
           </div>
         </header>
 
         <div
-          className="conversation"
-          aria-live="polite"
+          className='conversation'
+          aria-live='polite'
           ref={conversationRef}
           onScroll={handleConversationScroll}
         >
           {hasConversation && (
-            <div className="message-list" ref={messageListRef}>
+            <div className='message-list' ref={messageListRef}>
               {messages.map((message, index) =>
                 hiddenContinuationIds.has(message.id) ? null : (
-                <Message
-                  copied={copiedMessage === message.id}
-                  dismissedCards={dismissedCards}
-                  header={
-                    index === lastAssistantIndex ? processPanel : null
-                  }
-                  highlight={highlightMarkdown}
-                  key={message.id}
-                  message={message}
-                  onBoundaryError={() => {
-                    setTrace((current) => [
-                      ...current.slice(-9),
-                      localEvent(
-                        'verify',
-                        'warning',
-                        'AIBoundary 已隔离组件崩溃',
-                        '聊天主体保持可用，错误载荷已进入脱敏流程',
-                      ),
-                    ]);
-                  }}
-                  onCopy={copyMessage}
-                  onFileLinkClick={handleFileLinkClick}
-                  onPreviewPage={handlePreviewPage}
-                  onPreviewDiagram={(svg) =>
-                    setLightboxImage({ svg, filename: '图表预览' })
-                  }
-                  onPreviewImage={(url, filename) => setLightboxImage({ url, filename })}
-                  onDismissCard={(messageId) => {
-                    setDismissedCards((current) =>
-                      new Set(current).add(messageId),
-                    );
-                  }}
-                  runTokens={
-                    !isBusy &&
-                    message.role === 'assistant' &&
-                    index === lastAssistantIndex
-                      ? agentActivity.tokens
-                      : 0
-                  }
-                  showWaitingDots={
-                    !(index === lastAssistantIndex && processPanelVisible)
-                  }
-                  streaming={
-                    isBusy &&
-                    message.id === lastMessage?.id &&
-                    message.role === 'assistant'
-                  }
-                  liveLabel={
-                    isBusy &&
-                    message.id === lastMessage?.id &&
-                    message.role === 'assistant'
-                      ? liveActivityLabel
-                      : null
-                  }
-                  reasoning={reasoningByRunId.get(message.metadata?.runId ?? '') ?? ''}
-                />
+                  <Message
+                    copied={copiedMessage === message.id}
+                    dismissedCards={dismissedCards}
+                    header={index === lastAssistantIndex ? processPanel : null}
+                    highlight={highlightMarkdown}
+                    key={message.id}
+                    message={message}
+                    onBoundaryError={() => {
+                      setTrace((current) => [
+                        ...current.slice(-9),
+                        localEvent(
+                          'verify',
+                          'warning',
+                          'AIBoundary 已隔离组件崩溃',
+                          '聊天主体保持可用，错误载荷已进入脱敏流程',
+                        ),
+                      ]);
+                    }}
+                    onCopy={copyMessage}
+                    onFileLinkClick={handleFileLinkClick}
+                    onPreviewPage={handlePreviewPage}
+                    onPreviewDiagram={(svg) =>
+                      setLightboxImage({ svg, filename: '图表预览' })
+                    }
+                    onPreviewImage={(url, filename) =>
+                      setLightboxImage({ url, filename })
+                    }
+                    onDismissCard={(messageId) => {
+                      setDismissedCards((current) =>
+                        new Set(current).add(messageId),
+                      );
+                    }}
+                    runTokens={
+                      !isBusy &&
+                      message.role === 'assistant' &&
+                      index === lastAssistantIndex
+                        ? agentActivity.tokens
+                        : 0
+                    }
+                    showWaitingDots={
+                      !(index === lastAssistantIndex && processPanelVisible)
+                    }
+                    streaming={
+                      isBusy &&
+                      message.id === lastMessage?.id &&
+                      message.role === 'assistant'
+                    }
+                    liveLabel={
+                      isBusy &&
+                      message.id === lastMessage?.id &&
+                      message.role === 'assistant'
+                        ? liveActivityLabel
+                        : null
+                    }
+                    reasoning={
+                      reasoningByRunId.get(message.metadata?.runId ?? '') ?? ''
+                    }
+                  />
                 ),
               )}
               {status === 'submitted' && !hasAssistantPlaceholder && (
@@ -1603,25 +1662,31 @@ function ChatRuntime() {
                 />
               )}
               {contextCompressing && (
-                <div className="context-compressing" role="status" aria-live="polite">
-                  <span className="context-compressing-shimmer" />
-                  <span className="context-compressing-text">正在压缩上下文…</span>
+                <div
+                  className='context-compressing'
+                  role='status'
+                  aria-live='polite'
+                >
+                  <span className='context-compressing-shimmer' />
+                  <span className='context-compressing-text'>
+                    正在压缩上下文…
+                  </span>
                 </div>
               )}
               {error && (
-                <div className="error-banner" role="alert">
-                  <div className="error-icon">
-                    <Icon name="triangle" size={19} />
+                <div className='error-banner' role='alert'>
+                  <div className='error-icon'>
+                    <Icon name='triangle' size={19} />
                   </div>
                   <div>
                     <strong>与 Agent 的连接暂时中断</strong>
                     <p>{friendlyError(error)}</p>
                   </div>
                   <button
-                    type="button"
+                    type='button'
                     onClick={() => void handleConnectionRecovery()}
                   >
-                    <Icon name="refresh" size={16} />
+                    <Icon name='refresh' size={16} />
                     {canResumeConnection ? '重新连接' : '重新提交'}
                   </button>
                 </div>
@@ -1649,9 +1714,7 @@ function ChatRuntime() {
           }
           disabled={Boolean(error) || Boolean(pendingInterrupt)}
           disabledPlaceholder={
-            pendingInterrupt
-              ? '请先处理上方待办'
-              : '请先恢复与 Agent 的连接'
+            pendingInterrupt ? '请先处理上方待办' : '请先恢复与 Agent 的连接'
           }
           input={input}
           isBusy={isBusy}
@@ -1659,7 +1722,9 @@ function ChatRuntime() {
           knowledgeBaseIds={knowledgeBaseIds}
           onChange={setInput}
           onChangeKnowledgeBases={handleChangeKnowledgeBases}
-          onPreviewImage={(url, filename) => setLightboxImage({ url, filename })}
+          onPreviewImage={(url, filename) =>
+            setLightboxImage({ url, filename })
+          }
           onStop={() => void handleStop()}
           onSubmit={handleSubmit}
           onSuggestion={submitText}
@@ -1667,7 +1732,6 @@ function ChatRuntime() {
           suggestions={suggestions}
           todos={agentTodos}
         />
-
       </section>
 
       <TracePanel
@@ -1684,10 +1748,21 @@ function ChatRuntime() {
       {filesOpen && (
         <FilePanel
           files={touchedFiles}
-          onClose={() => { setFilesOpen(false); setSidebarHidden(false); }}
+          onClose={() => {
+            setFilesOpen(false);
+            setSidebarHidden(false);
+          }}
           onResize={setFilesWidth}
-          onResetWidth={() => { setFilesWide(false); setSidebarHidden(false); setFilesWidth(DEFAULT_FILES_WIDTH); }}
-          onExpand={() => { setFilesWide(true); setSidebarHidden(true); setFilesWidth(Math.round(window.innerWidth * 0.7)); }}
+          onResetWidth={() => {
+            setFilesWide(false);
+            setSidebarHidden(false);
+            setFilesWidth(DEFAULT_FILES_WIDTH);
+          }}
+          onExpand={() => {
+            setFilesWide(true);
+            setSidebarHidden(true);
+            setFilesWidth(Math.round(window.innerWidth * 0.7));
+          }}
           isWide={filesWide}
           onToggleWide={() => {
             const next = !filesWide;
@@ -1703,7 +1778,10 @@ function ChatRuntime() {
           selectedPath={selectedFilePath}
           onSelectPath={setSelectedFilePath}
           onHideSidebar={() => setSidebarHidden(true)}
-          sessionId={sessions.find((s) => s.externalKey === conversation.chatId)?.externalKey ?? null}
+          sessionId={
+            sessions.find((s) => s.externalKey === conversation.chatId)
+              ?.externalKey ?? null
+          }
           openBuildPreview={openBuildPreviewCount}
         />
       )}
@@ -1722,8 +1800,8 @@ function ChatRuntime() {
       )}
 
       {notice && (
-        <div className="toast" role="status">
-          <Icon name="check" size={16} />
+        <div className='toast' role='status'>
+          <Icon name='check' size={16} />
           {notice}
         </div>
       )}

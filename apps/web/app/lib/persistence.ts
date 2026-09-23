@@ -47,10 +47,14 @@ export function readPersistedRun(userId: string): PersistedRun | null {
 }
 
 export function writePersistedRun(run: PersistedRun, userId: string) {
-  window.localStorage.setItem(runStorageKey(userId), JSON.stringify(run));
+  window.localStorage.setItem(runStorageKey(userId), JSON.stringify(run)); // 聊天SSE收到的 data保存为chunkIndex
 }
 
-export function updatePersistedCursor(userId: string, runId: string, chunkIndex: number) {
+export function updatePersistedCursor(
+  userId: string,
+  runId: string,
+  chunkIndex: number,
+) {
   const current = readPersistedRun(userId);
   if (!current || current.runId !== runId) return;
   writePersistedRun({ ...current, chunkIndex }, userId);
@@ -92,10 +96,16 @@ export function readSessionCache<T>(userId: string): SessionCache<T> | null {
   }
 }
 
-export function writeSessionCache(cache: SessionCache<unknown>, userId: string) {
+export function writeSessionCache(
+  cache: SessionCache<unknown>,
+  userId: string,
+) {
   memorySessionCache.set(userId, cache);
   try {
-    window.sessionStorage.setItem(sessionStorageKey(userId), JSON.stringify(cache));
+    window.sessionStorage.setItem(
+      sessionStorageKey(userId),
+      JSON.stringify(cache),
+    );
   } catch {
     // 隐私模式或超出配额时忽略，下次挂载重新拉取即可
   }
