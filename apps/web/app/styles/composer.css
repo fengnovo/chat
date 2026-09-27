@@ -143,6 +143,18 @@
   border-color: var(--red);
 }
 
+/* 图片卡片：四边留白对称，缩略图水平竖直居中，关闭按钮盖在图片右上角 */
+.composer-attachment:has(.composer-attachment-thumb-button) {
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+}
+
+.composer-attachment:has(.composer-attachment-thumb-button) .composer-attachment-remove {
+  right: 4px;
+  top: 4px;
+}
+
 .composer-attachment-thumb-button {
   background: none;
   border: 0;
@@ -240,6 +252,119 @@
 
 .composer-attachment-remove:hover {
   background: var(--red);
+}
+
+/* 哈希校验 / 上传进度：盖在缩略图或文件条上，底部细进度条 */
+.composer-attachment-progress {
+  align-items: center;
+  background: rgb(30 25 43 / 45%);
+  border-radius: 7px;
+  bottom: 5px;
+  display: flex;
+  justify-content: center;
+  left: 5px;
+  position: absolute;
+  top: 5px;
+  width: 48px;
+}
+
+.composer-attachment-file ~ .composer-attachment-progress {
+  right: 22px;
+  width: auto;
+}
+
+.composer-attachment-progress::after {
+  background: rgb(255 255 255 / 22%);
+  border-radius: 999px;
+  bottom: 4px;
+  content: '';
+  height: 3px;
+  left: 6px;
+  position: absolute;
+  right: 6px;
+}
+
+.composer-attachment-progress-bar {
+  background: #b5a8ff;
+  border-radius: 999px;
+  bottom: 4px;
+  height: 3px;
+  left: 6px;
+  max-width: calc(100% - 12px);
+  position: absolute;
+  transition: width 120ms ease-out;
+  z-index: 1;
+}
+
+.composer-attachment-progress-text {
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: center;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 60%);
+}
+
+/* 秒传 / 本地预览徽章 */
+.composer-attachment-badges {
+  display: inline-flex;
+  gap: 3px;
+  left: 5px;
+  position: absolute;
+  top: 5px;
+  z-index: 2;
+}
+
+.composer-badge {
+  align-items: center;
+  background: rgb(30 25 43 / 78%);
+  border: 0;
+  border-radius: 5px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+button.composer-badge {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button.composer-badge:hover {
+  background: rgb(30 25 43 / 92%);
+}
+
+.composer-badge.is-preview.is-active {
+  background: var(--violet);
+}
+
+/* 本地文档文本预览弹层：固定宽度，内部滚动，不撑动 composer */
+.composer-attachment-doc-preview {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(20 15 35 / 18%);
+  left: 0;
+  max-height: 160px;
+  overflow: hidden;
+  padding: 8px 10px;
+  position: absolute;
+  top: calc(100% + 6px);
+  width: 240px;
+  z-index: 30;
+}
+
+.composer-attachment-doc-preview > span {
+  color: var(--ink-soft);
+  display: block;
+  font-size: 11px;
+  line-height: 1.55;
+  max-height: 144px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* 知识库上浮多选弹层（交互参考右上角头像菜单） */

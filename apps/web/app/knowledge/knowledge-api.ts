@@ -1,4 +1,5 @@
 import { apiFetch } from '../components/resilient-chat/api';
+import { uploadFileWithWorker } from '../components/resilient-chat/upload-worker-client';
 import { detectDocumentMime } from './knowledge-helpers';
 
 export type KnowledgeVisibility = 'private' | 'tenant';
@@ -83,7 +84,7 @@ export type KnowledgeSearchResult = {
   retrievalId: string;
   citations: KnowledgeCitation[];
   relations: Array<{ source: string; relation: string; target: string; chunkIds: string[] }>;
-  stats: { vectorHits?: number; graphHops?: number; durationMs?: number; [key: string]: unknown };
+  stats: { vectorHits?: number; graphHops?: number; durationMs?: number;[key: string]: unknown };
 };
 
 // 目录导入时前端会在短时间内发出大量请求，被限流的请求按 Retry-After 退避后自动重放。
@@ -247,78 +248,31 @@ export async function listDocumentChunks(
   return { chunks: payload.data.map(normalizeChunk), total: payload.total };
 }
 
-/** 预签名上传 → PUT 到对象存储 → confirm 触发索引，与后端上传契约保持单一实现。 */
+/** Wasm 哈希 + 秒传去重 + 大文件分片直传，与 chat 附件共用同一条上传管线。 */
 export async function uploadKnowledgeDocument(kbId: string, file: File, options: { directory?: string } = {}): Promise<KnowledgeDocument> {
   return uploadKnowledgeEntity(kbId, file, { directory: options.directory, kind: 'document' }) as Promise<KnowledgeDocument>;
 }
 
-/** 通用上传工具：document / asset 共用同一套预签名 + confirm 流程。 */
+/** 通用上传工具：document / asset 共用同一套 init + confirm 流程。 */
 async function uploadKnowledgeEntity(
   kbId: string,
   file: File,
   options: { kind: 'document' | 'asset'; directory?: string; relPath?: string },
 ): Promise<KnowledgeDocument | KnowledgeAsset> {
-  const content = new Uint8Array(await file.arrayBuffer());
-  const digest = await crypto.subtle.digest('SHA-256', content);
-  const sha256 = [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+  // 浏览器对 .md 等扩展名常给空 MIME，按后端契约先修正再交给 Worker。
   const mime = detectDocumentMime(file.name, file.type);
-
-  const presign = await requestJson<{
-    document?: Record<string, unknown>;
-    asset?: Record<string, unknown>;
-    upload?: { uploadUrl?: string; url?: string; headers?: Record<string, string> };
-  }>(`/api/knowledge-bases/${kbId}/documents/uploads`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: file.name,
-      mime,
-      sizeBytes: file.size,
-      sha256,
-      kind: options.kind,
-      ...(options.kind === 'document'
-        ? options.directory ? { directory: options.directory } : {}
-        : { relPath: options.relPath ?? file.name }),
-    }),
+  const { result } = await uploadFileWithWorker({
+    file,
+    target:
+      options.kind === 'document'
+        ? { kind: 'knowledge-document', kbId, ...(options.directory ? { directory: options.directory } : {}) }
+        : { kind: 'knowledge-asset', kbId, relPath: options.relPath ?? file.name },
+    options: { gzip: true, recompressImage: false },
+    contentType: mime,
   });
-  const uploadUrl = presign.upload?.uploadUrl ?? presign.upload?.url;
-  if (!uploadUrl) throw new Error('上传地址缺失');
-
-  const uploadHeaders = new Headers({ 'Content-Type': mime, 'x-amz-meta-sha256': sha256 });
-  for (const [name, value] of Object.entries(presign.upload?.headers ?? {})) {
-    uploadHeaders.set(name, value);
-  }
-  // 直连对象存储失败通常是端口未放行 / CORS / 证书问题，fetch 只会给笼统的 TypeError，单独转译。
-  let putResponse: Response;
-  try {
-    putResponse = await fetch(uploadUrl, { method: 'PUT', body: file, headers: uploadHeaders });
-  } catch {
-    throw new Error('无法连接文件存储服务（网络超时或被跨域策略拦截），请联系管理员检查对象存储入口');
-  }
-  if (!putResponse.ok) throw new Error(`对象存储上传失败 HTTP ${putResponse.status}`);
-
-  if (options.kind === 'asset') {
-    const confirmed = await requestJson<Record<string, unknown>>(
-      `/api/knowledge-bases/${kbId}/assets/${String(presign.asset?.id)}/confirm`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sizeBytes: file.size, sha256 }),
-      },
-    );
-    return normalizeAsset(confirmed);
-  }
-  const confirmed = await requestJson<Record<string, unknown>>(
-    `/api/knowledge-bases/${kbId}/documents/${String(presign.document?.id)}/confirm`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sizeBytes: file.size, sha256 }),
-    },
-  );
-  return normalizeDocument(confirmed);
+  return options.kind === 'asset'
+    ? normalizeAsset(result as Record<string, unknown>)
+    : normalizeDocument(result as Record<string, unknown>);
 }
 
 export async function uploadKnowledgeAsset(

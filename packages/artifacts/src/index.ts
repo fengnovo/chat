@@ -1,11 +1,15 @@
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
   CreateBucketCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -21,6 +25,18 @@ export interface ArtifactStoreConfig {
 export interface ArtifactUpload {
   uploadUrl: string;
   headers: Record<string, string>;
+  expiresAt: string;
+}
+
+/** 已完成的分片：number 从 1 开始，etag 为 PUT 分片响应头（含引号原值）。 */
+export interface CompletedPart {
+  number: number;
+  etag: string;
+}
+
+export interface PresignedPartUpload {
+  number: number;
+  uploadUrl: string;
   expiresAt: string;
 }
 
@@ -141,6 +157,88 @@ export class S3ArtifactStore {
       },
       expiresAt: new Date(Date.now() + expiresInSeconds * 1_000).toISOString(),
     };
+  }
+
+  /**
+   * 初始化分片上传（大文件）。对象元数据（含 sha256、Content-Encoding）
+   * 在此固定，后续 UploadPart 不能再改；返回 MinIO/S3 分配的 UploadId。
+   */
+  async createMultipartUpload(
+    objectKey: string,
+    contentType: string,
+    sha256: string,
+    options: { contentEncoding?: string | undefined } = {},
+  ): Promise<{ uploadId: string }> {
+    const result = await this.internalClient.send(
+      new CreateMultipartUploadCommand({
+        Bucket: this.config.bucket,
+        Key: objectKey,
+        ContentType: contentType,
+        ContentEncoding: options.contentEncoding,
+        Metadata: { sha256 },
+      }),
+    );
+    if (!result.UploadId) throw new Error('Multipart upload id was not issued');
+    return { uploadId: result.UploadId };
+  }
+
+  /** 为单个分片换发预签名直传 URL；浏览器直接 PUT 到对象存储，不经过 API。 */
+  async presignPartUpload(
+    objectKey: string,
+    uploadId: string,
+    partNumber: number,
+    expiresInSeconds = 600,
+  ): Promise<PresignedPartUpload> {
+    const command = new UploadPartCommand({
+      Bucket: this.config.bucket,
+      Key: objectKey,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+    });
+    const uploadUrl = await getSignedUrl(this.signingClient, command, {
+      expiresIn: expiresInSeconds,
+    });
+    return {
+      number: partNumber,
+      uploadUrl,
+      expiresAt: new Date(Date.now() + expiresInSeconds * 1_000).toISOString(),
+    };
+  }
+
+  /** 提交分片合并；parts 必须按 number 升序，etag 为各片 PUT 响应原值。 */
+  async completeMultipartUpload(
+    objectKey: string,
+    uploadId: string,
+    parts: CompletedPart[],
+  ): Promise<void> {
+    await this.internalClient.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: this.config.bucket,
+        Key: objectKey,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: parts
+            .slice()
+            .sort((a, b) => a.number - b.number)
+            .map((part) => ({ ETag: part.etag, PartNumber: part.number })),
+        },
+      }),
+    );
+  }
+
+  /** 放弃分片上传并已清理已上传的分片；UploadId 不存在时静默成功。 */
+  async abortMultipartUpload(objectKey: string, uploadId: string): Promise<void> {
+    await this.internalClient
+      .send(
+        new AbortMultipartUploadCommand({
+          Bucket: this.config.bucket,
+          Key: objectKey,
+          UploadId: uploadId,
+        }),
+      )
+      .catch((error: unknown) => {
+        if (!isMissingBucket(error)) throw error;
+      });
   }
 
   async verifyObject(

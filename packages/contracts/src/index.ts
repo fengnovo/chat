@@ -384,17 +384,44 @@ export const runAttachmentRefSchema = z.object({
   filename: z.string().trim().min(1).max(255),
   contentType: z.string().trim().min(1).max(200),
   sizeBytes: z.number().int().nonnegative(),
+  /** 对象存储内容编码（gzip 时 worker 下载后需先解压还原原文）。 */
+  contentEncoding: z.enum(['gzip']).optional(),
 });
 export type RunAttachmentRef = z.infer<typeof runAttachmentRefSchema>;
 
-/** 前端初始化聊天附件直传时的请求体。 */
-export const createChatAttachmentSchema = z.object({
+/**
+ * 前端初始化附件上传的请求体。服务端按原始文件信息判定 kind/限额并做秒传，
+ * 再按实际存储字节（可能经 gzip 压缩）换发整文件或分片预签名 URL。
+ */
+export const initChatAttachmentSchema = z.object({
   filename: z.string().trim().min(1).max(255),
   contentType: z.string().trim().min(1).max(200),
+  /** 原始文件大小。 */
   sizeBytes: z.number().int().positive(),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  /** 原始内容哈希，秒传/去重依据。 */
+  contentSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  /** 实际上传字节哈希（无压缩时与内容哈希相同）。 */
+  storedSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  /** 实际上传字节数。 */
+  storedSizeBytes: z.number().int().positive(),
+  contentEncoding: z.enum(['gzip']).optional(),
 });
-export type CreateChatAttachmentInput = z.infer<typeof createChatAttachmentSchema>;
+export type InitChatAttachmentInput = z.infer<typeof initChatAttachmentSchema>;
+
+/** 分片上传完成时回传的分片清单；整文件上传时为空。 */
+export const completeChatAttachmentSchema = z.object({
+  parts: z
+    .array(
+      z.object({
+        number: z.number().int().min(1).max(10_000),
+        etag: z.string().trim().min(1).max(255),
+      }),
+    )
+    .optional(),
+});
+export type CompleteChatAttachmentInput = z.infer<
+  typeof completeChatAttachmentSchema
+>;
 
 /**
  * 随 Outbox/BullMQ payload 持久化的最小观测上下文。

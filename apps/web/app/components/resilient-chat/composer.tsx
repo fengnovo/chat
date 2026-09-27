@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import {
   deleteChatAttachment,
-  uploadChatAttachment,
   type ChatAttachmentView,
 } from './attachments-api';
 import { Icon } from './icon';
@@ -12,6 +11,13 @@ import {
   type KnowledgeBase,
 } from './knowledge-base-picker';
 import { AgentTodoList } from './message';
+import {
+  clipboardImageFileName,
+  imageFilesFromClipboard,
+  type LocalDocumentPreview,
+  type UploadOptions,
+  type WorkerOutboundMessage,
+} from './upload-pipeline';
 import type { AgentTodo } from './types';
 
 const MAX_ATTACHMENTS = 5;
@@ -26,7 +32,7 @@ const TEXT_EXTENSIONS = new Set([
   'jsx', 'py', 'sh', 'sql', 'ini', 'conf', 'toml',
 ]);
 
-type AttachmentStatus = 'uploading' | 'ready' | 'error';
+type AttachmentStatus = 'hashing' | 'uploading' | 'ready' | 'error';
 
 interface PendingAttachment {
   localId: string;
@@ -36,6 +42,17 @@ interface PendingAttachment {
   /** 本地预览地址（blob:），不走网络；发送后释放。 */
   previewUrl: string;
   status: AttachmentStatus;
+  /** 0~1 的总体进度。 */
+  progress: number;
+  /** 命中秒传。 */
+  instant: boolean;
+  /** 经客户端压缩。 */
+  compressed: boolean;
+  /** 本地解析的文档预览。 */
+  localPreview: LocalDocumentPreview | null;
+  showLocalPreview: boolean;
+  /** 本次上传是否允许图片重编码（剪贴板粘贴为 true）。 */
+  recompressImage?: boolean;
   attachment?: ChatAttachmentView;
   errorMessage?: string;
 }
@@ -107,11 +124,15 @@ function Composer({
   // 卸载后不再 setState；所有 blob URL 统一在清理时释放。
   const mountedRef = useRef(true);
   const previewUrlsRef = useRef<Set<string>>(new Set());
+  // 全流程（Wasm 哈希/压缩/分片上传/本地解析）都在 Worker 内完成，主线程零阻塞。
+  const workerRef = useRef<Worker | null>(null);
   const locked = disabled || isBusy;
-  const hasUploading = pending.some((item) => item.status === 'uploading');
+  const hasPendingUpload = pending.some(
+    (item) => item.status === 'hashing' || item.status === 'uploading',
+  );
   const canSend =
     !locked &&
-    !hasUploading &&
+    !hasPendingUpload &&
     (input.trim().length > 0 || pending.some((item) => item.status === 'ready'));
 
   useEffect(() => {
@@ -120,6 +141,8 @@ function Composer({
       mountedRef.current = false;
       for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
       previewUrlsRef.current.clear();
+      workerRef.current?.terminate();
+      workerRef.current = null;
     };
   }, []);
 
@@ -136,24 +159,64 @@ function Composer({
     );
   }
 
-  async function startUpload(localId: string, file: File) {
-    try {
-      const attachment = await uploadChatAttachment(file);
-      if (!mountedRef.current) {
-        // 页面已卸载：附件没人会发送，尽量回收服务端暂存记录。
-        await deleteChatAttachment(attachment.id).catch(() => undefined);
-        return;
-      }
-      patchAttachment(localId, { status: 'ready', attachment, errorMessage: undefined });
-    } catch (error) {
-      patchAttachment(localId, {
-        status: 'error',
-        errorMessage: error instanceof Error ? error.message : '上传失败',
-      });
+  function handleWorkerMessage(message: WorkerOutboundMessage) {
+    if (!mountedRef.current) return;
+    switch (message.type) {
+      case 'progress':
+        patchAttachment(message.localId, {
+          status: message.phase === 'hashing' ? 'hashing' : 'uploading',
+          progress: message.progress,
+        });
+        break;
+      case 'parsed':
+        patchAttachment(message.localId, { localPreview: message.preview });
+        break;
+      case 'success':
+        patchAttachment(message.localId, {
+          status: 'ready',
+          progress: 1,
+          attachment: message.result as ChatAttachmentView,
+          instant: message.instant,
+          compressed: message.compressed,
+          errorMessage: undefined,
+        });
+        break;
+      case 'error':
+        patchAttachment(message.localId, {
+          status: 'error',
+          errorMessage: message.message,
+        });
+        break;
     }
   }
 
-  function addFiles(fileList: FileList | null) {
+  function getWorker(): Worker {
+    if (!workerRef.current) {
+      workerRef.current = new Worker(
+        new URL('../../workers/upload-worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+      workerRef.current.onmessage = (
+        event: MessageEvent<WorkerOutboundMessage>,
+      ) => handleWorkerMessage(event.data);
+    }
+    return workerRef.current;
+  }
+
+  function dispatchUpload(item: PendingAttachment, options: UploadOptions) {
+    getWorker().postMessage({
+      type: 'upload',
+      localId: item.localId,
+      file: item.file,
+      options,
+      target: { kind: 'chat' },
+    });
+  }
+
+  function addFiles(
+    fileList: FileList | File[] | null,
+    options: UploadOptions = { gzip: true, recompressImage: false },
+  ) {
     const incoming = Array.from(fileList ?? []);
     if (incoming.length === 0) return;
     if (pending.length + incoming.length > MAX_ATTACHMENTS) {
@@ -161,7 +224,15 @@ function Composer({
       return;
     }
     const next: PendingAttachment[] = [];
-    for (const file of incoming) {
+    for (const rawFile of incoming) {
+      let file = rawFile;
+      // 剪贴板图片常被命名为 image.png，换成带时间戳的名字便于区分多图。
+      if (
+        options.recompressImage &&
+        (!file.name || file.name === 'image.png')
+      ) {
+        file = new File([file], clipboardImageFileName(), { type: file.type });
+      }
       const mediaType = file.type || 'application/octet-stream';
       const isImage = IMAGE_TYPES.includes(mediaType);
       const validationError = validateFile(file, mediaType, isImage);
@@ -177,26 +248,50 @@ function Composer({
         mediaType,
         isImage,
         previewUrl,
-        status: 'uploading',
+        status: 'hashing',
+        progress: 0,
+        instant: false,
+        compressed: false,
+        localPreview: null,
+        showLocalPreview: false,
+        recompressImage: options.recompressImage,
       };
       next.push(item);
     }
     setPending((current) => [...current, ...next]);
     setAttachError(null);
     // 选中即传：不等待上传完成，用户继续打字；发送按钮在全部 ready 前保持置灰。
-    for (const item of next) void startUpload(item.localId, item.file);
+    for (const item of next) dispatchUpload(item, options);
+  }
+
+  /** Ctrl/Cmd+V：剪贴板里的图片直接进入上传流水线。 */
+  function handlePaste(event: React.ClipboardEvent<HTMLDivElement>) {
+    if (locked) return;
+    const images = imageFilesFromClipboard(event.clipboardData);
+    if (images.length === 0) return;
+    event.preventDefault();
+    addFiles(images, { gzip: true, recompressImage: true });
   }
 
   function retryUpload(localId: string) {
     const item = pending.find((candidate) => candidate.localId === localId);
-    if (!item || item.status === 'uploading') return;
-    patchAttachment(localId, { status: 'uploading', errorMessage: undefined });
-    void startUpload(localId, item.file);
+    if (!item || item.status === 'hashing' || item.status === 'uploading') return;
+    patchAttachment(localId, {
+      status: 'hashing',
+      progress: 0,
+      errorMessage: undefined,
+    });
+    dispatchUpload(
+      { ...item, status: 'hashing', progress: 0 },
+      { gzip: true, recompressImage: item.recompressImage === true },
+    );
   }
 
   function removeAttachment(localId: string) {
     const item = pending.find((candidate) => candidate.localId === localId);
     if (!item) return;
+    // 通知 Worker 中止在途任务；已完成的任务收到 cancel 为无害空操作。
+    getWorker().postMessage({ type: 'cancel', localId });
     URL.revokeObjectURL(item.previewUrl);
     previewUrlsRef.current.delete(item.previewUrl);
     setPending((current) => current.filter((candidate) => candidate.localId !== localId));
@@ -208,7 +303,7 @@ function Composer({
   function handleFormSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const ready = pending.filter((item) => item.status === 'ready' && item.attachment);
-    if (locked || hasUploading || (!input.trim() && ready.length === 0)) return;
+    if (locked || hasPendingUpload || (!input.trim() && ready.length === 0)) return;
     const files: FileUIPart[] = ready.map((item) => ({
       type: 'file',
       mediaType: item.mediaType,
@@ -228,7 +323,7 @@ function Composer({
   }
 
   return (
-    <div className="composer-wrap">
+    <div className="composer-wrap" onPaste={handlePaste}>
       {todos.length > 0 && <AgentTodoList todos={todos} />}
       {activity && (
         <div className="composer-activity" role="status" aria-live="polite">
@@ -252,63 +347,98 @@ function Composer({
       <form className="composer" onSubmit={handleFormSubmit}>
         {pending.length > 0 && (
           <div className="composer-attachments" aria-label="待发送附件">
-            {pending.map((item) => (
-              <div
-                className={`composer-attachment is-${item.status}`}
-                key={item.localId}
-                title={item.errorMessage ?? item.file.name}
-              >
-                {item.isImage ? (
-                  <button
-                    type="button"
-                    className="composer-attachment-thumb-button"
-                    onClick={() => onPreviewImage(item.previewUrl, item.file.name)}
-                    aria-label={`预览图片 ${item.file.name}`}
-                  >
-                    <img
-                      alt={item.file.name}
-                      className="composer-attachment-thumb"
-                      src={item.previewUrl}
-                    />
-                  </button>
-                ) : (
-                  <span className="composer-attachment-file">
-                    <Icon name="paperclip" size={15} />
-                    <span className="composer-attachment-name" title={item.file.name}>
-                      {item.file.name}
-                    </span>
-                    <span className="composer-attachment-size">{formatSize(item.file.size)}</span>
-                  </span>
-                )}
-                {item.status === 'uploading' && (
-                  <span className="composer-attachment-overlay" aria-label="上传中">
-                    <span className="activity-spinner" aria-hidden="true" />
-                  </span>
-                )}
-                {item.status === 'error' && (
-                  <span className="composer-attachment-overlay is-error">
+            {pending.map((item) => {
+              const inFlight =
+                item.status === 'hashing' || item.status === 'uploading';
+              return (
+                <div
+                  className={`composer-attachment is-${item.status}`}
+                  key={item.localId}
+                  title={item.errorMessage ?? item.file.name}
+                >
+                  {item.isImage ? (
                     <button
                       type="button"
-                      className="composer-attachment-retry"
-                      onClick={() => retryUpload(item.localId)}
-                      title={item.errorMessage ?? '上传失败，点击重试'}
+                      className="composer-attachment-thumb-button"
+                      onClick={() => onPreviewImage(item.previewUrl, item.file.name)}
+                      aria-label={`预览图片 ${item.file.name}`}
                     >
-                      <Icon name="refresh" size={15} />
-                      <span>重试</span>
+                      <img
+                        alt={item.file.name}
+                        className="composer-attachment-thumb"
+                        src={item.previewUrl}
+                      />
                     </button>
-                  </span>
-                )}
-                <button
-                  aria-label={`移除附件 ${item.file.name}`}
-                  className="composer-attachment-remove"
-                  disabled={locked}
-                  type="button"
-                  onClick={() => removeAttachment(item.localId)}
-                >
-                  <Icon name="x" size={11} />
-                </button>
-              </div>
-            ))}
+                  ) : (
+                    <span className="composer-attachment-file">
+                      <Icon name="paperclip" size={15} />
+                      <span className="composer-attachment-name" title={item.file.name}>
+                        {item.file.name}
+                      </span>
+                      <span className="composer-attachment-size">{formatSize(item.file.size)}</span>
+                    </span>
+                  )}
+                  {inFlight && (
+                    <span className="composer-attachment-progress">
+                      <span
+                        className="composer-attachment-progress-bar"
+                        style={{ width: `${Math.round(item.progress * 100)}%` }}
+                      />
+                      <span className="composer-attachment-progress-text">
+                        {item.status === 'hashing' ? '安全校验' : '上传中'} ·{' '}
+                        {Math.round(item.progress * 100)}%
+                      </span>
+                    </span>
+                  )}
+                  {item.status === 'error' && (
+                    <span className="composer-attachment-overlay is-error">
+                      <button
+                        type="button"
+                        className="composer-attachment-retry"
+                        onClick={() => retryUpload(item.localId)}
+                        title={item.errorMessage ?? '上传失败，点击重试'}
+                      >
+                        <Icon name="refresh" size={15} />
+                        <span>重试</span>
+                      </button>
+                    </span>
+                  )}
+                  {item.localPreview && (
+                    <span className="composer-attachment-badges">
+                      <button
+                        type="button"
+                        className={`composer-badge is-preview${item.showLocalPreview ? ' is-active' : ''
+                          }`}
+                        onClick={() =>
+                          patchAttachment(item.localId, {
+                            showLocalPreview: !item.showLocalPreview,
+                          })
+                        }
+                      >
+                        文本预览
+                        {item.localPreview.pages
+                          ? ` · ${item.localPreview.pages}页`
+                          : ''}
+                      </button>
+                    </span>
+                  )}
+                  {item.showLocalPreview && item.localPreview && (
+                    <span className="composer-attachment-doc-preview" role="note">
+                      <span>{item.localPreview.excerpt || '未提取到文本内容'}</span>
+                    </span>
+                  )}
+                  <button
+                    aria-label={`移除附件 ${item.file.name}`}
+                    className="composer-attachment-remove"
+                    disabled={locked}
+                    type="button"
+                    onClick={() => removeAttachment(item.localId)}
+                  >
+                    <Icon name="x" size={11} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
         <label className="sr-only" htmlFor="chat-input">
@@ -387,7 +517,7 @@ function Composer({
             <button
               className="send-button"
               type="submit"
-              aria-label={hasUploading ? '附件上传中，请稍候' : '发送消息'}
+              aria-label={hasPendingUpload ? '附件处理中，请稍候' : '发送消息'}
               disabled={!canSend}
             >
               <Icon name="arrow" size={18} />

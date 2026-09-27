@@ -248,6 +248,11 @@ export const knowledgeDocuments = pgTable(
     status: text('status').notNull(),
     errorCode: text('error_code'),
     errorMessage: text('error_message'),
+    // 实际存储口径：与原始 size_bytes/content_hash 分离，gzip / 分片上传后由 confirm 写入。
+    storedSizeBytes: bigint('stored_size_bytes', { mode: 'number' }),
+    storedSha256: text('stored_sha256'),
+    contentEncoding: text('content_encoding'),
+    uploadId: text('upload_id'),
     chunkCount: integer('chunk_count').notNull().default(0),
     indexedAt: timestamp('indexed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -432,15 +437,19 @@ export const chatAttachments = pgTable(
     contentType: text('content_type').notNull(),
     sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
     sha256: text('sha256').notNull(),
+    contentSha256: text('content_sha256').notNull(),
+    contentEncoding: text('content_encoding'),
+    uploadId: text('upload_id'),
     kind: text('kind').notNull(),
     status: text('status').notNull().default('pending'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     uploadedAt: timestamp('uploaded_at', { withTimezone: true }),
   },
   (table) => [
-    uniqueIndex('chat_attachments_tenant_object_key_idx').on(table.tenantId, table.objectKey),
+    index('chat_attachments_tenant_object_key_idx').on(table.tenantId, table.objectKey),
     index('chat_attachments_user_idx').on(table.tenantId, table.userId, table.createdAt),
     index('chat_attachments_run_idx').on(table.runId),
+    index('chat_attachments_dedup_idx').on(table.tenantId, table.contentSha256),
   ],
 );
 

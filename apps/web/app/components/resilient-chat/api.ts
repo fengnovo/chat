@@ -1,25 +1,5 @@
 import type { SessionPage, SessionSummary, WebSessionSummary } from './types';
 
-/** 按扩展名映射到后端接受的 MIME 类型；旧版 .doc/.xls 不支持。 */
-function detectMime(name: string, fallbackType = ''): string {
-  const ext = name.toLowerCase().split('.').pop();
-  switch (ext) {
-    case 'md':
-    case 'markdown':
-      return 'text/markdown';
-    case 'txt':
-      return 'text/plain';
-    case 'pdf':
-      return 'application/pdf';
-    case 'docx':
-      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    case 'xlsx':
-      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    default:
-      return fallbackType || 'application/octet-stream';
-  }
-}
-
 // 统一 fetch 入口：未登录（401）时跳转登录页；/login 页面内不跳转防止循环。
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
@@ -106,65 +86,8 @@ async function fetchKnowledgeDocuments(kbId: string, signal?: AbortSignal) {
   return (await response.json() as { data: KnowledgeDocument[] }).data;
 }
 async function createKnowledgeBase(input: { name: string; description?: string; visibility?: 'private' | 'tenant' }) { const response = await apiFetch('/api/knowledge-bases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json() as KnowledgeBase; }
-async function uploadKnowledgeDocument(kbId: string, file: File) {
-  const content = new Uint8Array(await file.arrayBuffer());
-  const digest = await crypto.subtle.digest('SHA-256', content);
-  const sha256 = [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-  const mime = detectMime(file.name, file.type);
-  const response = await apiFetch(`/api/knowledge-bases/${kbId}/documents/uploads`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: file.name, mime, sizeBytes: file.size, sha256 }),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-  const payload = await response.json() as {
-    document: KnowledgeDocument;
-    upload?: {
-      uploadUrl?: string;
-      url?: string;
-      headers?: Record<string, string>;
-    };
-    uploadUrl?: string;
-    url?: string;
-    headers?: Record<string, string>;
-  };
-  const upload = payload.upload ?? payload;
-  const uploadUrl = upload.uploadUrl ?? upload.url;
-  if (!uploadUrl) throw new Error('Upload URL is missing');
-
-  const uploadHeaders = new Headers({
-    'Content-Type': mime,
-    'x-amz-meta-sha256': sha256,
-  });
-  for (const [name, value] of Object.entries(upload.headers ?? {})) {
-    uploadHeaders.set(name, value);
-  }
-  const uploadResponse = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: uploadHeaders,
-  });
-  if (!uploadResponse.ok) throw new Error(`HTTP ${uploadResponse.status}`);
-
-  const confirmResponse = await apiFetch(
-    `/api/knowledge-bases/${kbId}/documents/${payload.document.id}/confirm`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sizeBytes: file.size, sha256 }),
-    },
-  );
-  if (!confirmResponse.ok) throw new Error(`HTTP ${confirmResponse.status}`);
-  const confirmed = await confirmResponse.json() as
-    | KnowledgeDocument
-    | { document: KnowledgeDocument };
-  return 'document' in confirmed ? confirmed.document : confirmed;
-}
 async function deleteKnowledgeBase(kbId: string) { const response = await apiFetch(`/api/knowledge-bases/${kbId}`, { method: 'DELETE' }); if (!response.ok) throw new Error(`HTTP ${response.status}`); }
-export { fetchKnowledgeBases, fetchKnowledgeDocuments, createKnowledgeBase, uploadKnowledgeDocument, deleteKnowledgeBase, type KnowledgeBase, type KnowledgeDocument };
+export { fetchKnowledgeBases, fetchKnowledgeDocuments, createKnowledgeBase, deleteKnowledgeBase, type KnowledgeBase, type KnowledgeDocument };
 
 // ---- 认证与当前用户 ----
 export type CurrentUser = {

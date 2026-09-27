@@ -210,7 +210,13 @@ async function cleanupOrphanAttachments(): Promise<void> {
     ORPHAN_ATTACHMENT_BATCH,
   );
   for (const item of stale) {
-    await artifacts.deleteObject(item.objectKey).catch(() => undefined);
+    // 秒传去重的附件行与其他行共享对象：仅当没有其他引用时才删对象。
+    const remaining = await database.repository
+      .countChatAttachmentsByObjectKey(item.objectKey, item.id)
+      .catch(() => 0);
+    if (remaining === 0) {
+      await artifacts.deleteObject(item.objectKey).catch(() => undefined);
+    }
     await database.repository.deleteChatAttachment(item.id).catch(() => undefined);
   }
   if (stale.length > 0) {

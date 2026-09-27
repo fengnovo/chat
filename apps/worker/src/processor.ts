@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import {
@@ -504,7 +505,12 @@ async function prepareRunAttachments(
   const uploadedNames: string[] = [];
 
   for (const attachment of attachments) {
-    const bytes = await services.artifacts.getObjectBytes(attachment.objectKey);
+    const storedBytes = await services.artifacts.getObjectBytes(attachment.objectKey);
+    // 浏览器侧 gzip 透明压缩：先还原为原始字节，再按 kind 消费。
+    const bytes =
+      attachment.contentEncoding === 'gzip'
+        ? new Uint8Array(gunzipSync(Buffer.from(storedBytes)))
+        : storedBytes;
     if (attachment.kind === 'image') {
       if (!IMAGE_ATTACHMENT_MEDIA_TYPES.has(attachment.contentType)) {
         throw new Error(`Unsupported image attachment type: ${attachment.contentType}`);

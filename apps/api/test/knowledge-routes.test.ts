@@ -11,7 +11,7 @@ const userId = '00000000-0000-4000-8000-000000000003';
 const kbId = '00000000-0000-4000-8000-000000000004';
 const documentId = '00000000-0000-4000-8000-000000000005';
 
-function makeApp(repository: Record<string, unknown>, artifacts = {}, knowledgeQueue = { add: async () => ({}) }) {
+function makeApp(repository: Record<string, unknown>, artifacts = {}, knowledgeQueue = { add: async () => ({}) }, maxBytes = 10) {
   const app = Fastify();
   app.decorateRequest('auth');
   app.addHook('preHandler', async (request) => {
@@ -21,7 +21,7 @@ function makeApp(repository: Record<string, unknown>, artifacts = {}, knowledgeQ
     repository: { canWriteKnowledgeBase: async () => true, ...repository } as any,
     artifacts,
     knowledgeQueue,
-    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 10 },
+    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: maxBytes },
   }).then(() => app);
 }
 
@@ -82,7 +82,7 @@ test('confirm verifies object size and enqueues one active index job', async () 
       getKnowledgeDocument: async () => ({ id: documentId, kbId, objectKey: 'knowledge/x.md', sizeBytes: 3, sha256: 'b'.repeat(64), status: 'pending' }),
       confirmDocumentUpload: async () => ({ created: confirms++ === 0, document: { id: documentId }, job: { id: 'job-1' } }),
     } as any,
-    artifacts: { verifyObject: async () => {} }, knowledgeQueue: queue,
+    artifacts: { verifyObject: async () => { } }, knowledgeQueue: queue,
     config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 10 },
   });
   const payload = { sizeBytes: 3, sha256: 'b'.repeat(64) };
@@ -281,7 +281,7 @@ test('asset confirm rejects when uploaded bytes do not match declared MIME', asy
       confirmAssetUpload: async () => { throw new Error('must not confirm'); },
     } as any,
     artifacts: {
-      verifyObject: async () => {},
+      verifyObject: async () => { },
       getObjectHead: async () => lfsPointerHead,
     },
     knowledgeQueue: { add: async () => ({}) },
@@ -319,7 +319,7 @@ test('asset confirm accepts when uploaded bytes match declared MIME', async () =
       enqueueCaptionJob: async () => null,
     } as any,
     artifacts: {
-      verifyObject: async () => {},
+      verifyObject: async () => { },
       getObjectHead: async () => realPngHead,
     },
     knowledgeQueue: { add: async () => ({}) },
@@ -331,5 +331,234 @@ test('asset confirm accepts when uploaded bytes match declared MIME', async () =
     payload: { sizeBytes: 4096, sha256: assetRow.sha256 },
   });
   assert.equal(response.statusCode, 200);
+  await app.close();
+});
+
+test('duplicate document upload hits instant mode without presigning', async () => {
+  let presigns = 0;
+  const existing = {
+    id: '00000000-0000-4000-8000-0000000000aa',
+    kb_id: kbId,
+    status: 'ready',
+    object_key: 'tenants/x/knowledge/kb/doc/notes.md',
+    size_bytes: 5,
+    content_hash: 'a'.repeat(64),
+  };
+  const app = await makeApp(
+    { createDocumentUpload: async () => existing },
+    { createUpload: async () => { presigns += 1; }, createMultipartUpload: async () => { presigns += 1; } },
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/uploads`,
+    payload: { name: 'notes.md', mime: 'text/markdown', sizeBytes: 5, sha256: 'a'.repeat(64) },
+  });
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.json().mode, 'instant');
+  assert.equal(response.json().document.id, existing.id);
+  assert.equal(presigns, 0);
+  await app.close();
+});
+
+test('failed duplicate re-verifies the object and re-enqueues indexing', async () => {
+  let adds = 0;
+  let verifies = 0;
+  const existing = {
+    id: '00000000-0000-4000-8000-0000000000ab',
+    kb_id: kbId,
+    status: 'failed',
+    object_key: 'tenants/x/knowledge/kb/doc/notes.md',
+    size_bytes: 5,
+    content_hash: 'a'.repeat(64),
+    stored_size_bytes: 3,
+    stored_sha256: 'b'.repeat(64),
+  };
+  const queue = { add: async () => { adds += 1; return {}; } };
+  const app = await makeApp(
+    {
+      createDocumentUpload: async () => existing,
+      confirmDocumentUpload: async (_auth: unknown, _kb: string, _id: string, input: { sizeBytes: number; sha256: string }) => {
+        assert.deepEqual(input, { sizeBytes: 3, sha256: 'b'.repeat(64) });
+        return { created: true, document: { ...existing, status: 'queued' }, job: { id: 'job-1' } };
+      },
+    },
+    { verifyObject: async () => { verifies += 1; } },
+    queue,
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/uploads`,
+    payload: { name: 'notes.md', mime: 'text/markdown', sizeBytes: 5, sha256: 'a'.repeat(64) },
+  });
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.json().mode, 'instant');
+  assert.equal(verifies, 1);
+  assert.equal(adds, 1);
+  await app.close();
+});
+
+test('pending duplicate falls through to a fresh presigned upload', async () => {
+  let presigns = 0;
+  const existing = {
+    id: '00000000-0000-4000-8000-0000000000ac',
+    kb_id: kbId,
+    status: 'pending',
+    object_key: 'tenants/x/knowledge/kb/doc/notes.md',
+  };
+  const app = await makeApp(
+    { createDocumentUpload: async () => existing },
+    { createUpload: async () => { presigns += 1; return { uploadUrl: 'https://storage.example/put' }; } },
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/uploads`,
+    payload: { name: 'notes.md', mime: 'text/markdown', sizeBytes: 5, sha256: 'a'.repeat(64) },
+  });
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.json().mode, 'single');
+  assert.equal(response.json().upload.uploadUrl, 'https://storage.example/put');
+  assert.equal(presigns, 1);
+  await app.close();
+});
+
+test('large stored payload initializes a multipart upload and presigns every part', async () => {
+  const newId = '00000000-0000-4000-8000-0000000000ad';
+  let uploadIdSet = 0;
+  const app = await makeApp(
+    {
+      createDocumentUpload: async () => ({ id: newId, status: 'pending', object_key: 'knowledge/big.md' }),
+      setKnowledgeDocumentUploadId: async () => { uploadIdSet += 1; },
+    },
+    {
+      createMultipartUpload: async () => ({ uploadId: 'upload-1' }),
+      presignPartUpload: async (_key: string, _id: string, partNumber: number) => ({ number: partNumber, uploadUrl: `https://storage.example/part-${partNumber}` }),
+    },
+  );
+  // makeApp 的 MAX 是 10 字节，这里直接构造大限额 app。
+  await app.close();
+  const bigApp = Fastify();
+  bigApp.decorateRequest('auth');
+  bigApp.addHook('preHandler', async (request) => { request.auth = { tenantId, userId, roles: [] }; });
+  await registerKnowledgeRoutes(bigApp, {
+    repository: {
+      canWriteKnowledgeBase: async () => true,
+      createDocumentUpload: async () => ({ id: newId, status: 'pending', object_key: 'knowledge/big.md' }),
+      setKnowledgeDocumentUploadId: async () => { uploadIdSet += 1; },
+    } as any,
+    artifacts: {
+      createMultipartUpload: async () => ({ uploadId: 'upload-1' }),
+      presignPartUpload: async (_key: string, _id: string, partNumber: number) => ({ number: partNumber, uploadUrl: `https://storage.example/part-${partNumber}` }),
+    },
+    knowledgeQueue: { add: async () => ({}) },
+    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 100 * 1024 * 1024 },
+  });
+  const storedSizeBytes = 9 * 1024 * 1024;
+  const response = await bigApp.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/uploads`,
+    payload: {
+      name: 'big.md',
+      mime: 'text/markdown',
+      sizeBytes: storedSizeBytes,
+      sha256: 'a'.repeat(64),
+      storedSizeBytes,
+      storedSha256: 'b'.repeat(64),
+      contentEncoding: 'gzip',
+    },
+  });
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.json().mode, 'multipart');
+  assert.equal(response.json().uploadId, 'upload-1');
+  assert.equal(response.json().partSize, 5 * 1024 * 1024);
+  assert.equal(response.json().parts.length, 2);
+  assert.equal(uploadIdSet, 1);
+  await bigApp.close();
+});
+
+test('document confirm with a pending multipart upload requires parts and completes it', async () => {
+  const document = {
+    id: documentId,
+    kb_id: kbId,
+    status: 'pending',
+    object_key: 'knowledge/big.md',
+    upload_id: 'upload-1',
+  };
+  const withoutParts = await makeApp({
+    getKnowledgeDocument: async () => document,
+    confirmDocumentUpload: async () => { throw new Error('must not confirm'); },
+  }, undefined, undefined, 100 * 1024 * 1024);
+  const rejected = await withoutParts.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`,
+    payload: { sizeBytes: 9 * 1024 * 1024, sha256: 'b'.repeat(64) },
+  });
+  assert.equal(rejected.statusCode, 400);
+  assert.equal(rejected.json().error, 'parts_required');
+  await withoutParts.close();
+
+  let completed = 0;
+  const queue = { add: async () => ({}) };
+  const app = Fastify();
+  app.decorateRequest('auth');
+  app.addHook('preHandler', async (request) => { request.auth = { tenantId, userId, roles: [] }; });
+  await registerKnowledgeRoutes(app, {
+    repository: {
+      canWriteKnowledgeBase: async () => true,
+      getKnowledgeDocument: async () => document,
+      confirmDocumentUpload: async () => ({ created: true, document: { id: documentId }, job: { id: 'job-1' } }),
+    } as any,
+    artifacts: {
+      completeMultipartUpload: async (_key: string, _id: string, parts: unknown[]) => { completed = parts.length; },
+      verifyObject: async () => { },
+    },
+    knowledgeQueue: queue,
+    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 100 * 1024 * 1024 },
+  });
+  const accepted = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/${documentId}/confirm`,
+    payload: {
+      sizeBytes: 9 * 1024 * 1024,
+      sha256: 'b'.repeat(64),
+      parts: [
+        { number: 1, etag: 'etag-1' },
+        { number: 2, etag: 'etag-2' },
+      ],
+    },
+  });
+  assert.equal(accepted.statusCode, 200);
+  assert.equal(completed, 2);
+  await app.close();
+});
+
+test('asset duplicate with completed upload hits instant mode', async () => {
+  let presigns = 0;
+  const existing = {
+    id: '00000000-0000-4000-8000-0000000000ae',
+    kb_id: kbId,
+    object_key: 'tenants/x/knowledge/kb/assets/a/logo.png',
+    uploaded_at: '2026-01-01T00:00:00.000Z',
+  };
+  const app = Fastify();
+  app.decorateRequest('auth');
+  app.addHook('preHandler', async (request) => { request.auth = { tenantId, userId, roles: [] }; });
+  await registerKnowledgeRoutes(app, {
+    repository: {
+      canWriteKnowledgeBase: async () => true,
+      createAssetUpload: async () => existing,
+    } as any,
+    artifacts: { createUpload: async () => { presigns += 1; } },
+    knowledgeQueue: { add: async () => ({}) },
+    config: { KNOWLEDGE_DOCUMENT_MAX_BYTES: 20_000_000 },
+  });
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/knowledge-bases/${kbId}/documents/uploads`,
+    payload: { name: 'logo.png', mime: 'image/png', sizeBytes: 4096, sha256: 'a'.repeat(64), kind: 'asset' },
+  });
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.json().mode, 'instant');
+  assert.equal(response.json().asset.id, existing.id);
+  assert.equal(presigns, 0);
   await app.close();
 });

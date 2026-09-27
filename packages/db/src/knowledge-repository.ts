@@ -183,7 +183,7 @@ export class KnowledgeRepository {
     const directory = typeof input.directory === 'string' ? input.directory : '';
     // (kb_id, content_hash) 上有 partial unique 索引（009）：同一 kb 内重复导入同一文件时复用已有文档，
     // 并按已有 object_key 重新预签名，避免唯一约束冲突冒泡成 500（与 createAssetUpload 保持一致）。
-    const result = await this.pool.query(`INSERT INTO knowledge_documents (id,kb_id,tenant_id,name,mime,size_bytes,content_hash,object_key,status,directory) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9) ON CONFLICT (kb_id, content_hash) WHERE deleted_at IS NULL DO NOTHING RETURNING *`, [input.documentId ?? randomUUID(), input.kbId, auth.tenantId, input.name, input.mime, input.sizeBytes, input.sha256, input.objectKey, directory]);
+    const result = await this.pool.query(`INSERT INTO knowledge_documents (id,kb_id,tenant_id,name,mime,size_bytes,content_hash,object_key,status,directory,stored_size_bytes,stored_sha256,content_encoding) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11,$12) ON CONFLICT (kb_id, content_hash) WHERE deleted_at IS NULL DO NOTHING RETURNING *`, [input.documentId ?? randomUUID(), input.kbId, auth.tenantId, input.name, input.mime, input.sizeBytes, input.sha256, input.objectKey, directory, input.storedSizeBytes ?? null, input.storedSha256 ?? null, input.contentEncoding ?? null]);
     if (result.rows[0]) return result.rows[0];
     const existing = await this.pool.query(`SELECT * FROM knowledge_documents WHERE kb_id=$1 AND content_hash=$2 AND deleted_at IS NULL LIMIT 1`, [input.kbId, input.sha256]);
     return existing.rows[0] ?? null;
@@ -197,7 +197,8 @@ export class KnowledgeRepository {
       if (!doc.rows[0]) { await client.query('ROLLBACK'); return null; }
       const existing = await client.query(`SELECT * FROM knowledge_index_jobs WHERE tenant_id=$1 AND document_id=$2 AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, [auth.tenantId, id]);
       if (existing.rows[0]) { await client.query('COMMIT'); return { document: doc.rows[0], job: existing.rows[0], created: false }; }
-      const updated = await client.query(`UPDATE knowledge_documents SET status='queued', size_bytes=$4, content_hash=$5, updated_at=now() WHERE tenant_id=$1 AND kb_id=$2 AND id=$3 RETURNING *`, [auth.tenantId, kbId, id, input.sizeBytes, input.sha256]);
+      // size_bytes/content_hash 保持原始文件口径（展示与去重键）；这里记录的是服务端校验过的实际存储字节。
+      const updated = await client.query(`UPDATE knowledge_documents SET status='queued', stored_size_bytes=$4, stored_sha256=$5, upload_id=NULL, updated_at=now() WHERE tenant_id=$1 AND kb_id=$2 AND id=$3 RETURNING *`, [auth.tenantId, kbId, id, input.sizeBytes, input.sha256]);
       const job = await client.query(`INSERT INTO knowledge_index_jobs (id,kb_id,tenant_id,document_id,kind,status) VALUES ($1,$2,$3,$4,'index','queued') RETURNING *`, [randomUUID(), kbId, auth.tenantId, id]);
       await client.query('COMMIT');
       return { document: updated.rows[0], job: job.rows[0], created: true };
@@ -247,6 +248,15 @@ export class KnowledgeRepository {
     const result = await this.pool.query(`SELECT * FROM knowledge_documents WHERE tenant_id = $1 AND kb_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, kbId, documentId]);
     return result.rows[0] ?? null;
   }
+
+  /** 分片上传初始化后记录 uploadId，confirm 时凭它完成 multipart。 */
+  async setKnowledgeDocumentUploadId(tenantId: string, documentId: string, uploadId: string): Promise<void> {
+    await this.pool.query(`UPDATE knowledge_documents SET upload_id=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, [tenantId, documentId, uploadId]);
+  }
+
+  async setKnowledgeAssetUploadId(tenantId: string, assetId: string, uploadId: string): Promise<void> {
+    await this.pool.query(`UPDATE knowledge_assets SET upload_id=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, [tenantId, assetId, uploadId]);
+  }
   async getKnowledgeBaseForIndex(tenantId: string, kbId: string): Promise<any> {
     const result = await this.pool.query(`SELECT * FROM knowledge_bases WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`, [tenantId, kbId]);
     return result.rows[0] ?? null;
@@ -265,6 +275,9 @@ export class KnowledgeRepository {
     mime: string;
     sizeBytes: number;
     sha256: string;
+    storedSizeBytes?: number | undefined;
+    storedSha256?: string | undefined;
+    contentEncoding?: string | null | undefined;
     objectKey: string;
   }): Promise<any | null> {
     const kb = await this.pool.query(`SELECT id FROM knowledge_bases WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL AND ${KnowledgeRepository.writable(3, 4)}`, [auth.tenantId, input.kbId, auth.userId, auth.roles]);
@@ -272,11 +285,11 @@ export class KnowledgeRepository {
     // (kb_id, content_hash) 上有 partial unique 索引（016），同一 kb 内相同图片只保留一条记录：
     // 重复导入同一目录时复用已有资源并按其 object_key 重新预签名，避免唯一约束冲突冒泡成 500。
     const result = await this.pool.query(
-      `INSERT INTO knowledge_assets (id, tenant_id, kb_id, document_id, rel_path, name, mime, size_bytes, content_hash, object_key)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO knowledge_assets (id, tenant_id, kb_id, document_id, rel_path, name, mime, size_bytes, content_hash, object_key, stored_size_bytes, stored_sha256, content_encoding)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        ON CONFLICT (kb_id, content_hash) WHERE deleted_at IS NULL DO NOTHING
        RETURNING *`,
-      [input.assetId ?? randomUUID(), auth.tenantId, input.kbId, input.documentId ?? null, input.relPath, input.name, input.mime, input.sizeBytes, input.sha256, input.objectKey],
+      [input.assetId ?? randomUUID(), auth.tenantId, input.kbId, input.documentId ?? null, input.relPath, input.name, input.mime, input.sizeBytes, input.sha256, input.objectKey, input.storedSizeBytes ?? null, input.storedSha256 ?? null, input.contentEncoding ?? null],
     );
     if (result.rows[0]) return result.rows[0];
     const existing = await this.pool.query(
@@ -304,7 +317,7 @@ export class KnowledgeRepository {
       );
       if (!row.rows[0]) { await client.query('ROLLBACK'); return null; }
       const updated = await client.query(
-        `UPDATE knowledge_assets SET size_bytes=$4, content_hash=$5, metadata = COALESCE($6::jsonb, metadata), updated_at = now()
+        `UPDATE knowledge_assets SET stored_size_bytes=$4, stored_sha256=$5, uploaded_at=now(), upload_id=NULL, metadata = COALESCE($6::jsonb, metadata), updated_at = now()
          WHERE tenant_id=$1 AND kb_id=$2 AND id=$3 RETURNING *`,
         [auth.tenantId, kbId, id, input.sizeBytes, input.sha256, input.metadata ? JSON.stringify(input.metadata) : null],
       );

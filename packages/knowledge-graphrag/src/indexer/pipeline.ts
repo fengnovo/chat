@@ -1,3 +1,5 @@
+import { gunzipSync } from 'node:zlib';
+
 import { parseDocument, isSupportedMime } from '../parser/index.js';
 import { splitIntoChunks, stableChunkId } from '../chunker/split.js';
 import { assertDocumentBytes } from './hash.js';
@@ -31,7 +33,9 @@ export class IndexPipeline {
     try {
       const guard = async (stage: string) => { const ok = await d.repository.markIndexStage(job.tenantId, job.id, job.leaseToken ?? '', stage); if (ok === false) throw new Error('Index job lease lost'); };
       await guard('parsing');
-      const bytes = await d.download(job.objectKey);
+      const downloaded = await d.download(job.objectKey);
+      // 客户端可能对文本类文档做了 gzip 透明压缩；还原后再按原始哈希/大小校验。
+      const bytes = job.contentEncoding === 'gzip' ? gunzipSync(downloaded) : downloaded;
       assertDocumentBytes(bytes, job.contentHash, job.sizeBytes, job.mime);
       if (!isSupportedMime(job.mime)) throw new Error(`Unsupported MIME type: ${job.mime}`);
       const parsed = await parseDocument(bytes, job.mime);

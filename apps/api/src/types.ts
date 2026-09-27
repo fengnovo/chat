@@ -24,6 +24,8 @@ export interface KnowledgeRepositoryApi {
   getKnowledgeDocument: (auth: AuthContext, kbId: string, id: string) => Promise<any | null>;
   createDocumentUpload: (auth: AuthContext, input: unknown) => Promise<any>;
   confirmDocumentUpload: (auth: AuthContext, kbId: string, id: string, input: unknown) => Promise<any>;
+  setKnowledgeDocumentUploadId: (tenantId: string, documentId: string, uploadId: string) => Promise<void>;
+  setKnowledgeAssetUploadId: (tenantId: string, assetId: string, uploadId: string) => Promise<void>;
   renameKnowledgeDocument: (auth: AuthContext, kbId: string, id: string, name: string) => Promise<any | null>;
   deleteKnowledgeDocument: (auth: AuthContext, kbId: string, id: string) => Promise<boolean | 'not_found'>;
   listDocumentChunks: (
@@ -44,6 +46,9 @@ export interface KnowledgeRepositoryApi {
       mime: string;
       sizeBytes: number;
       sha256: string;
+      storedSizeBytes?: number | undefined;
+      storedSha256?: string | undefined;
+      contentEncoding?: string | null | undefined;
       objectKey: string;
     },
   ) => Promise<any | null>;

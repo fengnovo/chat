@@ -14,9 +14,10 @@ import {
   approvalDecisionSchema,
   createProjectSchema,
   createArtifactUploadSchema,
-  createChatAttachmentSchema,
+  completeChatAttachmentSchema,
   createRunSchema,
   createSessionSchema,
+  initChatAttachmentSchema,
   questionAnswerSchema,
   runCancellationChannel,
   runEventsChannel,
@@ -47,6 +48,9 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_IMAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_BYTES = 200_000;
 const MAX_FILE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+/** 分片阈值：超过 8MB 走 S3 multipart；单片固定 5MiB（MinIO 允许的最小分片）。 */
+const MULTIPART_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const MULTIPART_PART_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -753,19 +757,47 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   // ── 聊天附件（选中即传，发送时只带 id 引用） ─────────────────────────
 
   app.post('/api/agent/chat-attachments', async (request, reply) => {
-    const input = createChatAttachmentSchema.parse(request.body);
+    const input = initChatAttachmentSchema.parse(request.body);
     const filename = input.filename.trim().slice(0, 255) || 'attachment';
     const contentType = input.contentType.trim().toLowerCase().slice(0, 200) || 'application/octet-stream';
-    const sha256 = input.sha256.toLowerCase();
+    const contentSha256 = input.contentSha256.toLowerCase();
+    const storedSha256 = input.storedSha256.toLowerCase();
+    const contentEncoding = input.contentEncoding ?? undefined;
 
     let kind: RunAttachmentKind;
     try {
+      // 按**原始文件**大小判定类型与限额，压缩不改变业务分类。
       kind = resolveAttachmentKind(filename, contentType, input.sizeBytes);
     } catch (error) {
       if (error instanceof AttachmentError) {
         return reply.code(413).send({ error: error.code });
       }
       throw error;
+    }
+
+    // ① 秒传：租户内已有人发送过相同内容 → 复用其对象，零字节上传。
+    //    只复用已关联 run 的就绪附件，其对象不会被删除。
+    const existing = await services.repository
+      .findReadyChatAttachmentByContentHash(request.auth.tenantId, contentSha256)
+      .catch(() => null);
+    if (existing) {
+      const attachment = await services.repository.createChatAttachment(request.auth, {
+        id: randomUUID(),
+        objectKey: existing.objectKey,
+        filename,
+        contentType,
+        // 元数据如实描述被复用对象的实际字节。
+        sizeBytes: existing.sizeBytes,
+        sha256: existing.sha256,
+        contentSha256,
+        contentEncoding: existing.contentEncoding,
+        kind,
+      });
+      return reply.code(201).send({
+        instant: true,
+        mode: 'instant',
+        attachment: attachmentHistoryView(attachment),
+      });
     }
 
     const attachmentId = randomUUID();
@@ -775,22 +807,68 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       attachmentId,
       filename,
     );
+
+    // ② 大文件分片：创建 multipart upload 并为每片换发预签名 URL。
+    if (input.storedSizeBytes >= MULTIPART_THRESHOLD_BYTES) {
+      const multipart = await services.artifacts.createMultipartUpload(
+        objectKey,
+        contentType,
+        storedSha256,
+        { contentEncoding },
+      );
+      const attachment = await services.repository.createChatAttachment(request.auth, {
+        id: attachmentId,
+        objectKey,
+        filename,
+        contentType,
+        sizeBytes: input.storedSizeBytes,
+        sha256: storedSha256,
+        contentSha256,
+        contentEncoding: contentEncoding ?? null,
+        uploadId: multipart.uploadId,
+        kind,
+      });
+      const partCount = Math.ceil(input.storedSizeBytes / MULTIPART_PART_BYTES);
+      const parts = await Promise.all(
+        Array.from({ length: partCount }, (_, index) =>
+          services.artifacts.presignPartUpload(
+            objectKey,
+            multipart.uploadId,
+            index + 1,
+          ),
+        ),
+      );
+      return reply.code(201).send({
+        instant: false,
+        mode: 'multipart',
+        attachment: attachmentHistoryView(attachment),
+        uploadId: multipart.uploadId,
+        partSize: MULTIPART_PART_BYTES,
+        parts,
+      });
+    }
+
+    // ③ 小文件：整文件预签名 PUT 直传。
     const attachment = await services.repository.createChatAttachment(request.auth, {
       id: attachmentId,
       objectKey,
       filename,
       contentType,
-      sizeBytes: input.sizeBytes,
-      sha256,
+      sizeBytes: input.storedSizeBytes,
+      sha256: storedSha256,
+      contentSha256,
+      contentEncoding: contentEncoding ?? null,
       kind,
     });
     const upload = await services.artifacts.createUpload(
       objectKey,
       contentType,
-      sha256,
+      storedSha256,
       300,
     );
     return reply.code(201).send({
+      instant: false,
+      mode: 'single',
       attachment: attachmentHistoryView(attachment),
       ...upload,
     });
@@ -798,10 +876,22 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
 
   app.post('/api/agent/chat-attachments/:id/complete', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const body = completeChatAttachmentSchema.parse(request.body ?? {});
     const attachment = await services.repository.getChatAttachment(request.auth, id);
     if (!attachment) return reply.code(404).send({ error: 'attachment_not_found' });
     if (attachment.status !== 'ready') {
+      if (attachment.uploadId) {
+        if (!body.parts || body.parts.length === 0) {
+          return reply.code(400).send({ error: 'parts_required' });
+        }
+        await services.artifacts.completeMultipartUpload(
+          attachment.objectKey,
+          attachment.uploadId,
+          body.parts,
+        );
+      }
       try {
+        // 服务端独立校验对象大小与存储字节哈希，不以前端声明为准。
         await services.artifacts.verifyObject(attachment.objectKey, {
           sizeBytes: attachment.sizeBytes,
           sha256: attachment.sha256,
@@ -828,7 +918,21 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     if (attachment.runId) {
       return reply.code(409).send({ error: 'attachment_in_use' });
     }
-    await services.artifacts.deleteObject(attachment.objectKey);
+    // 秒传复用对象可能被其他附件引用：引用数归零时才真正删除/中止。
+    const otherReferences = await services.repository.countChatAttachmentsByObjectKey(
+      attachment.objectKey,
+      attachment.id,
+    );
+    if (otherReferences === 0) {
+      if (attachment.uploadId && attachment.status !== 'ready') {
+        await services.artifacts.abortMultipartUpload(
+          attachment.objectKey,
+          attachment.uploadId,
+        );
+      } else {
+        await services.artifacts.deleteObject(attachment.objectKey);
+      }
+    }
     await services.repository.deleteChatAttachment(id);
     return reply.code(204).send();
   });
@@ -909,6 +1013,9 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
           filename: record.filename,
           contentType: record.contentType,
           sizeBytes: record.sizeBytes,
+          ...(record.contentEncoding
+            ? { contentEncoding: record.contentEncoding as 'gzip' }
+            : {}),
         }));
       }
 

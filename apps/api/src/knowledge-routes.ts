@@ -36,6 +36,71 @@ const mime = z.union([documentMime, assetMime]);
 /** knowledge_bases 内子目录路径，长度上限 + 不允许开头斜杠、连续斜杠。 */
 const directorySchema = z.string().trim().max(500).regex(/^[^/].*$/, { message: 'directory must not start with /' }).transform((value) => value.replace(/\/{2,}/g, '/').replace(/\/$/, ''));
 
+// 与 chat 附件分片阈值保持一致（routes.ts）：MinIO/S3 最小分片 5MiB。
+const MULTIPART_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const MULTIPART_PART_BYTES = 5 * 1024 * 1024;
+const multipartPartSchema = z.object({
+  number: z.number().int().min(1).max(10_000),
+  etag: z.string().min(1).max(255),
+});
+
+/**
+ * 预签名直发：storedSizeBytes 达到阈值走 S3 multipart（逐片预签名），否则整文件 PUT。
+ * 文档与资源共用；onMultipart 负责把 uploadId 落到对应表。
+ */
+async function presignKnowledgeUpload(
+  services: Services,
+  reply: any,
+  options: {
+    objectKey: string;
+    mime: string;
+    storedSha256: string;
+    storedSizeBytes: number;
+    contentEncoding: 'gzip' | null;
+    entityKey: 'document' | 'asset';
+    entity: unknown;
+    onMultipart: (uploadId: string) => Promise<void>;
+  },
+) {
+  if (options.storedSizeBytes >= MULTIPART_THRESHOLD_BYTES) {
+    const multipart = await services.artifacts.createMultipartUpload(
+      options.objectKey,
+      options.mime,
+      options.storedSha256,
+      { contentEncoding: options.contentEncoding },
+    );
+    await options.onMultipart(multipart.uploadId);
+    const partCount = Math.ceil(options.storedSizeBytes / MULTIPART_PART_BYTES);
+    const parts = await Promise.all(
+      Array.from({ length: partCount }, (_, index) =>
+        services.artifacts.presignPartUpload(options.objectKey, multipart.uploadId, index + 1),
+      ),
+    );
+    return reply.code(201).send({
+      mode: 'multipart',
+      [options.entityKey]: options.entity,
+      uploadId: multipart.uploadId,
+      partSize: MULTIPART_PART_BYTES,
+      parts,
+    });
+  }
+  const upload = await services.artifacts.createUpload(options.objectKey, options.mime, options.storedSha256);
+  return reply.code(201).send({ mode: 'single', [options.entityKey]: options.entity, upload });
+}
+
+/** confirm 成功后入队索引任务；注入 trace 上下文，失败 fail-open。 */
+async function enqueueIndexJob(services: Services, result: { job?: { id?: string } | null }) {
+  if (!result.job?.id) return;
+  let jobPayload: unknown = result.job;
+  try {
+    const carrier = injectObservabilityContext(context.active(), `knowledge:${result.job.id}`);
+    jobPayload = { ...(result.job as Record<string, unknown>), observability: carrier };
+  } catch {
+    jobPayload = result.job;
+  }
+  await services.knowledgeQueue.add('index', jobPayload, { jobId: result.job.id });
+}
+
 type RouteConfig = {
   KNOWLEDGE_DOCUMENT_MAX_BYTES: number;
   KNOWLEDGE_MCP?: ApiConfig['KNOWLEDGE_MCP'];
@@ -156,12 +221,19 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
       mime,
       sizeBytes: z.number().int().positive(),
       sha256: hash,
+      // 实际存储口径：客户端 gzip 压缩后与原始值不同；未压缩时省略即等于原始值。
+      storedSha256: hash.optional(),
+      storedSizeBytes: z.number().int().positive().optional(),
+      contentEncoding: z.enum(['gzip']).optional(),
       kind: z.enum(['document', 'asset']).default('document'),
       directory: directorySchema.optional(),
       relPath: z.string().trim().min(1).max(500).optional(),
       documentId: z.uuid().optional(),
     }).parse(request.body ?? {});
     if (input.sizeBytes > services.config.KNOWLEDGE_DOCUMENT_MAX_BYTES) return reply.code(400).send({ error: 'knowledge_document_too_large' });
+    const storedSha256 = input.storedSha256 ?? input.sha256;
+    const storedSizeBytes = input.storedSizeBytes ?? input.sizeBytes;
+    const contentEncoding = input.contentEncoding ?? null;
 
     if (input.kind === 'asset') {
       if (!assetMime.options.includes(input.mime as never)) return reply.code(400).send({ error: 'asset_mime_unsupported' });
@@ -177,45 +249,103 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
         mime: input.mime,
         sizeBytes: input.sizeBytes,
         sha256: input.sha256,
+        storedSha256,
+        storedSizeBytes,
+        contentEncoding,
         objectKey,
       });
       if (!created) return notFound(reply, 'knowledge_base_not_found');
-      const upload = await services.artifacts.createUpload(created.object_key ?? created.objectKey, input.mime, input.sha256);
-      return reply.code(201).send({ asset: created, upload });
+      // 秒传：同 kb 已存在相同内容且上次上传真正完成过（uploaded_at 非空）。
+      if (created.id !== assetId && (created.uploaded_at ?? created.uploadedAt)) {
+        return reply.code(201).send({ mode: 'instant', asset: created });
+      }
+      return presignKnowledgeUpload(services, reply, {
+        objectKey: created.object_key ?? created.objectKey,
+        mime: input.mime,
+        storedSha256,
+        storedSizeBytes,
+        contentEncoding,
+        entityKey: 'asset',
+        entity: created,
+        onMultipart: (uploadId) => services.repository.setKnowledgeAssetUploadId(request.auth.tenantId, created.id, uploadId),
+      });
     }
 
     if (!documentMime.options.includes(input.mime as never)) return reply.code(400).send({ error: 'document_mime_unsupported' });
     const documentId = input.documentId ?? randomUUID();
-    const created = await services.repository.createDocumentUpload(request.auth, { ...input, kbId, documentId, objectKey: `tenants/${request.auth.tenantId}/knowledge/${kbId}/${documentId}/${input.name}` });
+    const created = await services.repository.createDocumentUpload(request.auth, {
+      ...input,
+      kbId,
+      documentId,
+      storedSha256,
+      storedSizeBytes,
+      contentEncoding,
+      objectKey: `tenants/${request.auth.tenantId}/knowledge/${kbId}/${documentId}/${input.name}`,
+    });
     if (!created) return notFound(reply, 'knowledge_base_not_found');
-    const upload = await services.artifacts.createUpload(created.object_key ?? created.objectKey, input.mime, input.sha256);
-    return reply.code(201).send({ document: created, upload });
+    const objectKey = created.object_key ?? created.objectKey;
+
+    // 秒传：同 kb 内已索引过（或正在索引）相同内容 → 直接复用文档，零字节上传。
+    if (created.id !== documentId && created.status !== 'pending') {
+      const stored = {
+        sizeBytes: Number(created.stored_size_bytes ?? created.size_bytes),
+        sha256: String(created.stored_sha256 ?? created.content_hash),
+      };
+      if (created.status !== 'failed') {
+        return reply.code(201).send({ mode: 'instant', document: created });
+      }
+      // 上次索引失败：对象仍在的话直接重新校验并入队重试，不再传输字节。
+      const objectIntact = await services.artifacts.verifyObject(objectKey, stored).then(
+        () => true,
+        (error: unknown) => {
+          if (error instanceof ArtifactVerificationError) return false;
+          throw error;
+        },
+      );
+      if (objectIntact) {
+        const result = await services.repository.confirmDocumentUpload(request.auth, kbId, created.id, stored);
+        if (result?.created !== false) await enqueueIndexJob(services, result);
+        return reply.code(201).send({ mode: 'instant', document: result?.document ?? created });
+      }
+      // 对象已被清理：落入下方重新预签名上传。
+    }
+
+    return presignKnowledgeUpload(services, reply, {
+      objectKey,
+      mime: input.mime,
+      storedSha256,
+      storedSizeBytes,
+      contentEncoding,
+      entityKey: 'document',
+      entity: created,
+      onMultipart: (uploadId) => services.repository.setKnowledgeDocumentUploadId(request.auth.tenantId, created.id, uploadId),
+    });
   });
 
   app.post('/api/knowledge-bases/:kbId/documents/:documentId/confirm', async (request, reply) => {
     const params = request.params as { kbId: string; documentId: string };
     if (!(await services.repository.canWriteKnowledgeBase(request.auth, id.parse(params.kbId)))) return notFound(reply, 'document_not_found');
-    const input = z.object({ sizeBytes: z.number().int().positive(), sha256: hash }).parse(request.body ?? {});
+    const input = z.object({
+      sizeBytes: z.number().int().positive(),
+      sha256: hash,
+      parts: z.array(multipartPartSchema).optional(),
+    }).parse(request.body ?? {});
     const document = await services.repository.getKnowledgeDocument(request.auth, id.parse(params.kbId), id.parse(params.documentId));
     if (!document) return notFound(reply, 'document_not_found');
     if (input.sizeBytes > services.config.KNOWLEDGE_DOCUMENT_MAX_BYTES) return reply.code(400).send({ error: 'knowledge_document_too_large' });
-    try { await services.artifacts.verifyObject(document.object_key ?? document.objectKey, input); } catch (error) {
+    const objectKey = document.object_key ?? document.objectKey;
+    const uploadId = document.upload_id ?? document.uploadId;
+    if (uploadId) {
+      if (!input.parts?.length) return reply.code(400).send({ error: 'parts_required' });
+      await services.artifacts.completeMultipartUpload(objectKey, uploadId, input.parts);
+    }
+    try { await services.artifacts.verifyObject(objectKey, input); } catch (error) {
       if (error instanceof ArtifactVerificationError) return reply.code(400).send({ error: 'document_verification_failed' });
       throw error;
     }
     const result = await services.repository.confirmDocumentUpload(request.auth, id.parse(params.kbId), id.parse(params.documentId), input);
     if (!result) return notFound(reply, 'document_not_found');
-    if (result.created !== false && result.job?.id) {
-      // 把请求 SERVER span 上下文注入任务 payload，consumer 用 link 关联；注入失败 fail-open。
-      let jobPayload: unknown = result.job;
-      try {
-        const carrier = injectObservabilityContext(context.active(), `knowledge:${result.job.id}`);
-        jobPayload = { ...(result.job as Record<string, unknown>), observability: carrier };
-      } catch {
-        jobPayload = result.job;
-      }
-      await services.knowledgeQueue.add('index', jobPayload, { jobId: result.job.id });
-    }
+    if (result.created !== false) await enqueueIndexJob(services, result);
     return reply.send(result.document ?? result);
   });
 
@@ -223,10 +353,20 @@ export async function registerKnowledgeRoutes(app: FastifyInstance, services: Se
 
   app.post('/api/knowledge-bases/:kbId/assets/:assetId/confirm', async (request, reply) => {
     const params = request.params as { kbId: string; assetId: string };
-    const input = z.object({ sizeBytes: z.number().int().positive(), sha256: hash, metadata: z.record(z.string(), z.unknown()).optional() }).parse(request.body ?? {});
+    const input = z.object({
+      sizeBytes: z.number().int().positive(),
+      sha256: hash,
+      metadata: z.record(z.string(), z.unknown()).optional(),
+      parts: z.array(multipartPartSchema).optional(),
+    }).parse(request.body ?? {});
     if (input.sizeBytes > services.config.KNOWLEDGE_DOCUMENT_MAX_BYTES) return reply.code(400).send({ error: 'asset_too_large' });
     const asset = await services.repository.getKnowledgeAsset(request.auth, id.parse(params.kbId), id.parse(params.assetId));
     if (!asset) return notFound(reply, 'asset_not_found');
+    const assetUploadId = asset.upload_id ?? asset.uploadId;
+    if (assetUploadId) {
+      if (!input.parts?.length) return reply.code(400).send({ error: 'parts_required' });
+      await services.artifacts.completeMultipartUpload(asset.object_key, assetUploadId, input.parts);
+    }
     try { await services.artifacts.verifyObject(asset.object_key, input); } catch (error) {
       if (error instanceof ArtifactVerificationError) return reply.code(400).send({ error: 'asset_verification_failed' });
       throw error;

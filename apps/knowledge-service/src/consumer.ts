@@ -98,6 +98,7 @@ export function startConsumer(
               documentId,
               objectKey: document.object_key,
               contentHash: document.content_hash,
+              contentEncoding: document.content_encoding ?? null,
               sizeBytes: Number(document.size_bytes),
               mime: document.mime,
               chunkSize: Number(knowledgeBase.chunk_size),

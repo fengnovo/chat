@@ -112,6 +112,12 @@ export interface ChatAttachmentRecord {
   contentType: string;
   sizeBytes: number;
   sha256: string;
+  /** 原始内容哈希（秒传/去重依据）。 */
+  contentSha256: string;
+  /** 对象存储内容编码，null 表示原文直存。 */
+  contentEncoding: string | null;
+  /** 分片上传 ID，整文件上传为 null。 */
+  uploadId: string | null;
   kind: RunAttachmentKind;
   status: 'pending' | 'ready';
   createdAt: string;
@@ -275,6 +281,9 @@ function chatAttachmentOf(row: QueryResultRow): ChatAttachmentRecord {
     contentType: String(row.content_type),
     sizeBytes: Number(row.size_bytes),
     sha256: String(row.sha256),
+    contentSha256: String(row.content_sha256 ?? row.sha256),
+    contentEncoding: row.content_encoding ? String(row.content_encoding) : null,
+    uploadId: row.upload_id ? String(row.upload_id) : null,
     kind: row.kind as RunAttachmentKind,
     status: row.status as 'pending' | 'ready',
     createdAt: iso(row.created_at as Date),
@@ -1424,13 +1433,17 @@ export class AgentRepository {
       contentType: string;
       sizeBytes: number;
       sha256: string;
+      contentSha256?: string | undefined;
+      contentEncoding?: string | null | undefined;
+      uploadId?: string | null | undefined;
       kind: RunAttachmentKind;
     },
   ): Promise<ChatAttachmentRecord> {
     const result = await this.pool.query(
       `INSERT INTO chat_attachments
-         (id, tenant_id, user_id, object_key, filename, content_type, size_bytes, sha256, kind)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (id, tenant_id, user_id, object_key, filename, content_type,
+          size_bytes, sha256, content_sha256, content_encoding, upload_id, kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         input.id,
@@ -1441,10 +1454,60 @@ export class AgentRepository {
         input.contentType,
         input.sizeBytes,
         input.sha256,
+        input.contentSha256 ?? input.sha256,
+        input.contentEncoding ?? null,
+        input.uploadId ?? null,
         input.kind,
       ],
     );
     return chatAttachmentOf(result.rows[0]);
+  }
+
+  /**
+   * 秒传查询：本租户内是否已有人上传过相同内容。只取已关联 run 的就绪附件，
+   * 其对象永远不会被删除，复用其 object_key 不会产生悬挂引用。
+   */
+  async findReadyChatAttachmentByContentHash(
+    tenantId: string,
+    contentSha256: string,
+  ): Promise<ChatAttachmentRecord | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM chat_attachments
+       WHERE tenant_id = $1 AND content_sha256 = $2
+         AND status = 'ready' AND run_id IS NOT NULL
+       ORDER BY uploaded_at DESC
+       LIMIT 1`,
+      [tenantId, contentSha256],
+    );
+    return result.rows[0] ? chatAttachmentOf(result.rows[0]) : null;
+  }
+
+  /** 记录分片上传 ID，供失败/取消时中止对应 multipart upload。 */
+  async setChatAttachmentUploadId(
+    attachmentId: string,
+    uploadId: string | null,
+  ): Promise<void> {
+    await this.pool.query(
+      'UPDATE chat_attachments SET upload_id = $2 WHERE id = $1',
+      [attachmentId, uploadId],
+    );
+  }
+
+  /**
+   * 统计同一对象键的其他附件引用数。秒传去重会让多个附件行共享一个对象，
+   * 删除/孤儿清理时仅在引用数归零后才真正删除对象存储文件。
+   */
+  async countChatAttachmentsByObjectKey(
+    objectKey: string,
+    excludeId?: string,
+  ): Promise<number> {
+    const result = await this.pool.query(
+      `SELECT COUNT(*)::int AS count FROM chat_attachments
+       WHERE object_key = $1
+         AND ($2::uuid IS NULL OR id <> $2)`,
+      [objectKey, excludeId ?? null],
+    );
+    return Number(result.rows[0]?.count ?? 0);
   }
 
   async getChatAttachment(
