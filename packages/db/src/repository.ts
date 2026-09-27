@@ -1166,11 +1166,22 @@ export class AgentRepository {
     afterSeq: number,
     limit = 500,
   ): Promise<PersistedAgentEvent[]> {
+    // 过滤已解决/已取消的审批与提问事件：页面刷新重放事件流时，这些
+    // interrupt 已经处理完毕，若仍推送 approval.required 会让前端再次
+    // 弹出审批卡，用户点批准又收到 run_not_waiting_for_approval。
     const result = await this.pool.query<{ seq: number; payload: AgentEvent }>(
-      `SELECT seq, payload
-       FROM run_events
-       WHERE tenant_id = $1 AND run_id = $2 AND seq > $3
-       ORDER BY seq ASC
+      `SELECT e.seq, e.payload
+       FROM run_events e
+       LEFT JOIN interrupts i
+         ON i.tenant_id = e.tenant_id
+         AND i.run_id = e.run_id
+         AND i.id = e.payload->>'interruptId'
+       WHERE e.tenant_id = $1 AND e.run_id = $2 AND e.seq > $3
+         AND NOT (
+           e.event_type IN ('approval.required', 'question.required')
+           AND i.status IN ('resolved', 'cancelled')
+         )
+       ORDER BY e.seq ASC
        LIMIT $4`,
       [context.tenantId, runId, afterSeq, limit],
     );

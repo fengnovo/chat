@@ -1,5 +1,13 @@
 import { AIBoundary } from '@cognicatch/react';
-import { isValidElement, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  isValidElement,
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -116,7 +124,7 @@ function MermaidDiagram({
   );
 }
 
-function Message({
+const Message = memo(function Message({
   copied,
   dismissedCards,
   header,
@@ -318,7 +326,7 @@ function Message({
       </div>
     </article>
   );
-}
+});
 
 function GeneratedInsightCard({ data }: { data: InsightCard }) {
   if (data.kind !== 'reliability-summary') {
@@ -445,88 +453,93 @@ function MarkdownContent({
 
   // 引用图片索引：basename → 代理地址。模型偶尔会把知识库原文里的相对路径
   // （如 `./000.jpg`）照抄进回答，直接渲染必然 404；这里按文件名映射回资产代理地址。
-  const citationImageMap = new Map<string, string>();
-  for (const citation of citations ?? []) {
-    for (const image of citation.images ?? []) {
-      const base = image.relPath.split('/').pop()?.toLowerCase();
-      if (base && !citationImageMap.has(base)) {
-        citationImageMap.set(base, getKnowledgeAssetContentUrl(citation.kbId, image.assetId));
+  const citationImageMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const citation of citations ?? []) {
+      for (const image of citation.images ?? []) {
+        const base = image.relPath.split('/').pop()?.toLowerCase();
+        if (base && !map.has(base)) {
+          map.set(base, getKnowledgeAssetContentUrl(citation.kbId, image.assetId));
+        }
       }
     }
-  }
-  const resolveImageSrc = (src: string): string | null => {
-    if (src.startsWith('/') || /^(https?:|data:|blob:)/i.test(src)) return src;
-    const base = src.split('?')[0]?.split('#')[0].split('/').pop()?.toLowerCase() ?? '';
-    return citationImageMap.get(base) ?? null;
-  };
+    return map;
+  }, [citations]);
 
-  const markdownComponents: Components = {
-    a: ({ children, href }) => {
-      const filePath = fileLinkPath(href);
-      if (filePath && onFileLinkClick) {
+  const markdownComponents = useMemo<Components>(() => {
+    const resolveImageSrc = (src: string): string | null => {
+      if (src.startsWith('/') || /^(https?:|data:|blob:)/i.test(src)) return src;
+      const base = src.split('?')[0]?.split('#')[0].split('/').pop()?.toLowerCase() ?? '';
+      return citationImageMap.get(base) ?? null;
+    };
+    return {
+      a: ({ children, href }) => {
+        const filePath = fileLinkPath(href);
+        if (filePath && onFileLinkClick) {
+          return (
+            <button
+              type="button"
+              className="file-link"
+              onClick={() => onFileLinkClick(filePath)}
+              title={`在文件浏览器中定位：${filePath}`}
+            >
+              {children}
+            </button>
+          );
+        }
+        const safe = safeExternalUrl(href);
+        if (!safe) return <span>{children}</span>;
         return (
-          <button
-            type="button"
-            className="file-link"
-            onClick={() => onFileLinkClick(filePath)}
-            title={`在文件浏览器中定位：${filePath}`}
-          >
+          <a href={safe} rel="noopener noreferrer" target="_blank">
             {children}
-          </button>
+          </a>
         );
-      }
-      const safe = safeExternalUrl(href);
-      if (!safe) return <span>{children}</span>;
-      return (
-        <a href={safe} rel="noopener noreferrer" target="_blank">
-          {children}
-        </a>
-      );
-    },
-    code: ({ className, children }) => {
-      if (highlight && className && /language-mermaid/i.test(className)) {
-        const chart = String(children).replace(/\n$/, '');
-        return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-      }
-      return <code className={className}>{children}</code>;
-    },
-    pre: ({ children }) => {
-      const child = Array.isArray(children) ? children[0] : children;
-      const codeProps = isValidElement(child)
-        ? (child.props as { className?: string; children?: unknown })
-        : null;
-      if (
-        highlight &&
-        codeProps?.className &&
-        /language-mermaid/i.test(codeProps.className)
-      ) {
-        const chart = String(codeProps.children ?? '').replace(/\n$/, '');
-        return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
-      }
-      return <CodeBlock>{children}</CodeBlock>;
-    },
-    img: ({ src, alt }) => {
-      if (!src) return null;
-      const url = typeof src === 'string' ? resolveImageSrc(src) : URL.createObjectURL(src);
-      // 相对路径且映射不到任何引用图片：说明文档引用的图片从未上传，渲染占位符，
-      // 绝不发 <img> 请求——死链 404 会被 lazy loading 在流式重排时反复重放。
-      if (!url) {
+      },
+      code: ({ className, children }) => {
+        if (highlight && className && /language-mermaid/i.test(className)) {
+          const chart = String(children).replace(/\n$/, '');
+          return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+        }
+        return <code className={className}>{children}</code>;
+      },
+      pre: ({ children }) => {
+        const child = Array.isArray(children) ? children[0] : children;
+        const codeProps = isValidElement(child)
+          ? (child.props as { className?: string; children?: unknown })
+          : null;
+        if (
+          highlight &&
+          codeProps?.className &&
+          /language-mermaid/i.test(codeProps.className)
+        ) {
+          const chart = String(codeProps.children ?? '').replace(/\n$/, '');
+          return <MermaidDiagram chart={chart} onPreview={onPreviewDiagram} />;
+        }
+        return <CodeBlock>{children}</CodeBlock>;
+      },
+      img: ({ src, alt }) => {
+        if (!src) return null;
+        const url = typeof src === 'string' ? resolveImageSrc(src) : URL.createObjectURL(src);
+        // 相对路径且映射不到任何引用图片：说明文档引用的图片从未上传，渲染占位符，
+        // 绝不发 <img> 请求——死链 404 会被 lazy loading 在流式重排时反复重放。
+        if (!url) {
+          return (
+            <span className="markdown-image-missing" title="原文引用的图片未上传到知识库">
+              🖼️ {alt || '图片缺失'}
+            </span>
+          );
+        }
         return (
-          <span className="markdown-image-missing" title="原文引用的图片未上传到知识库">
-            🖼️ {alt || '图片缺失'}
-          </span>
+          <img
+            src={url}
+            alt={alt ?? ''}
+            loading="lazy"
+            onClick={() => onPreviewImage(url, alt ?? undefined)}
+          />
         );
-      }
-      return (
-        <img
-          src={url}
-          alt={alt ?? ''}
-          loading="lazy"
-          onClick={() => onPreviewImage(url, alt ?? undefined)}
-        />
-      );
-    },
-  };
+      },
+    };
+  }, [citationImageMap, highlight, onFileLinkClick, onPreviewDiagram, onPreviewImage]);
 
   if (hasPreviewLink) {
     // 分割内容：预览链接之前、之后

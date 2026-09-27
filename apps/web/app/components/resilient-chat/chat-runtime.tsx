@@ -700,6 +700,31 @@ function ChatRuntime() {
     return () => window.clearInterval(timer);
   }, [isBusy]);
 
+  // 流式期间节流持久化消息：页面卡死/崩溃时，已收到的 AI 回复不至于在刷新后丢失。
+  // 必须用节流（每 300ms 最多写一次）而非防抖——流式期间 messages 每 ~24ms 就
+  // 更新一次，防抖会因持续重置定时器而永不触发，导致崩溃时什么都没存下。
+  const lastPersistRef = useRef(0);
+  useEffect(() => {
+    if (!isBusy) return;
+    const now = Date.now();
+    if (now - lastPersistRef.current < 300) return;
+    lastPersistRef.current = now;
+    const current = readPersistedRun(userId);
+    if (current && current.chatId === conversation.chatId) {
+      writePersistedRun({ ...current, messages }, userId);
+    }
+  }, [messages, isBusy, userId, conversation.chatId]);
+
+  // 运行结束时 flush 最后一帧：onFinish 也会写，但提前在 isBusy 落 false 时
+  // 补一次，确保流刚结束、用户立刻刷新的场景下也有最新内容。
+  useEffect(() => {
+    if (isBusy) return;
+    const current = readPersistedRun(userId);
+    if (current && current.chatId === conversation.chatId) {
+      writePersistedRun({ ...current, messages }, userId);
+    }
+  }, [isBusy, messages, userId, conversation.chatId]);
+
   const agentActivity: AgentStatus = useMemo(() => {
     // 用量来自模型返回的真实 usage，运行结束后保留最终值
     return {
@@ -779,6 +804,55 @@ function ChatRuntime() {
     return () => controller.abort();
     // 仅在挂载时校准一次上一次运行的持久化状态
   }, [userId]);
+
+  // 刷新页面后从 API 重拉当前会话完整历史。
+  // localStorage 的 persisted messages 只用于崩溃恢复，不能作为完整历史的数据源——
+  // 最后一次 run 若被取消/失败没产出文本，onFinish 不会写完整 messages，缓存里
+  // 可能只剩用户消息。sessions 加载完后匹配当前会话，拉一次 history 覆盖。
+  const historyLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!sessionsLoaded || historyLoadedRef.current) return;
+    historyLoadedRef.current = true;
+    const persisted = readPersistedRun(userId);
+    if (!persisted) return;
+    const match = sessions.find((s) => s.externalKey === persisted.chatId);
+    if (!match) return;
+    const controller = new AbortController();
+    apiFetch(`/api/agent/sessions/${encodeURIComponent(match.id)}/history`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const history = (await response.json()) as SessionHistory;
+        const restoredMessages = messagesFromHistory(history.messages);
+        setReasoningByRunId(() => {
+          const map = new Map<string, string>();
+          for (const msg of history.messages) {
+            if (msg.reasoning) map.set(msg.runId, msg.reasoning);
+          }
+          return map;
+        });
+        const latestRun = history.latestRun;
+        const pending = latestRun ? isPendingStatus(latestRun.status) : false;
+        // 非 pending：用 API 完整历史覆盖本地缓存（修复取消/失败后丢回复的问题）。
+        // pending：不覆盖——让流重放恢复当前 run 的流式输出，避免历史快照（不含
+        // 当前 run 的流式增量）覆盖掉 localStorage 里已有的部分内容。
+        if (!pending) {
+          writePersistedRun(
+            { ...persisted, messages: restoredMessages, pending },
+            userId,
+          );
+          setConversation((current) =>
+            current.chatId === persisted.chatId
+              ? { ...current, messages: restoredMessages }
+              : current,
+          );
+          setRunFailure(failureFromRun(latestRun));
+        }
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [sessions, sessionsLoaded, userId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1364,14 +1438,15 @@ function ChatRuntime() {
           error?: string;
         } | null;
         const code = payload?.error ?? `HTTP ${response.status}`;
-        // 孤儿审批：run 已不在等待状态（如 Worker 重启导致审批悬挂），
-        // 卡片永远无法成功提交，自动移除避免卡死交互。
+        // 孤儿审批：run 已不在等待状态（如 Worker 重启导致审批悬挂，或
+        // 刷新后重放了已解决的 approval 事件），卡片永远无法成功提交，
+        // 自动移除避免卡死交互。提示不说"任务已结束"——任务可能仍在运行。
         if (
           code === 'run_not_waiting_for_approval' ||
           code === 'run_not_found'
         ) {
           setPendingInterrupt(null);
-          setNotice('该任务已结束，待审批卡片已自动移除');
+          setNotice('该审批已处理，卡片已自动移除');
           return;
         }
         throw new Error(code);
@@ -1574,13 +1649,18 @@ function ChatRuntime() {
         >
           {hasConversation && (
             <div className='message-list' ref={messageListRef}>
-              {messages.map((message, index) =>
-                hiddenContinuationIds.has(message.id) ? null : (
+              {messages.map((message, index) => {
+                if (hiddenContinuationIds.has(message.id)) return null;
+                const isStreaming =
+                  isBusy &&
+                  message.id === lastMessage?.id &&
+                  message.role === 'assistant';
+                return (
                   <Message
                     copied={copiedMessage === message.id}
                     dismissedCards={dismissedCards}
                     header={index === lastAssistantIndex ? processPanel : null}
-                    highlight={highlightMarkdown}
+                    highlight={highlightMarkdown && !isStreaming}
                     key={message.id}
                     message={message}
                     onBoundaryError={() => {
@@ -1618,24 +1698,14 @@ function ChatRuntime() {
                     showWaitingDots={
                       !(index === lastAssistantIndex && processPanelVisible)
                     }
-                    streaming={
-                      isBusy &&
-                      message.id === lastMessage?.id &&
-                      message.role === 'assistant'
-                    }
-                    liveLabel={
-                      isBusy &&
-                      message.id === lastMessage?.id &&
-                      message.role === 'assistant'
-                        ? liveActivityLabel
-                        : null
-                    }
+                    streaming={isStreaming}
+                    liveLabel={isStreaming ? liveActivityLabel : null}
                     reasoning={
                       reasoningByRunId.get(message.metadata?.runId ?? '') ?? ''
                     }
                   />
-                ),
-              )}
+                );
+              })}
               {status === 'submitted' && !hasAssistantPlaceholder && (
                 <ThinkingRow>
                   {processPanelVisible ? processPanel : null}
