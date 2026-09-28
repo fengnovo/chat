@@ -607,23 +607,30 @@ function ChatRuntime() {
       const persisted = readPersistedRun(userId);
       const runId = message.metadata?.runId ?? persisted?.runId ?? '';
       if (runId) {
+        // abort 可能是浏览器切 tab 丢弃连接导致的，后端任务仍在运行，
+        // 必须保留 pending: true 让 visibility-change 恢复 effect 能接回 SSE。
         writePersistedRun(
           {
             chatId: conversation.chatId,
             runId,
             chunkIndex: persisted?.chunkIndex ?? 0,
             messages: finishedMessages,
-            pending: false,
+            pending: isAbort ? (persisted?.pending ?? true) : false,
           },
           userId,
         );
       }
       void refreshSessions();
-      setConversation((current) =>
-        current.chatId === conversation.chatId
-          ? { ...current, resumeRun: null }
-          : current,
-      );
+      // abort 时不清 resumeRun：切 tab 导致的断连需要它作为
+      // prepareReconnectToStreamRequest 的备用路径（pending 被恢复 effect
+      // 提前改成 false 时，仍可通过 resumeRun 找到 stream URL）。
+      if (!isAbort) {
+        setConversation((current) =>
+          current.chatId === conversation.chatId
+            ? { ...current, resumeRun: null }
+            : current,
+        );
+      }
       if (isAbort) {
         setTrace((current) => [
           ...current.slice(-9),
@@ -657,6 +664,8 @@ function ChatRuntime() {
   // 页面重新可见时，如果当前运行确实还在进行（后端仍有 pending run），
   // 就自动把流接回来。切走再切回时浏览器丢弃了旧连接，这里用服务端的
   // run 状态而不是前端 error 作为是否恢复的依据，避免任务被误判为结束。
+  // 即使后端已跑完（stillPending=false），也要 resumeStream 重放事件，
+  // 否则用户切回时看到空白——SSE 已断、onFinish 的 finishedMessages 不完整。
   useEffect(() => {
     if (!isPageVisible) return;
     const persisted = readPersistedRun(userId);
@@ -678,12 +687,12 @@ function ChatRuntime() {
         if (!response.ok) return;
         const run = (await response.json()) as RunSummary;
         const stillPending = isPendingStatus(run.status);
+        // 无论前端 status 是什么（ready/error/streaming），只要后端 run 存在且
+        // 前端没收到完整结果（messages 不完整或没有 finish chunk），就需要 resumeStream
+        // 从数据库重放事件。AI SDK 在 abort 后会把 status 设为 'ready'，而不是 'error'。
+        await resumeStream();
         writePersistedRun({ ...persisted, pending: stillPending }, userId);
-        if (stillPending && status === 'error') {
-          // 任务还在后台运行，只是页面失去焦点的这段时间连接断了。
-          await resumeStream();
-          setRunFailure(failureFromRun(run));
-        }
+        setRunFailure(failureFromRun(run));
       })
       .catch(() => undefined);
     return () => controller.abort();
