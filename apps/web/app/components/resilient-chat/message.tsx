@@ -210,8 +210,8 @@ const Message = memo(function Message({
             >
               <span className="thinking-chain-bullet" />
               <span className="thinking-chain-title">
-                {text ? '思考过程' : '思考中'}
-                {!text && <StreamingDots />}
+                {streaming && !text ? '思考中' : '思考过程'}
+                {streaming && !text && <StreamingDots />}
               </span>
               <span className="thinking-chain-toggle">
                 {thinkingExpanded ? '收起' : '展开'}
@@ -279,11 +279,7 @@ const Message = memo(function Message({
                 <span className="streaming-live-text">{liveLabel}</span>
               )}
             </span>
-          ) : (
-            !isUser && !streaming && (
-              <p className="message-empty">本轮没有返回任何内容，可以重新发送这条消息。</p>
-            )
-          )}
+          ) : null}
         </div>
 
         {!isUser && !dismissedCards.has(message.id) &&

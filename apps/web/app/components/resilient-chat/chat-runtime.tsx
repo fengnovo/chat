@@ -164,6 +164,7 @@ function ChatRuntime() {
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
   const [runFailure, setRunFailure] = useState<TaskFailure | null>(null);
+  const [recoveringRunId, setRecoveringRunId] = useState<string | null>(null);
   /** 上下文压缩进行中：deepagents 摘要阶段显示流光指示器，不展示摘要正文。 */
   const [contextCompressing, setContextCompressing] = useState(false);
   /** 续跑占位 user 消息的 id 集合：运行期间隐藏，run 结束后从 store 中移除。 */
@@ -230,6 +231,11 @@ function ChatRuntime() {
       : (knowledgeBaseIdsForChat(conversation.chatId) ?? []),
   );
   const sessionRef = useRef(new ResilientSession());
+  const activeChatIdRef = useRef(conversation.chatId);
+  const isActiveChatId = useCallback(
+    (chatId: string) => activeChatIdRef.current === chatId,
+    [],
+  );
   const conversationRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   // 用户是否停在会话底部附近：在底部时新内容自动跟随；主动上滑查看时不打断。
@@ -319,6 +325,21 @@ function ChatRuntime() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+  const runBelongsToChat = useCallback(
+    async (run: RunSummary, chatId: string) => {
+      const known = sessionsRef.current.find(
+        (session) => session.externalKey === chatId,
+      );
+      if (known) return known.id === run.sessionId;
+      const response = await apiFetch(
+        `/api/agent/sessions/${encodeURIComponent(run.sessionId)}`,
+      );
+      if (!response.ok) return false;
+      const session = (await response.json()) as WebSessionSummary;
+      return session.externalKey === chatId;
+    },
+    [],
+  );
   const refreshHistoryFiles = useCallback(async () => {
     const match = sessionsRef.current.find(
       (session) => session.externalKey === conversation.chatId,
@@ -352,6 +373,8 @@ function ChatRuntime() {
   }, [sessionsLoaded, sessions, conversation.chatId, refreshHistoryFiles]);
 
   const transport = useMemo(() => {
+    // 回调只在请求与重连时执行；构造 transport 时不会读取 ref。
+    // eslint-disable-next-line react-hooks/refs
     return new WorkflowChatTransport<ResilientMessage>({
       api: '/api/chat',
       fetch: createTrackedFetch(userId),
@@ -373,23 +396,58 @@ function ChatRuntime() {
         },
         headers: { 'Content-Type': 'application/json' },
       }),
-      prepareReconnectToStreamRequest: ({ api }) => {
+      prepareReconnectToStreamRequest: async ({ id }) => {
+        // 每次重连前，先检查 persistedRun 是否有效，避免用过期 runId 导致 404。
+        // 只依赖 readPersistedRun(userId)，不依赖 conversation.resumeRun（state 更新是异步的，
+        // resetConversation 已清除 localStorage 但 state 可能还是旧值，会导致误判）。
         const persistedRun = readPersistedRun(userId);
-        const pendingRun =
-          persistedRun?.pending && persistedRun.chatId === conversation.chatId
-            ? persistedRun
-            : conversation.resumeRun?.pending
-              ? conversation.resumeRun
-              : null;
-        if (!pendingRun) return { api };
+        if (
+          !persistedRun?.pending ||
+          persistedRun.chatId !== id ||
+          !isActiveChatId(id)
+        ) {
+          throw new DOMException('会话运行记录已切换', 'AbortError');
+        }
+        const response = await apiFetch(
+          `/api/agent/runs/${encodeURIComponent(persistedRun.runId)}`,
+        );
+        if (response.status === 404) {
+          if (readPersistedRun(userId)?.runId === persistedRun.runId)
+            clearPersistedRun(userId);
+          throw new DOMException('运行记录已失效', 'AbortError');
+        }
+        if (!response.ok)
+          throw new DOMException('暂时无法校验运行记录', 'AbortError');
+        const run = (await response.json()) as RunSummary;
+        if (!(await runBelongsToChat(run, id))) {
+          if (readPersistedRun(userId)?.runId === persistedRun.runId)
+            clearPersistedRun(userId);
+          throw new DOMException('运行记录不属于当前会话', 'AbortError');
+        }
+        const currentPersistedRun = readPersistedRun(userId);
+        if (
+          currentPersistedRun?.runId !== persistedRun.runId ||
+          currentPersistedRun.chatId !== id ||
+          !isActiveChatId(id)
+        ) {
+          throw new DOMException('会话运行记录已切换', 'AbortError');
+        }
         return {
-          api: `/api/chat/${encodeURIComponent(pendingRun.runId)}/stream`,
-          headers: { 'x-page-resume': '1' }, // 固定让服务器从0开始全量重放
+          api: `/api/chat/${encodeURIComponent(currentPersistedRun.runId)}/stream`,
+          headers: { 'x-page-resume': '1' },
         };
       },
       onChatSendMessage: (response, options) => {
         const runId = response.headers.get('x-workflow-run-id');
         if (!runId) return;
+        if (!isActiveChatId(options.chatId)) {
+          void refreshSessions();
+          return;
+        }
+        // 新 run 开始时，清除旧的 persistedRun，避免重连时读到过期数据导致 404。
+        // 即使 chatId 相同，也要清除——因为旧 run 可能已经 abort，pending=true
+        // 但后端已清理，重连会返回 404。
+        clearPersistedRun(userId);
         writePersistedRun(
           {
             chatId: options.chatId,
@@ -402,18 +460,19 @@ function ChatRuntime() {
         );
         void refreshSessions();
       },
-      onChatEnd: ({ chunkIndex }) => {
+      onChatEnd: ({ chatId, chunkIndex }) => {
         const current = readPersistedRun(userId);
-        if (!current) return;
+        if (!current || current.chatId !== chatId || !isActiveChatId(chatId))
+          return;
         writePersistedRun({ ...current, chunkIndex }, userId);
       },
     });
   }, [
     userId,
-    conversation.chatId,
-    conversation.resumeRun,
     refreshSessions,
     knowledgeBaseIds,
+    runBelongsToChat,
+    isActiveChatId,
   ]);
 
   const {
@@ -435,6 +494,14 @@ function ChatRuntime() {
     throttle: 24,
     transport,
     onData: (part) => {
+      if (part.type === 'data-agent' || part.type === 'data-subagent') {
+        const currentRun = readPersistedRun(userId);
+        if (
+          currentRun?.chatId !== activeChatIdRef.current ||
+          currentRun.runId !== part.data.runId
+        )
+          return;
+      }
       if (part.type === 'data-subagent') {
         // 子 Agent 事件：折叠进执行面板卡片（started 显示运行中，completed 落定结果）。
         setSubagentCards((current) => foldSubagentCard(current, part.data));
@@ -503,23 +570,28 @@ function ChatRuntime() {
           const at = Date.parse(event.timestamp) || Date.now();
           const input = event.type === 'tool.started' ? event.input : null;
           const output = event.type === 'tool.completed' ? event.output : null;
-          setActivity((current) => ({
-            entries: [
-              ...current.entries.slice(-19),
-              {
-                kind: 'tool',
-                id: `${event.type}-${event.invocationId}-${event.timestamp}`,
-                invocationId: event.invocationId,
-                tool: event.tool,
-                phase,
-                at,
-                input,
-                output,
-              },
-            ],
-            startedAt: current.startedAt ?? at,
-            lastEventAt: Date.now(),
-          }));
+          const id = `${event.runId}-${event.type}-${event.invocationId}-${event.timestamp}`;
+          setActivity((current) => {
+            if (current.entries.some((entry) => entry.id === id))
+              return current;
+            return {
+              entries: [
+                ...current.entries.slice(-19),
+                {
+                  kind: 'tool',
+                  id,
+                  invocationId: event.invocationId,
+                  tool: event.tool,
+                  phase,
+                  at,
+                  input,
+                  output,
+                },
+              ],
+              startedAt: current.startedAt ?? at,
+              lastEventAt: Date.now(),
+            };
+          });
         }
         if (event.type === 'todo.updated') setAgentTodos(event.todos);
         if (
@@ -580,6 +652,14 @@ function ChatRuntime() {
       isAbort,
       isError,
     }) => {
+      const persisted = readPersistedRun(userId);
+      const finishedRunId = message.metadata?.runId;
+      if (
+        persisted?.chatId !== activeChatIdRef.current ||
+        !finishedRunId ||
+        persisted.runId !== finishedRunId
+      )
+        return;
       const text = messageText(message);
       const taskFailed = finishReason === 'error';
       if (!isError && !taskFailed && text) {
@@ -587,25 +667,14 @@ function ChatRuntime() {
       }
       if (isError) return;
 
-      // 运行正常收尾却没有任何文本：提示用户而不是留下一个永远转圈的空气泡
+      // 流结束时本地可能漏掉正文 chunk；先用服务端保存的事件恢复，
+      // 确认确实没有正文后再提示空回复。
       if (!isAbort && !taskFailed && !text) {
-        setRunFailure({
-          code: 'empty_completion',
-          message: 'Agent 本次没有返回任何内容',
-        });
-        setTrace((current) => [
-          ...current.slice(-9),
-          localEvent(
-            'verify',
-            'warning',
-            '本轮没有产生任何回复',
-            '运行已结束但未收到文本内容，可以重新发送这条消息',
-          ),
-        ]);
+        setRecoveringRunId(finishedRunId);
+        void recoverEmptyCompletion(finishedRunId, persisted.chatId);
       }
 
-      const persisted = readPersistedRun(userId);
-      const runId = message.metadata?.runId ?? persisted?.runId ?? '';
+      const runId = finishedRunId;
       if (runId) {
         // abort 可能是浏览器切 tab 丢弃连接导致的，后端任务仍在运行，
         // 必须保留 pending: true 让 visibility-change 恢复 effect 能接回 SSE。
@@ -645,7 +714,69 @@ function ChatRuntime() {
     },
   });
 
-  const isBusy = status === 'submitted' || status === 'streaming';
+  async function recoverEmptyCompletion(runId: string, chatId: string) {
+    const stillCurrent = () => {
+      const current = readPersistedRun(userId);
+      return activeChatIdRef.current === chatId &&
+        current?.chatId === chatId && current.runId === runId;
+    };
+    try {
+      const runResponse = await apiFetch(`/api/agent/runs/${encodeURIComponent(runId)}`);
+      if (!runResponse.ok) throw new Error(`HTTP ${runResponse.status}`);
+      const run = (await runResponse.json()) as RunSummary;
+      if (!stillCurrent() || !(await runBelongsToChat(run, chatId)) || !stillCurrent()) return;
+      if (isPendingStatus(run.status)) {
+        const current = readPersistedRun(userId);
+        if (current) {
+          const pendingRun = { ...current, pending: true };
+          writePersistedRun(pendingRun, userId);
+          // 人工审批时暂停是预期状态，卡片仍在页面上；不要因 SSE
+          // 恰好断开就立即循环重连并反复重放同一张审批卡片。
+          if (run.status !== 'waiting_approval' && run.status !== 'waiting_question') {
+            setConversation((seed) => seed.chatId === chatId
+              ? { ...seed, resumeRun: pendingRun } : seed);
+          }
+        }
+        return;
+      }
+      if (run.status !== 'completed') {
+        setRunFailure(failureFromRun(run));
+        return;
+      }
+      const historyResponse = await apiFetch(
+        `/api/agent/sessions/${encodeURIComponent(run.sessionId)}/history`,
+      );
+      if (!historyResponse.ok) throw new Error(`HTTP ${historyResponse.status}`);
+      const history = (await historyResponse.json()) as SessionHistory;
+      if (!stillCurrent()) return;
+      const recovered = history.messages.find((item) =>
+        item.runId === runId && item.role === 'assistant' && item.text.trim());
+      if (recovered) {
+        const restoredMessages = messagesFromHistory(history.messages);
+        const current = readPersistedRun(userId);
+        if (current) writePersistedRun({ ...current, messages: restoredMessages, pending: false }, userId);
+        setMessages(restoredMessages);
+        setConversation((seed) => seed.chatId === chatId
+          ? { ...seed, messages: restoredMessages } : seed);
+        if (recovered.reasoning) {
+          setReasoningByRunId((previous) => new Map(previous).set(runId, recovered.reasoning!));
+        }
+        sessionRef.current.commitAssistant(recovered.text);
+        setRunFailure(null);
+        return;
+      }
+      setRunFailure({ code: 'empty_completion', message: 'Agent 本次没有返回任何内容' });
+    } catch {
+      if (stillCurrent()) {
+        setRunFailure({ code: 'reply_recovery_failed', message: '暂时无法恢复本次回复' });
+      }
+    } finally {
+      setRecoveringRunId((current) => current === runId ? null : current);
+    }
+  }
+
+  const isBusy = status === 'submitted' || status === 'streaming' ||
+    recoveringRunId !== null || pendingInterrupt !== null;
   const hasConversation = messages.length > 0;
   const lastMessage = messages.at(-1);
   const hasAssistantPlaceholder =
@@ -673,7 +804,13 @@ function ChatRuntime() {
       status === 'submitted' ||
       status === 'streaming' ||
       (persisted?.pending && persisted.chatId === conversation.chatId);
-    if (!hasActiveRun || !persisted) return;
+    if (
+      !hasActiveRun ||
+      !persisted ||
+      persisted.chatId !== conversation.chatId ||
+      activeChatIdRef.current !== conversation.chatId
+    )
+      return;
 
     const controller = new AbortController();
     apiFetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
@@ -681,22 +818,56 @@ function ChatRuntime() {
     })
       .then(async (response) => {
         if (response.status === 404) {
-          clearPersistedRun(userId);
+          if (readPersistedRun(userId)?.runId === persisted.runId)
+            clearPersistedRun(userId);
           return;
         }
         if (!response.ok) return;
         const run = (await response.json()) as RunSummary;
+        if (
+          controller.signal.aborted ||
+          activeChatIdRef.current !== persisted.chatId ||
+          readPersistedRun(userId)?.runId !== persisted.runId
+        )
+          return;
+        if (!(await runBelongsToChat(run, persisted.chatId))) {
+          if (readPersistedRun(userId)?.runId === persisted.runId) {
+            clearPersistedRun(userId);
+          }
+          return;
+        }
+        if (
+          controller.signal.aborted ||
+          activeChatIdRef.current !== persisted.chatId ||
+          readPersistedRun(userId)?.runId !== persisted.runId
+        )
+          return;
         const stillPending = isPendingStatus(run.status);
         // 无论前端 status 是什么（ready/error/streaming），只要后端 run 存在且
         // 前端没收到完整结果（messages 不完整或没有 finish chunk），就需要 resumeStream
         // 从数据库重放事件。AI SDK 在 abort 后会把 status 设为 'ready'，而不是 'error'。
         await resumeStream();
-        writePersistedRun({ ...persisted, pending: stillPending }, userId);
+        const current = readPersistedRun(userId);
+        if (
+          controller.signal.aborted ||
+          activeChatIdRef.current !== persisted.chatId ||
+          current?.runId !== persisted.runId ||
+          current.chatId !== persisted.chatId
+        )
+          return;
+        writePersistedRun({ ...current, pending: stillPending }, userId);
         setRunFailure(failureFromRun(run));
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [isPageVisible, status, conversation.chatId, resumeStream, userId]);
+  }, [
+    isPageVisible,
+    status,
+    conversation.chatId,
+    resumeStream,
+    runBelongsToChat,
+    userId,
+  ]);
 
   useEffect(() => {
     if (status !== 'streaming' || !lastAssistant) return;
@@ -747,8 +918,7 @@ function ChatRuntime() {
     agentActivity.entries.length > 0 || subagentCards.length > 0;
 
   useEffect(() => {
-    // 已经有缓存就先直接渲染，切回页面时不再重复拉取会话列表
-    if (restoredSessions) return;
+    // 缓存只用于首屏展示；每次挂载都向服务端校准，清除跨标签页或旧版本留下的已删会话。
     const controller = new AbortController();
     let active = true;
     fetchSessionPage(undefined, controller.signal)
@@ -780,27 +950,40 @@ function ChatRuntime() {
     };
   }, [restoredSessions, userId]);
 
+  // 组件挂载时校准 persisted run 状态，避免读到过期数据导致 404。
+  // 每次挂载都检查，不依赖 userId（因为 userId 不变时也需要清理过期数据）。
   useEffect(() => {
-    const persisted = readPersistedRun(userId);
-    if (!persisted) return;
-    const controller = new AbortController();
-    apiFetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
-      signal: controller.signal,
-    })
-      .then(async (response) => {
+    const checkAndClearExpiredRun = async () => {
+      const currentUserId = userId; // 捕获当前 userId
+      const persisted = readPersistedRun(currentUserId);
+      if (!persisted) return;
+      const controller = new AbortController();
+      try {
+        const response = await apiFetch(
+          `/api/agent/runs/${encodeURIComponent(persisted.runId)}`,
+          {
+            signal: controller.signal,
+          },
+        );
         if (response.status === 404) {
-          clearPersistedRun(userId);
+          clearPersistedRun(currentUserId);
           return;
         }
         if (!response.ok) return;
         const run = (await response.json()) as RunSummary;
+        if (!(await runBelongsToChat(run, persisted.chatId))) {
+          if (readPersistedRun(currentUserId)?.runId === persisted.runId) {
+            clearPersistedRun(currentUserId);
+          }
+          return;
+        }
         // 竞态保护：若会话加载（loadSession）已把持久化 run 更新成本会话更新的 run
         // （例如用户已成功续跑），这里拿到的旧 run 状态已过期，不能再据此设置失败横幅，
         // 否则会覆盖 loadSession 里 setRunFailure(null) 的正确结果，导致刷新后横幅常驻。
-        if (readPersistedRun(userId)?.runId !== run.id) return;
+        if (readPersistedRun(currentUserId)?.runId !== run.id) return;
         setRunFailure(failureFromRun(run));
         const pending = isPendingStatus(run.status);
-        writePersistedRun({ ...persisted, pending }, userId);
+        writePersistedRun({ ...persisted, pending }, currentUserId);
         if (pending) {
           setConversation((current) =>
             current.chatId === persisted.chatId
@@ -808,11 +991,14 @@ function ChatRuntime() {
               : current,
           );
         }
-      })
-      .catch(() => undefined);
-    return () => controller.abort();
-    // 仅在挂载时校准一次上一次运行的持久化状态
-  }, [userId]);
+      } catch {
+        // ignore
+      } finally {
+        controller.abort();
+      }
+    };
+    void checkAndClearExpiredRun();
+  }, [runBelongsToChat, userId]);
 
   // 刷新页面后从 API 重拉当前会话完整历史。
   // localStorage 的 persisted messages 只用于崩溃恢复，不能作为完整历史的数据源——
@@ -821,11 +1007,11 @@ function ChatRuntime() {
   const historyLoadedRef = useRef(false);
   useEffect(() => {
     if (!sessionsLoaded || historyLoadedRef.current) return;
-    historyLoadedRef.current = true;
-    const persisted = readPersistedRun(userId);
-    if (!persisted) return;
-    const match = sessions.find((s) => s.externalKey === persisted.chatId);
+    const chatId = activeChatIdRef.current;
+    const match = sessions.find((s) => s.externalKey === chatId);
     if (!match) return;
+    historyLoadedRef.current = true;
+    const initialRun = readPersistedRun(userId);
     const controller = new AbortController();
     apiFetch(`/api/agent/sessions/${encodeURIComponent(match.id)}/history`, {
       signal: controller.signal,
@@ -833,6 +1019,8 @@ function ChatRuntime() {
       .then(async (response) => {
         if (!response.ok) return;
         const history = (await response.json()) as SessionHistory;
+        if (controller.signal.aborted || activeChatIdRef.current !== chatId)
+          return;
         const restoredMessages = messagesFromHistory(history.messages);
         setReasoningByRunId(() => {
           const map = new Map<string, string>();
@@ -843,20 +1031,53 @@ function ChatRuntime() {
         });
         const latestRun = history.latestRun;
         const pending = latestRun ? isPendingStatus(latestRun.status) : false;
+        const currentPersisted = readPersistedRun(userId);
+        if (
+          currentPersisted &&
+          (currentPersisted.chatId !== chatId ||
+            currentPersisted.runId !== initialRun?.runId)
+        )
+          return;
+        const reconciledRun = latestRun
+          ? {
+              chatId,
+              runId: latestRun.id,
+              chunkIndex:
+                latestRun.id === currentPersisted?.runId
+                  ? currentPersisted.chunkIndex
+                  : 0,
+              messages:
+                pending && latestRun.id === currentPersisted?.runId
+                  ? currentPersisted.messages
+                  : restoredMessages,
+              pending,
+            }
+          : null;
+        if (reconciledRun) writePersistedRun(reconciledRun, userId);
+        else clearPersistedRun(userId);
         // 非 pending：用 API 完整历史覆盖本地缓存（修复取消/失败后丢回复的问题）。
         // pending：不覆盖——让流重放恢复当前 run 的流式输出，避免历史快照（不含
         // 当前 run 的流式增量）覆盖掉 localStorage 里已有的部分内容。
         if (!pending) {
-          writePersistedRun(
-            { ...persisted, messages: restoredMessages, pending },
-            userId,
-          );
           setConversation((current) =>
-            current.chatId === persisted.chatId
-              ? { ...current, messages: restoredMessages }
+            current.chatId === chatId
+              ? { ...current, messages: restoredMessages, resumeRun: null }
               : current,
           );
           setRunFailure(failureFromRun(latestRun));
+        } else if (
+          reconciledRun &&
+          reconciledRun.runId !== currentPersisted?.runId
+        ) {
+          setConversation((current) =>
+            current.chatId === chatId
+              ? {
+                  ...current,
+                  messages: restoredMessages,
+                  resumeRun: reconciledRun,
+                }
+              : current,
+          );
         }
       })
       .catch(() => undefined);
@@ -1073,8 +1294,8 @@ function ChatRuntime() {
     setSwitchingSessionId(session.id);
     setSessionsError(null);
     try {
-      // 切走前先停止当前任务：如果它在后台运行，就发取消信号并断开流。
-      await stopCurrentConversation();
+      // 切换只断开当前页面的流，Worker 继续运行；切回时从历史与 SSE 恢复。
+      await disconnectCurrentConversation();
       const response = await apiFetch(
         `/api/agent/sessions/${encodeURIComponent(session.id)}/history`,
       );
@@ -1110,10 +1331,11 @@ function ChatRuntime() {
         })),
       );
 
-      await stop();
       clearError();
+      historyLoadedRef.current = true;
       if (persistedRun) writePersistedRun(persistedRun, userId);
       else clearPersistedRun(userId);
+      activeChatIdRef.current = session.externalKey;
       setConversation({
         chatId: session.externalKey,
         messages: restoredMessages,
@@ -1130,6 +1352,7 @@ function ChatRuntime() {
       setGeneratedTokens(0);
       setInteractionError(null);
       setRunFailure(failureFromRun(latestRun));
+      setRecoveringRunId(null);
       setHiddenContinuationIds(new Set());
       sessionRef.current = new ResilientSession();
     } catch {
@@ -1150,6 +1373,7 @@ function ChatRuntime() {
     setInput('');
     setSuggestions([]);
     setRunFailure(null);
+    setRecoveringRunId(null);
     // 新消息开始时清掉上一轮残留的过程记录/任务计划，避免"你好"也先冒出上轮的工具执行。
     setActivity(emptyActivity);
     setAgentTodos([]);
@@ -1257,19 +1481,14 @@ function ChatRuntime() {
     await reload();
   }
 
-  async function stopCurrentConversation() {
-    const currentRun = readPersistedRun(userId);
-    if (currentRun?.pending) {
-      await apiFetch(
-        `/api/agent/runs/${encodeURIComponent(currentRun.runId)}/cancel`,
-        { method: 'POST' },
-      ).catch(() => null);
-    }
+  async function disconnectCurrentConversation() {
     await stop();
   }
 
   function resetConversation(chatId: string) {
     stickToBottomRef.current = true;
+    historyLoadedRef.current = true;
+    activeChatIdRef.current = chatId;
     clearError();
     clearPersistedRun(userId);
     setConversation({
@@ -1311,7 +1530,7 @@ function ChatRuntime() {
       if (!response.ok) {
         throw new Error(await responseError(response, '新建会话失败'));
       }
-      await stopCurrentConversation();
+      await disconnectCurrentConversation();
       resetConversation(externalKey);
       await refreshSessions();
     } catch (caught) {
@@ -1399,13 +1618,17 @@ function ChatRuntime() {
       // 列表按最近更新排序，过滤后的第一个就是左侧第一项。
       const remaining = sessions.filter((session) => session.id !== deleted.id);
       setSessions(remaining);
+      writeSessionCache(
+        { data: remaining, nextCursor: sessionsNextCursor },
+        userId,
+      );
       setSessionDialog(null);
       if (wasActive) {
         // 删掉的正是当前会话：自动切到剩余的第一个；一个都不剩就落到新建对话。
         if (remaining[0]) {
           await selectSession(remaining[0]);
         } else {
-          await stopCurrentConversation();
+          await disconnectCurrentConversation();
           resetConversation(crypto.randomUUID());
         }
       }
@@ -1434,6 +1657,37 @@ function ChatRuntime() {
     const segment =
       interrupt.type === 'approval.required' ? 'approvals' : 'questions';
     try {
+      const persisted = readPersistedRun(userId);
+      if (
+        persisted?.chatId !== activeChatIdRef.current ||
+        persisted.runId !== interrupt.runId
+      ) {
+        setPendingInterrupt(null);
+        return;
+      }
+      const runResponse = await apiFetch(
+        `/api/agent/runs/${encodeURIComponent(interrupt.runId)}`,
+      );
+      if (
+        !runResponse.ok ||
+        !(await runBelongsToChat(
+          (await runResponse.json()) as RunSummary,
+          persisted.chatId,
+        ))
+      ) {
+        setPendingInterrupt(null);
+        setInteractionError('该审批不属于当前会话');
+        return;
+      }
+      const current = readPersistedRun(userId);
+      if (
+        current?.runId !== interrupt.runId ||
+        current.chatId !== activeChatIdRef.current ||
+        current.chatId !== persisted.chatId
+      ) {
+        setPendingInterrupt(null);
+        return;
+      }
       const response = await apiFetch(
         `/api/agent/runs/${encodeURIComponent(interrupt.runId)}/${segment}/${encodeURIComponent(interrupt.interruptId)}`,
         {
@@ -1541,7 +1795,7 @@ function ChatRuntime() {
       {!sidebarHidden && (
         <Sidebar
           activeChatId={conversation.chatId}
-          busy={isBusy || creatingSession}
+          busy={creatingSession}
           collapsed={sidebarCollapsed}
           creating={creatingSession}
           error={sessionsError}

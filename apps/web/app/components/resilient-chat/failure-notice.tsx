@@ -3,6 +3,18 @@ import type { TaskFailure } from './types';
 
 function taskFailureCopy(failure: TaskFailure) {
   const detail = `${failure.code} ${failure.message}`.toLowerCase();
+  if (failure.code === 'empty_completion') {
+    return {
+      title: 'Agent 没有给出最终回复',
+      detail: '已核对服务端运行记录，只有思考过程，没有可展示的答复。可以点击「继续对话」要求 Agent 直接回答。',
+    };
+  }
+  if (failure.code === 'reply_recovery_failed') {
+    return {
+      title: '回复暂时无法恢复',
+      detail: '服务端可能已保存答复，请刷新页面重新读取这条会话。',
+    };
+  }
   if (
     detail.includes('402') ||
     detail.includes('quota') ||
@@ -59,8 +71,13 @@ function TaskFailureNotice({
         <strong>{copy.title}</strong>
         <p>{copy.detail}</p>
       </div>
-      <button type="button" onClick={onContinue}>
-        继续对话
+      <button
+        type="button"
+        onClick={failure.code === 'reply_recovery_failed'
+          ? () => window.location.reload()
+          : onContinue}
+      >
+        {failure.code === 'reply_recovery_failed' ? '重新读取' : '继续对话'}
       </button>
     </section>
   );

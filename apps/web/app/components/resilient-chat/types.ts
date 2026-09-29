@@ -187,6 +187,7 @@ type SessionHistory = {
 
 type RunSummary = {
   id: string;
+  sessionId: string;
   status: RunStatus;
   errorCode: string | null;
   errorMessage: string | null;
