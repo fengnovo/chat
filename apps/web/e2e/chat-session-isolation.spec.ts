@@ -1,5 +1,104 @@
 import { test, expect, adminUser, mockAuth, mockJson } from './fixtures';
 
+test('新消息在 Worker 排队时立即显示等待状态', async ({ page }) => {
+  const session = {
+    id: 'session-queue', title: '排队会话', externalKey: 'chat-queue',
+    createdAt: '2026-09-29T00:00:00.000Z', updatedAt: '2026-09-29T00:00:00.000Z',
+  };
+  await mockAuth(page, adminUser);
+  await mockJson(page, '**/api/knowledge-bases', { data: [] });
+  await mockJson(page, '**/api/agent/sessions?*', { data: [session], nextCursor: null });
+  await mockJson(page, '**/api/agent/sessions/session-queue/history', {
+    session, messages: [], latestRun: null,
+  });
+  await mockJson(page, '**/api/agent/sessions/session-queue/files', { files: [] });
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url !== '/api/chat' || init?.method !== 'POST') return originalFetch(input, init);
+      const stream = new ReadableStream<Uint8Array>();
+      return Promise.resolve(new Response(stream, { status: 200, headers: {
+        'content-type': 'text/event-stream', 'x-workflow-run-id': 'run-queue',
+        'x-vercel-ai-ui-message-stream': 'v1',
+      } }));
+    };
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '打开对话：排队会话' }).click();
+  await page.getByRole('textbox', { name: '输入消息' }).fill('今天的');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await expect(page.getByText('今天的')).toBeVisible();
+  await expect(page.getByText('任务已提交，等待 Agent 开始处理…')).toBeVisible();
+});
+
+test('轮换两个仍在运行的会话时会立即订阅当前会话的回复', async ({ page }) => {
+  const sessions = [
+    { id: 'session-a', title: '会话 A', externalKey: 'chat-a',
+      createdAt: '2026-09-29T00:00:00.000Z', updatedAt: '2026-09-29T00:00:00.000Z' },
+    { id: 'session-b', title: '会话 B', externalKey: 'chat-b',
+      createdAt: '2026-09-29T00:01:00.000Z', updatedAt: '2026-09-29T00:01:00.000Z' },
+  ];
+  await mockAuth(page, adminUser);
+  await mockJson(page, '**/api/knowledge-bases', { data: [] });
+  await mockJson(page, '**/api/agent/sessions?*', { data: sessions, nextCursor: null });
+  for (const [index, session] of sessions.entries()) {
+    const runId = `run-${index}`;
+    await mockJson(page, `**/api/agent/sessions/${session.id}/history`, {
+      session,
+      messages: [{ id: `user-${index}`, runId, role: 'user',
+        text: `问题 ${index}`, createdAt: session.createdAt }],
+      latestRun: { id: runId, sessionId: session.id, status: index === 0 ? 'running' : 'queued',
+        errorCode: null, errorMessage: null },
+    });
+    await mockJson(page, `**/api/agent/sessions/${session.id}/files`, { files: [] });
+    await mockJson(page, `**/api/agent/runs/${runId}`, {
+      id: runId, sessionId: session.id, status: index === 0 ? 'running' : 'queued',
+      errorCode: null, errorMessage: null,
+    });
+  }
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    (window as Window & { requestedRunStreams?: string[] }).requestedRunStreams = [];
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const match = url.match(/\/api\/chat\/(run-\d+)\/stream/);
+      if (!match) return originalFetch(input, init);
+      const runId = match[1];
+      (window as Window & { requestedRunStreams?: string[] }).requestedRunStreams?.push(runId);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const payload = { type: 'start', messageId: `message-${runId}`,
+            messageMetadata: { runId } };
+          if (runId === 'run-0') {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`));
+          }
+          init?.signal?.addEventListener('abort', () => controller.close(), { once: true });
+        },
+      });
+      return Promise.resolve(new Response(stream, { status: 200, headers: {
+        'content-type': 'text/event-stream', 'x-workflow-run-id': runId,
+        'x-vercel-ai-ui-message-stream': 'v1',
+      } }));
+    };
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '打开对话：会话 A' }).click();
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { requestedRunStreams?: string[] }).requestedRunStreams?.length ?? 0,
+  )).toBe(1);
+  await page.getByRole('button', { name: '打开对话：会话 B' }).click();
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { requestedRunStreams?: string[] }).requestedRunStreams?.length ?? 0,
+  )).toBe(2);
+  expect(await page.evaluate(() =>
+    (window as Window & { requestedRunStreams?: string[] }).requestedRunStreams,
+  )).toEqual(['run-0', 'run-1']);
+  await expect(page.getByText('任务已提交，等待 Agent 开始处理…')).toBeVisible();
+});
+
 test('旧会话不能重连另一会话的 run 并显示其审批', async ({ page }) => {
   const oldSession = {
     id: 'session-old', title: '深圳旧会话', externalKey: 'chat-old',

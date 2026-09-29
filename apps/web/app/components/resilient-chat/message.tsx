@@ -387,6 +387,16 @@ function fileLinkPath(href: string | undefined): string | null {
   return normalized || null;
 }
 
+function isDirectImageUrl(href: string): boolean {
+  try {
+    const url = new URL(href);
+    return (url.protocol === 'http:' || url.protocol === 'https:') &&
+      /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 带复制按钮的代码块：右上角悬浮一个复制图标，点击后把代码文本写入剪贴板，
  * 短暂显示对勾反馈。pre 本身保持可滚动与键盘聚焦能力。
@@ -460,6 +470,17 @@ function MarkdownAnchor({ children, href }: ComponentProps<'a'>) {
   }
   const safe = safeExternalUrl(href);
   if (!safe) return <span>{children}</span>;
+  const containsImage = Array.isArray(children)
+    ? children.some(isValidElement)
+    : isValidElement(children);
+  if (isDirectImageUrl(safe) && !containsImage) {
+    return (
+      <span className="markdown-link-preview">
+        <MarkdownImage src={safe} alt="链接图片预览" linkedPreview />
+        <a href={safe} rel="noopener noreferrer" target="_blank">{children}</a>
+      </span>
+    );
+  }
   return <a href={safe} rel="noopener noreferrer" target="_blank">{children}</a>;
 }
 
@@ -485,8 +506,11 @@ function MarkdownPre({ children }: ComponentProps<'pre'>) {
   return <CodeBlock>{children}</CodeBlock>;
 }
 
-function MarkdownImage({ src, alt }: ComponentProps<'img'>) {
+function MarkdownImage({ src, alt, linkedPreview = false }: ComponentProps<'img'> & {
+  linkedPreview?: boolean;
+}) {
   const { citationImageMap, onPreviewImage } = useMarkdownRenderContext();
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   if (!src) return null;
   const url = typeof src === 'string'
     ? (src.startsWith('/') || /^(https?:|data:|blob:)/i.test(src)
@@ -494,14 +518,26 @@ function MarkdownImage({ src, alt }: ComponentProps<'img'>) {
       : citationImageMap.get(src.split('?')[0]?.split('#')[0].split('/').pop()?.toLowerCase() ?? ''))
     : URL.createObjectURL(src);
   // 未上传的相对路径图片只显示占位符，避免流式重排重复请求死链。
-  if (!url) {
+  if (!url || /^\/?upload-placeholder(?:[/?#]|$)/i.test(url)) {
     return (
-      <span className="markdown-image-missing" title="原文引用的图片未上传到知识库">
-        🖼️ {alt || '图片缺失'}
+      <span className="markdown-image-missing" title="回复中没有可加载的图片地址">
+        🖼️ 图片地址不可用{alt ? `：${alt}` : ''}
       </span>
     );
   }
-  return <img src={url} alt={alt ?? ''} loading="lazy"
+  if (failedSrc === url) {
+    if (linkedPreview) {
+      return <span className="markdown-image-missing">🖼️ 图片预览失败，请打开下方链接</span>;
+    }
+    const safe = safeExternalUrl(url);
+    return safe ? (
+      <a href={safe} rel="noopener noreferrer" target="_blank">图片加载失败，打开原图</a>
+    ) : (
+      <span className="markdown-image-missing">🖼️ 图片加载失败</span>
+    );
+  }
+  return <img key={url} src={url} alt={alt ?? ''} loading="lazy"
+    referrerPolicy="no-referrer" onError={() => setFailedSrc(url)}
     onClick={() => onPreviewImage(url, alt ?? undefined)} />;
 }
 

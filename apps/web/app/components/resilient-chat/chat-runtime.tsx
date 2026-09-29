@@ -164,6 +164,7 @@ function ChatRuntime() {
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
   const [runFailure, setRunFailure] = useState<TaskFailure | null>(null);
+  const [queuedRunId, setQueuedRunId] = useState<string | null>(null);
   const [recoveringRunId, setRecoveringRunId] = useState<string | null>(null);
   /** 上下文压缩进行中：deepagents 摘要阶段显示流光指示器，不展示摘要正文。 */
   const [contextCompressing, setContextCompressing] = useState(false);
@@ -460,6 +461,7 @@ function ChatRuntime() {
           },
           userId,
         );
+        setQueuedRunId(runId);
         void refreshSessions();
       },
       onChatEnd: ({ chatId, chunkIndex }) => {
@@ -490,9 +492,9 @@ function ChatRuntime() {
   } = useChat<ResilientMessage>({
     id: conversation.chatId,
     messages: conversation.messages,
-    resume: Boolean(
-      conversation.resumeRun?.pending && conversation.resumeRun.runId,
-    ),
+    // useChat 内建的 resume effect 只依赖布尔值。两个 pending 会话之间切换时
+    // true → true 不会再次订阅，因此下面按会话与 runId 显式恢复。
+    resume: false,
     throttle: 24,
     transport,
     onData: (part) => {
@@ -519,6 +521,7 @@ function ChatRuntime() {
           );
         }
         if (event.type === 'run.started') {
+          setQueuedRunId(null);
           setActivity({
             entries: [],
             startedAt: Date.parse(event.timestamp) || Date.now(),
@@ -608,6 +611,7 @@ function ChatRuntime() {
           event.type === 'run.cancelled' ||
           event.type === 'run.failed'
         ) {
+          setQueuedRunId(null);
           setPendingInterrupt(null);
           setContextCompressing(false);
           // 本轮结束：把这一轮写过的文件并入历史文件记录，
@@ -715,6 +719,14 @@ function ChatRuntime() {
       }
     },
   });
+
+  const resumeRunId = conversation.resumeRun?.pending
+    ? conversation.resumeRun.runId
+    : null;
+  useEffect(() => {
+    if (!resumeRunId || !isActiveChatId(conversation.chatId)) return;
+    void resumeStream();
+  }, [conversation.chatId, resumeRunId, isActiveChatId, resumeStream]);
 
   async function recoverEmptyCompletion(runId: string, chatId: string) {
     const stillCurrent = () => {
@@ -992,6 +1004,7 @@ function ChatRuntime() {
         // 否则会覆盖 loadSession 里 setRunFailure(null) 的正确结果，导致刷新后横幅常驻。
         if (readPersistedRun(currentUserId)?.runId !== run.id) return;
         setRunFailure(failureFromRun(run));
+        setQueuedRunId(run.status === 'queued' ? run.id : null);
         const pending = isPendingStatus(run.status);
         writePersistedRun({ ...persisted, pending }, currentUserId);
         if (pending) {
@@ -1048,6 +1061,7 @@ function ChatRuntime() {
             currentPersisted.runId !== initialRun?.runId)
         )
           return;
+        setQueuedRunId(latestRun?.status === 'queued' ? latestRun.id : null);
         const reconciledRun = latestRun
           ? {
               chatId,
@@ -1321,6 +1335,7 @@ function ChatRuntime() {
         return map;
       });
       const latestRun = history.latestRun;
+      setQueuedRunId(latestRun?.status === 'queued' ? latestRun.id : null);
       const persistedRun = latestRun
         ? {
             chatId: session.externalKey,
@@ -1383,6 +1398,7 @@ function ChatRuntime() {
     setInput('');
     setSuggestions([]);
     setRunFailure(null);
+    setQueuedRunId(null);
     setRecoveringRunId(null);
     // 新消息开始时清掉上一轮残留的过程记录/任务计划，避免"你好"也先冒出上轮的工具执行。
     setActivity(emptyActivity);
@@ -1433,6 +1449,7 @@ function ChatRuntime() {
     stickToBottomRef.current = true;
     // 发起即消失：若新 run 再次失败，run.failed 事件会重新拉起横幅。
     setRunFailure(null);
+    setQueuedRunId(null);
     setActivity(emptyActivity);
     setAgentTodos([]);
     setSubagentCards([]);
@@ -1518,6 +1535,7 @@ function ChatRuntime() {
     setGeneratedTokens(0);
     setInteractionError(null);
     setRunFailure(null);
+    setQueuedRunId(null);
     setHiddenContinuationIds(new Set());
     sessionRef.current = new ResilientSession();
   }
@@ -1979,9 +1997,15 @@ function ChatRuntime() {
                   />
                 );
               })}
-              {status === 'submitted' && !hasAssistantPlaceholder && (
+              {(status === 'submitted' ||
+                (status === 'streaming' && lastMessage?.role === 'user')) &&
+                !hasAssistantPlaceholder && (
                 <ThinkingRow>
-                  {processPanelVisible ? processPanel : null}
+                  {processPanelVisible
+                    ? processPanel
+                    : queuedRunId
+                      ? <span className='streaming-live-text'>任务已提交，等待 Agent 开始处理…</span>
+                      : null}
                 </ThinkingRow>
               )}
               {pendingInterrupt && (

@@ -331,6 +331,16 @@
   max-width: 100%;
 }
 
+.markdown-link-preview {
+  display: block;
+  margin: 0.6em 0;
+}
+
+.markdown-link-preview img {
+  max-height: 320px;
+  object-fit: contain;
+}
+
 .markdown-content :not(pre) > code {
   background: #f0edf7;
   border: 1px solid #e2ddec;
