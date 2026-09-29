@@ -232,6 +232,8 @@ function ChatRuntime() {
   );
   const sessionRef = useRef(new ResilientSession());
   const activeChatIdRef = useRef(conversation.chatId);
+  const visibilityRecoveryRunRef = useRef<string | null>(null);
+  const wasPageVisibleRef = useRef(true);
   const isActiveChatId = useCallback(
     (chatId: string) => activeChatIdRef.current === chatId,
     [],
@@ -798,19 +800,26 @@ function ChatRuntime() {
   // 即使后端已跑完（stillPending=false），也要 resumeStream 重放事件，
   // 否则用户切回时看到空白——SSE 已断、onFinish 的 finishedMessages 不完整。
   useEffect(() => {
-    if (!isPageVisible) return;
+    const becameVisible = isPageVisible && !wasPageVisibleRef.current;
+    wasPageVisibleRef.current = isPageVisible;
+    if (!isPageVisible) {
+      visibilityRecoveryRunRef.current = null;
+      return;
+    }
+    // 正常发送与流式接收已经有连接；此时再次 resume 会重放整条流，
+    // 还会让 status 在 submitted/streaming 间循环，导致 Markdown 整块闪动。
+    // 页面从隐藏恢复可见则仍需检查：旧连接可能已被浏览器中断。
+    if (!becameVisible && (status === 'submitted' || status === 'streaming' || conversation.resumeRun?.pending)) return;
     const persisted = readPersistedRun(userId);
-    const hasActiveRun =
-      status === 'submitted' ||
-      status === 'streaming' ||
-      (persisted?.pending && persisted.chatId === conversation.chatId);
     if (
-      !hasActiveRun ||
-      !persisted ||
+      !persisted?.pending ||
       persisted.chatId !== conversation.chatId ||
       activeChatIdRef.current !== conversation.chatId
     )
       return;
+    const recoveryKey = `${persisted.chatId}:${persisted.runId}`;
+    if (visibilityRecoveryRunRef.current === recoveryKey) return;
+    visibilityRecoveryRunRef.current = recoveryKey;
 
     const controller = new AbortController();
     apiFetch(`/api/agent/runs/${encodeURIComponent(persisted.runId)}`, {
@@ -864,6 +873,7 @@ function ChatRuntime() {
     isPageVisible,
     status,
     conversation.chatId,
+    conversation.resumeRun,
     resumeStream,
     runBelongsToChat,
     userId,
