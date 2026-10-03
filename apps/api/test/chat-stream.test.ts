@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { PersistedAgentEvent } from '@repo/contracts';
+import Fastify from 'fastify';
 
-import { chunksFrom, createCoalescedRunner } from '../src/chat-stream.js';
+import { chunksFrom, createChunkEncoder, createCoalescedRunner, streamWorkflowRun } from '../src/chat-stream.js';
 
 const runId = '00000000-0000-4000-8000-000000000001';
 
@@ -24,6 +25,81 @@ test('durable agent events map to a valid framed text response', () => {
     chunks.map((chunk) => chunk.type),
     ['start', 'data-agent', 'text-start', 'text-delta', 'data-agent', 'text-end', 'finish'],
   );
+});
+
+test('incremental event batches preserve one message and one continuous text stream', () => {
+  const timestamp = new Date().toISOString();
+  const events: PersistedAgentEvent[] = [
+    { runId, seq: 1, timestamp, type: 'run.started' },
+    { runId, seq: 2, timestamp, type: 'assistant.delta', text: '第一段' },
+    { runId, seq: 3, timestamp, type: 'assistant.delta', text: '第二段' },
+    { runId, seq: 4, timestamp, type: 'run.completed' },
+  ];
+  const encode = createChunkEncoder(runId);
+  assert.deepEqual(encode([]), []);
+  const incremental = events.flatMap((event) => encode([event]));
+  assert.deepEqual(incremental, chunksFrom(runId, events));
+  assert.deepEqual(encode(events), [], 'terminal event must not replay the stream');
+});
+
+test('live SSE sends partial text before completion and reads only new events', { timeout: 5000 }, async (t) => {
+  const timestamp = new Date().toISOString();
+  const events: PersistedAgentEvent[] = [
+    { runId, seq: 1, timestamp, type: 'run.started' },
+    { runId, seq: 2, timestamp, type: 'assistant.delta', text: '第一段' },
+  ];
+  const afterSeqs: number[] = [];
+  let notify: (() => void) | undefined;
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  const services = {
+    repository: {
+      getRun: async () => ({ id: runId, status: 'running' }),
+      listEvents: async (_auth: unknown, _runId: string, afterSeq: number) => {
+        afterSeqs.push(afterSeq);
+        return events.filter((event) => event.seq > afterSeq);
+      },
+    },
+    streamSubscriptions: {
+      subscribe: async (_channel: string, callback: () => void) => {
+        notify = callback;
+        return () => {};
+      },
+    },
+  };
+  app.get('/stream', async (request, reply) => streamWorkflowRun(request, reply, services as never, runId));
+  const address = await app.listen({ host: '127.0.0.1', port: 0 });
+  const response = await fetch(`${address}/stream`);
+  assert.equal(response.status, 200);
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let received = '';
+  const readUntil = async (snippet: string) => {
+    while (!received.includes(snippet)) {
+      const result = await reader.read();
+      assert.equal(result.done, false, `stream ended before ${snippet}`);
+      received += decoder.decode(result.value, { stream: true });
+    }
+  };
+  await readUntil('第一段');
+  assert.equal(received.includes('finish'), false);
+
+  events.push({ runId, seq: 3, timestamp, type: 'assistant.delta', text: '第二段' });
+  notify?.();
+  await readUntil('第二段');
+  assert.equal(received.includes('finish'), false);
+
+  events.push({ runId, seq: 4, timestamp, type: 'run.completed' });
+  notify?.();
+  await readUntil('"type":"finish"');
+  assert.equal(afterSeqs[0], 0);
+  assert.equal(afterSeqs.slice(1).every((seq) => seq > 0), true);
+  assert.equal(afterSeqs.includes(3), true);
+  assert.equal((received.match(/"type":"text-start"/g) ?? []).length, 1);
+
+  const tailResponse = await fetch(`${address}/stream?startIndex=999`);
+  assert.equal(tailResponse.status, 200);
+  assert.equal(await tailResponse.text(), '', 'a completed run must close even when no replay chunks remain');
 });
 
 test('a terminal task failure stays in the agent event channel', () => {

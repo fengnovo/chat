@@ -125,6 +125,7 @@ export async function buildApp(options: BuildAppOptions) {
     '/api/auth/login',
     '/api/auth/register',
     '/api/auth/logout',
+    '/api/clipboard',
     // OAuth 社交登录入口与回调均为匿名。
     '/api/auth/oauth/providers',
     // Preview routes serve static files from sandbox; iframe resources don't carry cookies.

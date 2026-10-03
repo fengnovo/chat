@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Keen AI",
+    "slug": "keen-ai-mobile",
+    "version": "0.1.0",
+    "scheme": "keenai",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "platforms": ["ios", "android"],
+    "ios": {
+      "bundleIdentifier": "ai.keen.mobile",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "ai.keen.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0f14"
+      }
+    }
+  }
+}

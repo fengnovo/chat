@@ -103,6 +103,11 @@ test('login with correct credentials returns the user and cookie', async () => {
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().user.role, 'admin');
   assert.equal(response.json().user.tenantId, tenantId);
+  // 移动端（Bearer）登录路径：响应体直接携带与会话 Cookie 相同的 JWT。
+  assert.ok(
+    response.json().token.split('.').length === 3,
+    'body carries a JWT for non-browser clients',
+  );
   const setCookie = response.cookies.find(
     (entry) => entry.name === SESSION_COOKIE_NAME,
   );

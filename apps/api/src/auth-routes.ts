@@ -57,6 +57,8 @@ export async function registerAuthRoutes(app: FastifyInstance, services: Service
     });
     setSessionCookie(reply, services.config, token);
     return {
+      // 移动端等非浏览器客户端用 Bearer 头携带该 token；浏览器继续走 Cookie。
+      token,
       user: {
         id: user.id,
         displayName: user.displayName,
@@ -89,6 +91,7 @@ export async function registerAuthRoutes(app: FastifyInstance, services: Service
     });
     setSessionCookie(reply, config, token);
     return reply.code(201).send({
+      token,
       user: {
         id: created.id,
         displayName: created.displayName,

@@ -1285,7 +1285,7 @@ function ChatRuntime() {
    * 打开文件面板并选中它。支持精确匹配、后缀匹配与文件名匹配，
    * 兼容 AI 回复里写相对路径或省略目录前缀的情况。
    */
-  function handleFileLinkClick(linkPath: string) {
+  const handleFileLinkClick = useCallback((linkPath: string) => {
     const normalized = linkPath.replace(/^(\.\/|\/)+/, '');
     const match =
       touchedFiles.find((file) => file.path === normalized) ??
@@ -1300,17 +1300,17 @@ function ChatRuntime() {
       setSelectedFilePath(null);
     }
     setFilesOpen(true);
-  }
+  }, [touchedFiles]);
 
   /** 用户点击聊天消息中的页面预览按钮：打开文件面板、展开至 70%、隐藏左侧导航并启用构建预览。 */
-  function handlePreviewPage() {
+  const handlePreviewPage = useCallback(() => {
     setSelectedFilePath(null);
     setFilesOpen(true);
     setFilesWide(true);
     setSidebarHidden(true);
     setFilesWidth(Math.round(window.innerWidth * 0.7));
     setOpenBuildPreviewCount((c) => c + 1);
-  }
+  }, []);
 
   async function selectSession(session: WebSessionSummary) {
     if (session.externalKey === conversation.chatId) return;
@@ -1799,11 +1799,34 @@ function ChatRuntime() {
     }
   }
 
-  async function copyMessage(id: string, text: string) {
+  const copyMessage = useCallback(async (id: string, text: string) => {
     await navigator.clipboard.writeText(text);
     setCopiedMessage(id);
     window.setTimeout(() => setCopiedMessage(null), 1400);
-  }
+  }, []);
+
+  // Message 使用 memo。每次流式增量都创建新回调会使所有历史消息重新
+  // 解析 Markdown；会话越长，新回复越容易被主线程渲染工作拖延。
+  const handleMessageBoundaryError = useCallback(() => {
+    setTrace((current) => [
+      ...current.slice(-9),
+      localEvent(
+        'verify',
+        'warning',
+        'AIBoundary 已隔离组件崩溃',
+        '聊天主体保持可用，错误载荷已进入脱敏流程',
+      ),
+    ]);
+  }, []);
+  const handlePreviewDiagram = useCallback((svg: string) => {
+    setLightboxImage({ svg, filename: '图表预览' });
+  }, []);
+  const handlePreviewImage = useCallback((url: string, filename?: string) => {
+    setLightboxImage({ url, filename });
+  }, []);
+  const handleDismissCard = useCallback((messageId: string) => {
+    setDismissedCards((current) => new Set(current).add(messageId));
+  }, []);
 
   const persistedForRecovery = error ? readPersistedRun(userId) : null;
   const canResumeConnection = Boolean(
@@ -1954,31 +1977,13 @@ function ChatRuntime() {
                     highlight={highlightMarkdown && !isStreaming}
                     key={message.id}
                     message={message}
-                    onBoundaryError={() => {
-                      setTrace((current) => [
-                        ...current.slice(-9),
-                        localEvent(
-                          'verify',
-                          'warning',
-                          'AIBoundary 已隔离组件崩溃',
-                          '聊天主体保持可用，错误载荷已进入脱敏流程',
-                        ),
-                      ]);
-                    }}
+                    onBoundaryError={handleMessageBoundaryError}
                     onCopy={copyMessage}
                     onFileLinkClick={handleFileLinkClick}
                     onPreviewPage={handlePreviewPage}
-                    onPreviewDiagram={(svg) =>
-                      setLightboxImage({ svg, filename: '图表预览' })
-                    }
-                    onPreviewImage={(url, filename) =>
-                      setLightboxImage({ url, filename })
-                    }
-                    onDismissCard={(messageId) => {
-                      setDismissedCards((current) =>
-                        new Set(current).add(messageId),
-                      );
-                    }}
+                    onPreviewDiagram={handlePreviewDiagram}
+                    onPreviewImage={handlePreviewImage}
+                    onDismissCard={handleDismissCard}
                     runTokens={
                       !isBusy &&
                       message.role === 'assistant' &&

@@ -7,79 +7,83 @@ import type { ApiServices } from './types.js';
 
 type UiChunk = Record<string, unknown>;
 
-function chunksFrom(runId: string, events: PersistedAgentEvent[]): UiChunk[] {
-  if (events.length === 0) return [];
+function createChunkEncoder(runId: string) {
   const messageId = `message-${runId}`;
   const textId = `text-${runId}`;
-  const chunks: UiChunk[] = [
-    {
-      type: 'start',
-      messageId,
-      messageMetadata: { runId },
-    },
-  ];
+  let started = false;
   let textStarted = false;
   let finished = false;
-
-  for (const event of events) {
-    if (event.type === 'assistant.delta') {
-      if (!textStarted) {
-        chunks.push({ type: 'text-start', id: textId });
-        textStarted = true;
+  return (events: PersistedAgentEvent[]): UiChunk[] => {
+    if (events.length === 0 || finished) return [];
+    const chunks: UiChunk[] = [];
+    if (!started) {
+      chunks.push({ type: 'start', messageId, messageMetadata: { runId } });
+      started = true;
+    }
+    for (const event of events) {
+      if (event.type === 'assistant.delta') {
+        if (!textStarted) {
+          chunks.push({ type: 'text-start', id: textId });
+          textStarted = true;
+        }
+        chunks.push({ type: 'text-delta', id: textId, delta: event.text });
+        continue;
       }
-      chunks.push({ type: 'text-delta', id: textId, delta: event.text });
-      continue;
+      let agentData: PersistedAgentEvent = event;
+      if (event.type === 'retrieval.completed') {
+        // Keep the process trace, while also persisting an auditable citation part.
+        chunks.push({
+          type: 'data-citations',
+          data: {
+            ...event,
+            citations: event.citations.map((citation) => {
+              const { chunkId, kbId, documentId, documentName, ordinal, heading, score, via, images } = citation;
+              return {
+                chunkId,
+                ...(kbId ? { kbId } : {}),
+                documentId,
+                documentName,
+                ordinal,
+                ...(heading ? { heading } : {}),
+                score,
+                via,
+                ...(Array.isArray(images) && images.length ? { images } : {}),
+              };
+            }),
+          },
+          transient: false,
+        });
+        const { citations: _citations, ...traceEvent } = event;
+        agentData = traceEvent as PersistedAgentEvent;
+      }
+      if (
+        event.type === 'subagent.started' ||
+        event.type === 'subagent.completed' ||
+        event.type === 'subagent.reviewed'
+      ) {
+        // 子 Agent 事件：持久化为 data-subagent part（刷新后可从消息 parts 恢复卡片），
+        // 同时下方 data-agent 过程流照常保留，供执行面板实时追踪。
+        chunks.push({ type: 'data-subagent', data: event, transient: false });
+      }
+      chunks.push({ type: 'data-agent', data: agentData, transient: true });
+      if (
+        !finished &&
+        ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)
+      ) {
+        if (textStarted) chunks.push({ type: 'text-end', id: textId });
+        chunks.push({
+          type: 'finish',
+          finishReason: event.type === 'run.completed' ? 'stop' : 'error',
+        });
+        finished = true;
+      }
     }
-    let agentData: PersistedAgentEvent = event;
-    if (event.type === 'retrieval.completed') {
-      // Keep the process trace, while also persisting an auditable citation part.
-      chunks.push({
-        type: 'data-citations',
-        data: {
-          ...event,
-          citations: event.citations.map((citation) => {
-            const { chunkId, kbId, documentId, documentName, ordinal, heading, score, via, images } = citation;
-            return {
-              chunkId,
-              ...(kbId ? { kbId } : {}),
-              documentId,
-              documentName,
-              ordinal,
-              ...(heading ? { heading } : {}),
-              score,
-              via,
-              ...(Array.isArray(images) && images.length ? { images } : {}),
-            };
-          }),
-        },
-        transient: false,
-      });
-      const { citations: _citations, ...traceEvent } = event;
-      agentData = traceEvent as PersistedAgentEvent;
-    }
-    if (
-      event.type === 'subagent.started' ||
-      event.type === 'subagent.completed' ||
-      event.type === 'subagent.reviewed'
-    ) {
-      // 子 Agent 事件：持久化为 data-subagent part（刷新后可从消息 parts 恢复卡片），
-      // 同时下方 data-agent 过程流照常保留，供执行面板实时追踪。
-      chunks.push({ type: 'data-subagent', data: event, transient: false });
-    }
-    chunks.push({ type: 'data-agent', data: agentData, transient: true });
-    if (
-      !finished &&
-      ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)
-    ) {
-      if (textStarted) chunks.push({ type: 'text-end', id: textId });
-      chunks.push({
-        type: 'finish',
-        finishReason: event.type === 'run.completed' ? 'stop' : 'error',
-      });
-      finished = true;
-    }
-  }
-  return chunks;
+    return chunks;
+  };
+}
+
+function chunksFrom(runId: string, events: PersistedAgentEvent[]): UiChunk[] {
+  return createChunkEncoder(runId)(events);
 }
 
 function frame(chunk: UiChunk): string {
@@ -136,8 +140,11 @@ export async function streamWorkflowRun(
   if (!run) return reply.code(404).send({ error: 'run_not_found' });
 
   const initialEvents = await services.repository.listEvents(request.auth, runId, 0, 100_000);
-  const initialChunks = chunksFrom(runId, initialEvents);
-  let chunkCursor = requestedStart(request, initialChunks.length);
+  const encodeEvents = createChunkEncoder(runId);
+  const initialChunks = encodeEvents(initialEvents);
+  const initialFinished = initialChunks.some((chunk) => chunk.type === 'finish');
+  let eventCursor = initialEvents.at(-1)?.seq ?? 0;
+  let replayChunks = initialChunks.slice(requestedStart(request, initialChunks.length));
   let closed = false;
   const telemetry = services.observability?.startSse('chat');
   let unsubscribe: (() => void) | undefined;
@@ -179,13 +186,28 @@ export async function streamWorkflowRun(
   const flush = createCoalescedRunner(async () => {
     // 已经收尾：后续通知直接视为完成，避免重复 end()。
     if (closed) return true;
-    const events = await services.repository.listEvents(request.auth, runId, 0, 100_000);
-    if (closed) return true;
-    const chunks = chunksFrom(runId, events);
-    for (const chunk of chunks.slice(chunkCursor)) {
+    // 首次订阅先把已经持久化的事件送出去，不让第二次数据库查询挡住首屏正文。
+    const initial = replayChunks;
+    replayChunks = [];
+    for (const chunk of initial) {
       telemetry?.firstByte();
       reply.raw.write(frame(chunk));
-      chunkCursor += 1;
+    }
+    if (initialFinished) {
+      finish('server');
+      return true;
+    }
+    // 只取上次 flush 后的新事件。逐 token 重查并编码整个 run 会随着回复
+    // 变长退化为平方复杂度，使正文在浏览器里看起来像延迟后整块出现。
+    const events = await services.repository.listEvents(request.auth, runId, eventCursor, 100_000);
+    if (closed) return true;
+    if (events.length > 0) {
+      eventCursor = events.at(-1)!.seq;
+    }
+    const chunks = encodeEvents(events);
+    for (const chunk of chunks) {
+      telemetry?.firstByte();
+      reply.raw.write(frame(chunk));
     }
     if (chunks.some((chunk) => chunk.type === 'finish')) {
       finish('server');
@@ -211,4 +233,4 @@ export async function streamWorkflowRun(
   }
 }
 
-export { chunksFrom, createCoalescedRunner };
+export { chunksFrom, createChunkEncoder, createCoalescedRunner };

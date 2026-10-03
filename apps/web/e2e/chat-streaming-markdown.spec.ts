@@ -9,7 +9,17 @@ test('正常输出 Markdown 时不重连，也不重建已有代码块', async (
   };
   await mockJson(page, '**/api/agent/sessions?*', { data: [session], nextCursor: null });
   await mockJson(page, '**/api/agent/sessions/session-markdown/history', {
-    session, messages: [], latestRun: null,
+    session,
+    // 真实会话往往有较长历史：流式新消息不能使旧 Markdown 每帧重新解析。
+    messages: Array.from({ length: 30 }, (_, index) => ({
+      id: `history-${index}`, runId: `old-run-${index}`,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      text: index % 2 === 0
+        ? `历史提问 ${index}`
+        : `## 历史回答 ${index}\n\n${Array.from({ length: 8 }, (_, item) => `- 条目 ${item}`).join('\n')}`,
+      createdAt: session.createdAt,
+    })),
+    latestRun: null,
   });
   await mockJson(page, '**/api/agent/sessions/session-markdown/files', { files: [] });
   await mockJson(page, '**/api/agent/runs/run-markdown', {

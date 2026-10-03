@@ -208,6 +208,16 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     enabled: false,
     exporter: 'disabled' as const,
   };
+
+  // 临时剪贴板中转（供模拟器从 Mac 读取中文输入）
+  let clipboardText = '';
+  app.post('/api/clipboard', async (request) => {
+    const body = request.body as { text?: string } | null;
+    clipboardText = body?.text ?? '';
+    return { ok: true };
+  });
+  app.get('/api/clipboard', async () => ({ text: clipboardText }));
+
   app.get('/health/live', async () => ({
     status: 'ok',
     version,
