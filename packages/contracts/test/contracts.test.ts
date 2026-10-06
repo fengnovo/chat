@@ -24,6 +24,19 @@ test('rejects empty runs and malformed jobs', () => {
   assert.equal(runJobSchema.safeParse({ kind: 'start' }).success, false);
 });
 
+test('recovery jobs preserve business identity without resubmitting a user message', () => {
+  const job = runJobSchema.parse({
+    kind: 'recover',
+    tenantId: '00000000-0000-4000-8000-000000000010',
+    userId: '00000000-0000-4000-8000-000000000011',
+    sessionId: '00000000-0000-4000-8000-000000000012',
+    runId: '00000000-0000-4000-8000-000000000013',
+    workspacePath: '/workspace', knowledgeBaseIds: [],
+  });
+  assert.equal(job.kind, 'recover');
+  assert.equal('message' in job, false);
+});
+
 test('approval decisions default to one operation and allow session scope', () => {
   assert.equal(
     approvalDecisionSchema.parse({ decision: 'approve' }).scope,

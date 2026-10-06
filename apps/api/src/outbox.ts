@@ -106,9 +106,17 @@ export class RunOutboxDispatcher {
     }
     try {
       await context.with(active, async () => {
+        // add() deduplicates retained failed jobs. Explicitly revive an unconsumed
+        // dispatch so a short session-lock outage cannot strand a recovery forever.
+        const existing = await this.options.queue.getJob(dispatch.id);
+        if (existing && await existing.getState() === 'failed') {
+          await existing.retry('failed', { resetAttemptsMade: true, resetAttemptsStarted: true });
+          return;
+        }
         await this.options.queue.add(job.kind, payload, {
           jobId: dispatch.id,
-          attempts: 1,
+          attempts: 4,
+          backoff: { type: 'exponential', delay: 1_000 },
           removeOnComplete: 500,
           removeOnFail: 1_000,
         });

@@ -8,6 +8,13 @@ const requiredKeys = {
   OPENAI_API_KEY: 'test-model-key',
 };
 
+test('durable execution config rejects unsafe lease timing and malformed tool policies', () => {
+  assert.throws(() => loadWorkerConfig({ ...requiredKeys, EXECUTION_LEASE_MS: '0' }));
+  assert.throws(() => loadWorkerConfig({ ...requiredKeys, TOOL_REPLAY_POLICIES: '{broken' }));
+  const config = loadWorkerConfig({ ...requiredKeys, TOOL_REPLAY_POLICIES: '{"create_issue":{"idempotencyKeyArgument":"request_id"}}' });
+  assert.equal(config.toolReplayPolicies.create_issue?.idempotencyKeyArgument, 'request_id');
+});
+
 for (const NODE_ENV of ['development', 'test', 'production'] as const) {
   test(`${NODE_ENV} defaults to the local Docker sandbox backend`, () => {
     const config = loadWorkerConfig({ NODE_ENV, ...requiredKeys });

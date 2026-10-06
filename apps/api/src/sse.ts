@@ -65,21 +65,26 @@ export async function streamAgentEvents(
     if (flushing || closed) return;
     flushing = true;
     try {
+      let terminal = false;
       for (;;) {
         const events = await services.repository.listEvents(request.auth, runId, cursor);
         if (closed) return;
-        if (events.length === 0) break;
         for (const event of events) {
           if (event.seq <= cursor) continue;
           cursor = event.seq;
           telemetry?.firstByte();
           reply.raw.write(sseFrame(event));
         }
-        if (events.length < 500) break;
-      }
-      const latest = await services.repository.getRun(request.auth, runId);
-      if (latest && ['completed', 'failed', 'cancelled'].includes(latest.status)) {
-        finish('server');
+        if (events.length >= 500) continue;
+        if (terminal) {
+          finish('server');
+          break;
+        }
+        const latest = await services.repository.getRun(request.auth, runId);
+        terminal = !!latest && ['completed', 'failed', 'cancelled'].includes(latest.status);
+        if (!terminal) break;
+        // Terminal status and its final events commit together. Read once more
+        // after observing that status so a completion racing this flush is delivered.
       }
     } catch (error) {
       fail(error);
@@ -98,7 +103,10 @@ export async function streamAgentEvents(
     await flush();
     if (closed) return;
     heartbeat = setInterval(() => {
-      if (!closed) reply.raw.write(': heartbeat\n\n');
+      if (!closed) {
+        reply.raw.write(': heartbeat\n\n');
+        void flush();
+      }
     }, 15_000);
   } catch (error) {
     fail(error);

@@ -259,6 +259,7 @@ test('resolveInterrupt dispatches the knowledge-base snapshot stored on the run'
   assert.deepEqual(dispatched, [
     {
       kind: 'resume-question',
+      interruptId: 'interrupt-1',
       tenantId: context.tenantId,
       userId: context.userId,
       sessionId: '00000000-0000-4000-8000-000000000003',

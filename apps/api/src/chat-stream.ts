@@ -9,7 +9,7 @@ type UiChunk = Record<string, unknown>;
 
 function createChunkEncoder(runId: string) {
   const messageId = `message-${runId}`;
-  const textId = `text-${runId}`;
+  let textId = `text-${runId}`;
   let started = false;
   let textStarted = false;
   let finished = false;
@@ -21,6 +21,13 @@ function createChunkEncoder(runId: string) {
       started = true;
     }
     for (const event of events) {
+      if (event.type === 'assistant.snapshot') {
+        if (textStarted) chunks.push({ type: 'text-end', id: textId });
+        textStarted = false;
+        textId = `text-${runId}-${event.seq}`;
+        chunks.push({ type: 'data-text-recovery', data: { text: event.text }, transient: false });
+        continue;
+      }
       if (event.type === 'assistant.delta') {
         if (!textStarted) {
           chunks.push({ type: 'text-start', id: textId });
@@ -226,7 +233,10 @@ export async function streamWorkflowRun(
     await flush();
     if (closed) return;
     heartbeat = setInterval(() => {
-      if (!closed) reply.raw.write(': heartbeat\n\n');
+      if (!closed) {
+        reply.raw.write(': heartbeat\n\n');
+        void flush().catch(fail);
+      }
     }, 15_000);
   } catch (error) {
     fail(error);

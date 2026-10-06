@@ -54,9 +54,10 @@ export async function processMemoryJob(
   const session = await repository.getSessionForWorker(job.tenantId, job.sessionId).catch(() => null);
   const projectId = session?.projectId ?? null;
   const assistant = events
-    .filter((event: AgentEvent) => event.type === 'assistant.delta' || event.type === 'assistant.narration')
-    .map((event: AgentEvent) => 'text' in event ? event.text : '')
-    .join('');
+    .reduce((text: string, event: AgentEvent) => {
+      if (event.type === 'assistant.snapshot') return event.text;
+      return event.type === 'assistant.delta' || event.type === 'assistant.narration' ? text + event.text : text;
+    }, '');
   const messages: MemoryMessage[] = [
     { role: 'user', content: run.userMessage },
     ...(assistant ? [{ role: 'assistant' as const, content: assistant }] : []),

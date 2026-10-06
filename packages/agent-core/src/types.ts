@@ -1,4 +1,6 @@
 import type { AgentEvent } from '@repo/contracts';
+import type { ToolExecutionStore, ToolReplayPolicy } from './tool-execution.js';
+import type { DurableChildStore } from './subagent.js';
 
 export interface ModelSpec {
   id: string;
@@ -94,6 +96,13 @@ export interface HeadlessAgentOptions {
   backend: unknown;
   backendMode?: AgentBackendMode;
   checkpointer: unknown;
+  durable?: {
+    legacyExecution?: boolean;
+    tools: ToolExecutionStore;
+    children: DurableChildStore;
+    assertOwnership: () => Promise<void>;
+    toolPolicies?: Record<string, ToolReplayPolicy>;
+  };
   models: ModelSpec[];
   circuitBreaker?: CircuitBreakerStore;
   mcpConfigPath?: string;
@@ -132,11 +141,13 @@ export interface HeadlessAgentOptions {
 export type AgentResumeInput =
   | {
       kind: 'approval';
+      interruptId?: string;
       decision: 'approve' | 'reject';
       message?: string;
     }
   | {
       kind: 'question';
+      interruptId?: string;
       answer: {
         selections: Array<{ index: number; label: string }>;
         customText?: string;
@@ -157,5 +168,6 @@ export interface HeadlessAgentRuntime {
   readonly mcpStatus: string;
   run(message: string, images?: ChatImageAttachment[]): AsyncIterable<AgentEvent>;
   resume(input: AgentResumeInput): AsyncIterable<AgentEvent>;
+  recover(input: AgentResumeInput | { kind: 'start'; message: string; images?: ChatImageAttachment[] }): AsyncIterable<AgentEvent>;
   dispose(): Promise<void>;
 }

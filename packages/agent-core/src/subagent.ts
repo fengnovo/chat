@@ -9,6 +9,9 @@ import { createDeepAgent } from 'deepagents';
 import { createMiddleware, modelCallLimitMiddleware } from 'langchain';
 import { z } from 'zod';
 
+import { childStoreOperation, durableChildFailure, invokeDurableChildGraph, isDurableChildError } from './durable-child.js';
+export { DurableChildInterruptError, invokeDurableChildGraph, resumeBackgroundChild, isDurableChildError } from './durable-child.js';
+
 /**
  * 子 Agent 编排（P1 同步派发 + P2 评分器重试闭环）。
  *
@@ -91,6 +94,28 @@ export interface SpawnSubagentInput {
 
 export type SubagentRunStatus = 'completed' | 'failed' | 'timeout';
 
+export interface DurableChildRecord {
+  id: string;
+  parentToolCallId: string;
+  threadId: string;
+  input: unknown;
+  background: boolean;
+  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed';
+  attempt: number;
+  feedback: string | null;
+  attemptResult: { status: SubagentRunStatus; summary: string; toolCalls: number } | null;
+  summary: string | null;
+  review: unknown | null;
+}
+
+/** Implementations must fence every mutation with the owning root run lease. */
+export interface DurableChildStore {
+  ensure(parentToolCallId: string, input: SpawnSubagentInput, background: boolean): Promise<DurableChildRecord>;
+  get(id: string): Promise<DurableChildRecord | null>;
+  listBackground(): Promise<DurableChildRecord[]>;
+  save(id: string, patch: Partial<DurableChildRecord>): Promise<DurableChildRecord>;
+}
+
 export interface SpawnSubagentOptions {
   /** 主 run 的 ID：subagent.* 事件挂在同一个 run 的事件流上。 */
   runId: string;
@@ -102,6 +127,13 @@ export interface SpawnSubagentOptions {
   backend?: unknown;
   /** 主 run 的取消信号：整体取消时子 Agent 一并中止。 */
   signal?: AbortSignal;
+  durable?: {
+    store: DurableChildStore;
+    checkpointer: unknown;
+    toolMiddleware?: (scopeId: string) => unknown;
+  };
+  /** Internal attempt context; set by the orchestration loop, never by the model. */
+  childExecution?: { record: DurableChildRecord; config: unknown; background: boolean };
 }
 
 /**
@@ -236,7 +268,7 @@ function subagentSystemPrompt(input: SpawnSubagentInput): string {
   ].join('\n\n');
 }
 
-/** 执行子 Agent 并聚合结果；失败/超时转成失败摘要，绝不把异常抛回主 Agent。 */
+/** Execute a child; durable infrastructure failures escape to the owning root for recovery. */
 async function runSubagent(
   options: SpawnSubagentOptions,
   input: SpawnSubagentInput,
@@ -266,6 +298,7 @@ async function runSubagent(
     model: options.router.primary as never,
     tools: filterSubagentTools(options.tools) as never,
     ...(options.backend ? { backend: options.backend as never } : {}),
+    ...(options.durable ? { checkpointer: options.durable.checkpointer as never } : {}),
     systemPrompt: subagentSystemPrompt(input),
     middleware: [
       options.router.middleware as never,
@@ -274,6 +307,9 @@ async function runSubagent(
         exitBehavior: 'end',
       } as never) as never,
       policyFilterMiddleware as never,
+      ...(options.durable?.toolMiddleware && options.childExecution ? [
+        options.durable.toolMiddleware(`${options.childExecution.record.id}:${options.childExecution.record.attempt}`) as never,
+      ] : []),
     ] as never,
   });
 
@@ -294,16 +330,16 @@ async function runSubagent(
     // 3) tags: ['nostream']：messages 流模式的官方抑制标记，双保险防止子 Agent 正文冒泡。
     // subagent.* 生命周期事件由工具体经外层 writer（emitSubagentEvent）单独上抛，
     // 不受此隔离影响。
-    const finalState = (await subAgent.invoke(
-      { messages: [new HumanMessage(input.task)] } as never,
-      {
-        recursionLimit: SUBAGENT_RECURSION_LIMIT,
-        signal: controller.signal,
-        callbacks: [],
-        tags: ['nostream'],
-        writer: () => {},
-      } as never,
-    )) as unknown;
+    const invocationConfig = {
+      recursionLimit: SUBAGENT_RECURSION_LIMIT,
+      signal: controller.signal,
+      callbacks: [],
+      tags: ['nostream'],
+      writer: () => {},
+    };
+    const finalState = options.durable
+      ? await invokeDurableChildGraph(subAgent, input, options, invocationConfig)
+      : await subAgent.invoke({ messages: [new HumanMessage(input.task)] } as never, invocationConfig as never);
     const { summary: rawSummary, limited } = extractSubagentResult(finalState);
     const toolCalls = Array.isArray((finalState as { messages?: unknown[] } | null)?.messages)
       ? ((finalState as { messages: unknown[] }).messages as unknown[]).filter(
@@ -347,6 +383,7 @@ async function runSubagent(
         toolCalls: 0,
       };
     }
+    if (options.durable) throw durableChildFailure(error);
     if (options.signal?.aborted) {
       // 主 run 已取消：返回明确的中止摘要，外层会以 run.cancelled 收尾。
       return {
@@ -490,6 +527,7 @@ export async function reviewSubagentOutput(
         };
         return { skipped: false, verdict };
       } catch (error) {
+        if (isDurableChildError(error)) throw error;
         lastReason = error instanceof Error ? error.message : String(error);
       }
     }
@@ -527,6 +565,23 @@ export interface SpawnLoopDeps {
   emit: typeof emitSubagentEvent;
 }
 
+function parentToolCallId(config: unknown): string {
+  const runtime = config as {
+    toolCall?: { id?: unknown }; toolCallId?: unknown;
+    runtime?: { toolCallId?: unknown; toolCall?: { id?: unknown } };
+  } | null;
+  const id = runtime?.toolCall?.id ?? runtime?.toolCallId ?? runtime?.runtime?.toolCallId ?? runtime?.runtime?.toolCall?.id;
+  if (typeof id !== 'string' || !id.trim()) {
+    throw Object.assign(new Error('Durable child requires a stable parent tool call ID'), { code: 'DURABLE_EXECUTION_INTERRUPTED', durableExecution: true });
+  }
+  return id;
+}
+
+async function ensureDurableChild(options: SpawnSubagentOptions, input: SpawnSubagentInput, config: unknown) {
+  if (!options.durable) return undefined;
+  return childStoreOperation(() => options.durable!.store.ensure(parentToolCallId(config), input, input.background));
+}
+
 /** 从派发输入提取卡片展示用的角色名（首行非空文本）与任务简述。 */
 export function describeSubagentInput(input: SpawnSubagentInput): {
   role: string;
@@ -552,13 +607,25 @@ export async function runSpawnLoop(
   input: SpawnSubagentInput,
   config: unknown,
   deps: SpawnLoopDeps = { run: runSubagent, review: reviewSubagentOutput, emit: emitSubagentEvent },
-  override: { subagentId?: string; background?: boolean } = {},
+  override: { subagentId?: string; background?: boolean; childRecord?: DurableChildRecord | undefined } = {},
 ): Promise<string> {
-  const subagentId = override.subagentId ?? randomUUID();
+  let record = override.childRecord ?? await ensureDurableChild(options, input, config);
+  if (record && (record.status === 'completed' || record.status === 'failed') && record.summary !== null) {
+    return record.summary;
+  }
+  const subagentId = record?.id ?? override.subagentId ?? randomUUID();
   const { role, description } = describeSubagentInput(input);
-
-  let attempt = 1;
-  let priorFeedback: string | undefined;
+  const save = async (patch: Partial<DurableChildRecord>) => {
+    if (record && options.durable) {
+      record = await childStoreOperation(() => options.durable!.store.save(record!.id, patch));
+    }
+  };
+  const finish = async (summary: string, status: 'completed' | 'failed' = 'completed') => {
+    await save({ status, summary });
+    return summary;
+  };
+  let attempt = record?.attempt ?? 1;
+  let priorFeedback: string | undefined = record?.feedback ?? undefined;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const runInput: SpawnSubagentInput = priorFeedback
@@ -575,7 +642,21 @@ export async function runSpawnLoop(
       attempt,
       ...(override.background ? { background: true } : {}),
     });
-    const result = await deps.run(options, runInput);
+    let result = record?.attemptResult;
+    if (!result) {
+      // Preserve a waiting request until its Command response has reached the child graph.
+      if (record?.status !== 'waiting') await save({ status: 'running' });
+      try {
+        result = await deps.run(record ? {
+          ...options,
+          childExecution: { record, config, background: override.background ?? input.background },
+        } : options, runInput);
+      } catch (error) {
+        if (options.durable) throw durableChildFailure(error);
+        throw error;
+      }
+      await save({ attemptResult: result, review: null });
+    }
     deps.emit(config, {
       runId: options.runId,
       timestamp: new Date().toISOString(),
@@ -589,11 +670,19 @@ export async function runSpawnLoop(
     });
 
     // 失败/超时不评审：失败摘要本身已告诉主 Agent 如何处置（拆小任务/基于部分产出继续）。
-    if (result.status !== 'completed') return result.summary;
-    if (options.signal?.aborted) return result.summary;
+    if (result.status !== 'completed') return finish(result.summary, 'failed');
+    if (options.signal?.aborted) return finish(result.summary);
 
-    const review = await deps.review(options.router.primary, runInput, result.summary, options.signal);
-    if (review.skipped) return result.summary;
+    let review = record?.review as ReviewOutcome | null | undefined;
+    if (!review) {
+      try { review = await deps.review(options.router.primary, runInput, result.summary, options.signal); }
+      catch (error) {
+        if (options.durable) throw durableChildFailure(error);
+        throw error;
+      }
+    }
+    await save({ review });
+    if (review.skipped) return finish(result.summary);
 
     deps.emit(config, {
       runId: options.runId,
@@ -607,13 +696,14 @@ export async function runSpawnLoop(
       checklist: review.verdict.checklist,
     });
 
-    if (review.verdict.passed) return result.summary;
+    if (review.verdict.passed) return finish(result.summary);
     if (attempt >= SUBAGENT_MAX_ATTEMPTS) {
       // 如实汇报：最终产出 + 未闭合的差距，主 Agent 自行决定是否补救。
-      return appendReviewGap(result.summary, review.verdict);
+      return finish(appendReviewGap(result.summary, review.verdict));
     }
     attempt += 1;
     priorFeedback = review.verdict.feedback || '请对照未满足的验收项补齐缺失内容。';
+    await save({ attempt, feedback: priorFeedback, attemptResult: null, review: null, status: 'pending' });
   }
 }
 
@@ -628,8 +718,8 @@ export interface BackgroundTaskResult {
 
 /**
  * 单次 execute 内的后台任务登记表（P3）。
- * 生命周期严格限定在一个 run 内：人审挂起/失败/取消时 abortAll 收割，
- * 不做跨进程持久化（跨 run 的后台续跑是后续独立能力）。
+ * 本地 Promise 只属于当前 execute；durable child records 负责跨 Worker 恢复。
+ * 人审挂起/失败/取消时 abortAll 收割当前本地执行。
  */
 export interface BackgroundRunContext {
   register(task: {
@@ -665,6 +755,7 @@ export function createBackgroundRunContext(runSignal?: AbortSignal): BackgroundR
   }
   const entries: Entry[] = [];
   const queue: AgentEvent[] = [];
+  let fatalError: unknown;
 
   const emit = (event: AgentEvent) => {
     queue.push(event);
@@ -673,6 +764,7 @@ export function createBackgroundRunContext(runSignal?: AbortSignal): BackgroundR
 
   return {
     register(task) {
+      if (entries.some((entry) => entry.subagentId === task.subagentId)) return;
       const controller = new AbortController();
       const signal = runSignal
         ? AbortSignal.any([runSignal, controller.signal])
@@ -699,24 +791,32 @@ export function createBackgroundRunContext(runSignal?: AbortSignal): BackgroundR
           description: task.description,
           summary,
         }))
-        .catch((error: unknown) => ({
-          subagentId: task.subagentId,
-          role: task.role,
-          description: task.description,
-          summary: `后台子 Agent 异常中止：${clampSubagentText(
-            error instanceof Error ? error.message : String(error),
-            500,
-          )}`,
-        }))
+        .catch((error: unknown) => {
+          if (isDurableChildError(error)) {
+            fatalError ??= error;
+            throw error;
+          }
+          return {
+            subagentId: task.subagentId,
+            role: task.role,
+            description: task.description,
+            summary: `后台子 Agent 异常中止：${clampSubagentText(
+              error instanceof Error ? error.message : String(error), 500,
+            )}`,
+          };
+        })
         .finally(() => {
           entry.done = true;
         });
+      // Detached failure is observed by settled(); keep it handled until the root reaches that await.
+      void entry.promise.catch(() => {});
       entries.push(entry);
     },
     size() {
       return entries.filter((entry) => !entry.done).length;
     },
     drainEvents() {
+      if (fatalError) throw fatalError;
       return queue.splice(0, queue.length);
     },
     async settled() {
@@ -732,6 +832,28 @@ export function createBackgroundRunContext(runSignal?: AbortSignal): BackgroundR
       ]);
     },
   };
+}
+
+/** Rebuild durable background intent after the owning worker restarts. */
+export async function rehydrateBackgroundChildren(
+  options: SpawnSubagentOptions,
+  backgroundCtx: BackgroundRunContext,
+  deps: Partial<SpawnLoopDeps> = {},
+): Promise<void> {
+  if (!options.durable) return;
+  const records = await childStoreOperation(() => options.durable!.store.listBackground());
+  for (const childRecord of records) {
+    const input = spawnSubagentSchema.parse(childRecord.input) as SpawnSubagentInput;
+    const { role, description } = describeSubagentInput(input);
+    backgroundCtx.register({
+      subagentId: childRecord.id, role, description,
+      run: (emit, signal) => runSpawnLoop({ ...options, signal }, input, null, {
+        run: deps.run ?? runSubagent,
+        review: deps.review ?? reviewSubagentOutput,
+        emit: (_config, event) => emit(event),
+      }, { subagentId: childRecord.id, background: true, childRecord }),
+    });
+  }
 }
 
 /**
@@ -752,6 +874,7 @@ export function createSpawnSubagentTool(
   const loop = deps.runSpawnLoop ?? runSpawnLoop;
   return tool(
     async (input: SpawnSubagentInput, config: unknown) => {
+      const childRecord = await ensureDurableChild(options, input, config);
       if (input.background) {
         const bg = (
           config as { configurable?: { backgroundCtx?: BackgroundRunContext } }
@@ -762,7 +885,7 @@ export function createSpawnSubagentTool(
             '若问题持续，直接以普通方式完成任务，不要重复尝试后台派发。'
           );
         }
-        const subagentId = randomUUID();
+        const subagentId = childRecord?.id ?? randomUUID();
         const { role, description } = describeSubagentInput(input);
         bg.register({
           subagentId,
@@ -772,13 +895,13 @@ export function createSpawnSubagentTool(
             loop(
               { ...options, signal },
               input,
-              null,
+              config,
               {
                 run: deps.run ?? runSubagent,
                 review: deps.review ?? reviewSubagentOutput,
                 emit: (_config, event) => emit(event),
               },
-              { subagentId, background: true },
+              { subagentId, background: true, childRecord },
             ),
         });
         return [
@@ -787,7 +910,11 @@ export function createSpawnSubagentTool(
           '任务结束后系统会自动把评审通过的摘要交回，届时你再基于结果做最终汇总。',
         ].join('\n');
       }
-      return loop(options, input, config);
+      return loop(options, input, config, {
+        run: deps.run ?? runSubagent,
+        review: deps.review ?? reviewSubagentOutput,
+        emit: emitSubagentEvent,
+      }, { childRecord });
     },
     {
       name: 'spawn_subagent',

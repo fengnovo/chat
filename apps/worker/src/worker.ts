@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { PostgresStore } from '@langchain/langgraph-checkpoint-postgres/store';
-import { closeSharedMcpClients, getSharedMcpToolsForConfigPath } from '@repo/agent-core';
+import { closeSharedMcpClients, DurableExecutionError, getSharedMcpToolsForConfigPath } from '@repo/agent-core';
 import { S3ArtifactStore } from '@repo/artifacts';
 import { MEMORY_INDEX_QUEUE_NAME, MEMORY_QUEUE_NAME, RUN_QUEUE_NAME, runCancellationChannel } from '@repo/contracts';
 import { createDatabase, migrateDatabase } from '@repo/db';
@@ -61,8 +62,7 @@ if (config.MCP_CONFIG_PATH) {
 const database = createDatabase(config.DATABASE_URL);
 await migrateDatabase(database.pool);
 
-// 启动时刻：用于孤儿 run 清理的 cutoff（早于本进程的活跃态 run 均无法恢复）。
-const startedAt = new Date();
+const workerId = `worker-${randomUUID()}`;
 
 const checkpointer = PostgresSaver.fromConnString(config.DATABASE_URL, {
   schema: 'public',
@@ -75,15 +75,23 @@ await memoryStore.setup();
 
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
-// 孤儿 run 清理：上次进程遗留的 running / waiting_approval / waiting_question
-// 无法恢复，标记为 failed，前端轮询到终态后自动解除悬挂的审批卡。
-const orphanRuns = await database.repository.failOrphanRunsBefore(startedAt);
-if (orphanRuns > 0) {
-  logger.warn(
-    { count: orphanRuns, operation: 'worker.startup', reason: 'orphan-runs' },
-    `marked ${orphanRuns} orphan run(s) as failed after restart`,
-  );
+// Every worker can reconcile expired ownership. SKIP LOCKED prevents duplicate recovery.
+let reconciling = false;
+async function recoverInterruptedRuns(): Promise<void> {
+  if (reconciling) return;
+  reconciling = true;
+  try {
+    const count = await database.repository.durable.recoverExpiredRuns(100, config.MAX_RECOVERY_ATTEMPTS);
+    if (count) logger.info({ count, operation: 'worker.recovery' }, 'scheduled interrupted runs through outbox');
+  } finally { reconciling = false; }
 }
+await recoverInterruptedRuns();
+const recoveryTimer = setInterval(() => {
+  recoverInterruptedRuns().catch((error) => logger.error(
+    { error: redactTelemetryValue(error), operation: 'worker.recovery' }, 'recovery reconciliation failed',
+  ));
+}, config.RECOVERY_INTERVAL_MS);
+recoveryTimer.unref();
 
 const publisher = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const cancellationSubscriber = new Redis(config.REDIS_URL, {
@@ -148,6 +156,7 @@ const worker = new Worker(
   createRunProcessor(
     {
       config,
+      workerId,
       repository: database.repository,
       memoryStore,
       memoryQueue,
@@ -166,6 +175,7 @@ const worker = new Worker(
     connection,
     concurrency: config.WORKER_CONCURRENCY,
     lockDuration: 300_000,
+    maxStalledCount: 3,
   },
 );
 
@@ -246,13 +256,16 @@ let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  clearInterval(recoveryTimer);
+  clearInterval(orphanCleanupTimer);
+  clearTimeout(orphanCleanupKickoff);
   logger.info({ operation: 'worker.shutdown' }, 'worker shutdown started');
   try {
     // 1. 停止领取新任务。
-    await worker.pause();
+    await worker.pause(true);
     // 2. 通知在途任务尽快收尾。
     for (const controller of controllers.values()) {
-      controller.abort(new Error('Worker shutting down'));
+      controller.abort(new DurableExecutionError('Worker shutting down; execution will resume'));
     }
     // 3. 等待在途任务退出（abort 后很快结束）。
     await worker.close();

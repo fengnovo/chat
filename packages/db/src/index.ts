@@ -83,3 +83,6 @@ export * from './repository.js';
 export * from './schema.js';
 export * from './knowledge-repository.js';
 export * from './password.js';
+
+export * from './durable-execution.js';
+export type { Pool, PoolClient } from 'pg';

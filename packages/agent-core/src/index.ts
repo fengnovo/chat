@@ -6,3 +6,5 @@ export * from './mcp-client-cache.js';
 export * from './model-router.js';
 export * from './subagent.js';
 export * from './types.js';
+export * from './tool-execution.js';
+export * from './graph-recovery.js';

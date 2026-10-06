@@ -19,6 +19,10 @@ const schema = z.object({
   S3_SECRET_KEY: z.string().default('agent-local-secret'),
   AGENT_DRIVER: z.literal('deep').default('deep'),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
+  EXECUTION_LEASE_MS: z.coerce.number().int().min(5_000).max(600_000).default(90_000),
+  RECOVERY_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+  MAX_RECOVERY_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(10),
+  TOOL_REPLAY_POLICIES: z.string().default('{}'),
   WORKSPACE_ROOT: z.string().default(path.join(repositoryRoot, 'data/workspaces')),
   SANDBOX_RUNTIME: z.enum(['docker', 'e2b-cloud']).default('docker'),
   DOCKER_SANDBOX_IMAGE: z.string().trim().default('chat-agent-sandbox:latest'),
@@ -94,6 +98,10 @@ function modelSpec(raw: string, config: z.infer<typeof schema>): ModelSpec {
 
 export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
   const value = schema.parse(environment);
+  const toolReplayPolicies = z.record(z.string(), z.object({
+    replaySafe: z.boolean().optional(),
+    idempotencyKeyArgument: z.string().min(1).optional(),
+  }).strict()).parse(JSON.parse(value.TOOL_REPLAY_POLICIES));
   const databaseUrl =
     environment.DATABASE_URL ??
     (value.NODE_ENV === 'test'
@@ -113,6 +121,7 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
     .map((item) => modelSpec(item, value));
   return {
     ...value,
+    toolReplayPolicies,
     DATABASE_URL: databaseUrl,
     WORKSPACE_ROOT: workspaceRoot,
     DOCKER_SANDBOX_SESSIONS_ROOT: sandboxSessionsRoot,

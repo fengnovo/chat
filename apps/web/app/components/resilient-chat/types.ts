@@ -68,6 +68,7 @@ type SubagentCard = {
 
 type ResilientData = {
   agent: AgentEvent;
+  'text-recovery': { text: string };
   pipeline: PipelineEvent;
   card: InsightCard | null;
   suggestions: string[];

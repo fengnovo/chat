@@ -120,6 +120,8 @@ function applyEvent(state: ChatState, event: StreamAgentEvent): ChatState {
   switch (event.type) {
     case 'assistant.delta':
       return { ...state, active: { ...active, assistantText: active.assistantText + event.text } };
+    case 'assistant.snapshot':
+      return { ...state, active: { ...active, assistantText: event.text } };
     case 'assistant.reasoning':
       return { ...state, active: { ...active, reasoning: active.reasoning + event.text } };
     case 'assistant.narration':

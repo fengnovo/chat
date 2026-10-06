@@ -30,6 +30,7 @@ function agentEventToTrace(event: AgentEvent): PipelineEvent | null {
 
   switch (event.type) {
     case 'assistant.delta':
+    case 'assistant.snapshot':
       return null;
     case 'assistant.narration':
       return null;

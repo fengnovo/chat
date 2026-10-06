@@ -119,6 +119,7 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     capabilities: runCapabilitiesSchema.optional(),
   }),
   z.object({ ...eventBase, type: z.literal('assistant.delta'), text: z.string() }),
+  z.object({ ...eventBase, type: z.literal('assistant.snapshot'), text: z.string() }),
   /**
    * 模型的思考过程（reasoning_content）。推理模型在输出正式回复前会先输出
    * 一段内部思考，这里把它实时流式出来，避免用户在思考阶段看不到任何反馈。
@@ -436,6 +437,13 @@ export const observabilityContextSchema = z.object({
 
 export const runJobSchema = z.discriminatedUnion('kind', [
   z.object({
+    kind: z.literal('recover'),
+    tenantId: z.uuid(), userId: z.uuid(), sessionId: z.uuid(), runId: z.uuid(),
+    workspacePath: z.string(), knowledgeBaseIds: knowledgeBaseIdsSchema,
+    approvalMode: z.enum(['manual', 'session']).optional(),
+    observability: observabilityContextSchema.optional(),
+  }),
+  z.object({
     kind: z.literal('start'),
     tenantId: z.uuid(),
     userId: z.uuid(),
@@ -451,6 +459,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('resume-approval'),
+    interruptId: z.string().optional(),
     tenantId: z.uuid(),
     userId: z.uuid(),
     sessionId: z.uuid(),
@@ -463,6 +472,7 @@ export const runJobSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('resume-question'),
+    interruptId: z.string().optional(),
     tenantId: z.uuid(),
     userId: z.uuid(),
     sessionId: z.uuid(),

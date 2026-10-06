@@ -13,6 +13,7 @@ import {
 } from '@opentelemetry/api';
 import {
   createDeepAgentRuntime,
+  DurableExecutionError,
   type AgentTelemetry,
   type ChatImageAttachment,
   DockerSandboxBackend,
@@ -31,7 +32,7 @@ import {
   type RunJob,
 } from '@repo/contracts';
 import { extractObservabilityContext, type JobKind } from '@repo/observability';
-import type { AgentRepository } from '@repo/db';
+import type { AgentRepository, RunExecutionLease } from '@repo/db';
 import {
   createMemoryRetriever,
   isSensitiveMemory,
@@ -49,6 +50,8 @@ import { SignJWT } from 'jose';
 import type { WorkerConfig } from './config.js';
 import { createAgentTelemetry } from './agent-telemetry.js';
 import { withSessionLock } from './lock.js';
+import { createDurableRuntimePorts } from './durable-runtime.js';
+import { createFencedCheckpointer } from './fenced-checkpointer.js';
 import type { WorkerObservability } from './observability.js';
 import type { WorkerLangfuse } from './langfuse.js';
 import { RedisCircuitBreakerStore } from './redis-circuit-breaker.js';
@@ -63,6 +66,7 @@ import {
 
 interface ProcessorServices {
   config: WorkerConfig;
+  workerId?: string;
   repository: AgentRepository;
   redis: Redis;
   publisher: Redis;
@@ -117,31 +121,14 @@ async function persistEvent(
   services: ProcessorServices,
   job: RunJob,
   event: AgentEvent,
+  lease: RunExecutionLease,
 ) {
   const validated = agentEventSchema.parse(event);
-  const persisted = await services.repository.appendEvent(job.tenantId, validated);
-  await services.publisher.publish(runEventsChannel(job.runId), String(persisted.seq));
-  if (event.type === 'approval.required') {
-    await services.repository.createInterrupt(job.tenantId, job.runId, {
-      id: event.interruptId,
-      kind: 'approval',
-      request: event.actions,
-    });
-  } else if (event.type === 'question.required') {
-    await services.repository.createInterrupt(job.tenantId, job.runId, {
-      id: event.interruptId,
-      kind: 'question',
-      request: event.question,
-    });
-  }
-  const status = terminalStatus(event);
+  const persisted = await services.repository.durable.appendEvent(lease, validated);
+  // The event is already durable; SSE heartbeats also replay DB if pub/sub is down.
+  await services.publisher.publish(runEventsChannel(job.runId), String(persisted.seq)).catch(() => undefined);
+  const status = terminalStatus(persisted);
   if (status) {
-    await services.repository.updateRunStatus(
-      job.tenantId,
-      job.runId,
-      status,
-      event.type === 'run.failed' ? { code: event.code, message: event.message } : undefined,
-    );
     // run 完成后投递后台记忆整理任务：幂等写 memory_jobs 表，再用 BullMQ 唤醒消费者。
     // 投递失败不影响已完成的聊天（fail-open）。
     if (status === 'completed') {
@@ -158,6 +145,7 @@ async function persistEvent(
       }).catch(() => undefined);
     }
   }
+  return persisted;
 }
 
 type SandboxInstance = DockerSandboxBackend | E2BSandbox;
@@ -415,6 +403,7 @@ async function createRuntime(
   callbacks?: readonly unknown[],
   agentResources?: AgentResources,
   longTermMemory?: NonNullable<Parameters<typeof createDeepAgentRuntime>[0]['longTermMemory']>,
+  lease?: RunExecutionLease,
 ): Promise<HeadlessAgentRuntime> {
   if (!backend) throw new Error('Deep agent requires a sandbox backend');
   const knowledgeMcpEnabled = services.config.KNOWLEDGE_MCP_ENABLED &&
@@ -430,7 +419,8 @@ async function createRuntime(
     workspacePath,
     backend,
     backendMode: services.config.SANDBOX_RUNTIME === 'docker' ? 'docker' : 'e2b',
-    checkpointer: services.checkpointer,
+    checkpointer: lease ? createFencedCheckpointer(services.checkpointer, services.repository.durable, lease) : services.checkpointer,
+    ...(lease ? { durable: createDurableRuntimePorts(services.repository, lease, services.config.toolReplayPolicies) } : {}),
     models: services.config.models,
     circuitBreaker: new RedisCircuitBreakerStore(
       services.redis,
@@ -592,7 +582,8 @@ export function createRunProcessor(
   langfuse?: WorkerLangfuse,
 ) {
   return async (bullJob: Job): Promise<void> => {
-    const job = runJobSchema.parse(bullJob.data);
+    const dispatchJob = runJobSchema.parse(bullJob.data);
+    let job: RunJob = dispatchJob;
 
     // 从 Outbox payload 恢复 producer 上下文。Consumer 是独立 root trace，
     // 用 span link 关联 outbox.dispatch，避免审批等待数小时形成超长父子 span。
@@ -644,30 +635,29 @@ export function createRunProcessor(
         : action();
     try {
       await context.with(activeContext, async () => {
-        if (bullJob.id) await services.repository.markDispatchConsumed(String(bullJob.id));
         await withSessionLock(
           services.redis,
           job.sessionId,
           async () => {
       const record = await services.repository.getRunForWorker(job.tenantId, job.runId);
       if (!record) throw new Error('Run no longer exists');
-      if (['completed', 'failed', 'cancelled'].includes(record.status)) return;
-      if (record.cancelRequestedAt) {
-        const cancelled: AgentEvent = {
-          runId: job.runId,
-          timestamp: new Date().toISOString(),
-          type: 'run.cancelled',
-        };
-        await persistEvent(services, job, cancelled);
-        await killPersistedSandbox(services, job);
+      if (['completed', 'failed', 'cancelled'].includes(record.status)) {
+        if (bullJob.id) await services.repository.markDispatchConsumed(String(bullJob.id));
         return;
       }
-
-      const claimed = await services.repository.tryMarkRunRunning(
-        job.tenantId,
-        job.runId,
+      const lease = await services.repository.durable.claimRun(
+        dispatchJob,
+        services.config.EXECUTION_LEASE_MS,
+        services.workerId ?? `worker-${process.pid}`,
+        services.config.MAX_RECOVERY_ATTEMPTS,
       );
-      if (!claimed) return;
+      if (!lease) {
+        // A waiting run can still hold the previous owner's lease during cleanup.
+        // Keep its addressed response pending until ownership can actually be acquired.
+        throw new Error('Execution is not claimable yet; its dispatch remains pending');
+      }
+      // Scheduling identity is disposable; the persisted invocation is authoritative.
+      job = lease.input;
       const controller = new AbortController();
       services.controllers.set(job.runId, controller);
       let runtime: HeadlessAgentRuntime | null = null;
@@ -675,7 +665,36 @@ export function createRunProcessor(
       let workspaceId: string | null = null;
       let terminalEventWritten = false;
       let shouldKill = false;
+      let interrupted = false;
+      let renewing: Promise<void> | undefined;
+      const heartbeat = setInterval(() => {
+        if (renewing) return;
+        renewing = services.repository.durable.renewLease(lease, services.config.EXECUTION_LEASE_MS)
+          .then(async (owned) => {
+            if (!owned) { controller.abort(new DurableExecutionError('Execution lease lost')); return; }
+            const current = await services.repository.getRunForWorker(lease.tenantId, lease.runId);
+            if (current?.cancelRequestedAt) controller.abort(new Error('Run cancelled by user'));
+          })
+          .catch((cause) => controller.abort(new DurableExecutionError('Execution lease renewal interrupted', { cause })))
+          .finally(() => { renewing = undefined; });
+      }, Math.max(1_000, Math.floor(services.config.EXECUTION_LEASE_MS / 3)));
+      heartbeat.unref();
       try {
+        if (bullJob.id) await services.repository.markDispatchConsumed(String(bullJob.id));
+        const claimedRecord = await services.repository.getRunForWorker(job.tenantId, job.runId);
+        if (claimedRecord?.cancelRequestedAt) {
+          await persistEvent(services, job, { runId: job.runId, timestamp: new Date().toISOString(), type: 'run.cancelled' }, lease);
+          terminalEventWritten = true;
+          await killPersistedSandbox(services, job);
+          return;
+        }
+        if (lease.legacyExecution) {
+          await persistEvent(services, job, { runId: job.runId, timestamp: new Date().toISOString(), type: 'run.failed',
+            code: 'RECOVERY_LEGACY_EXECUTION',
+            message: '该任务在持久化执行协议启用前启动，缺少可靠的执行归属和工具账本，无法安全自动恢复。工作区与 checkpoint 已保留，请核对之前的外部操作结果后再发起任务。' }, lease);
+          terminalEventWritten = true;
+          return;
+        }
         const workspace = await services.repository.getWorkspaceSandboxForWorker(
           job.tenantId,
           job.sessionId,
@@ -691,6 +710,10 @@ export function createRunProcessor(
           : remoteWorkspacePath(services.config.E2B_WORKSPACE_PATH);
         const session = await services.repository.getSessionForWorker(job.tenantId, job.sessionId).catch(() => null);
         const projectId = session?.projectId ?? null;
+        const checkpoint = lease.recovery ? await services.checkpointer.getTuple({ configurable: { thread_id: job.sessionId } }) : undefined;
+        const metadata = checkpoint?.metadata as Record<string, unknown> | undefined;
+        const hasCheckpoint = metadata?.business_run_id === job.runId || metadata?.run_id === job.runId;
+        const initialize = job.kind === 'start' && !hasCheckpoint;
         // 三个独立准备步骤并行执行——都只依赖 sandbox/remotePath，互不阻塞。
         const [, preparedAttachments, agentResources, longTermMemory] = await observed(
           'preparation.parallel',
@@ -700,19 +723,19 @@ export function createRunProcessor(
                 prepareWorkspace(
                   acquiredSandbox,
                   remotePath,
-                  job.kind === 'start' ? job.workspaceSource : undefined,
+                  job.kind === 'start' && initialize ? job.workspaceSource : undefined,
                   (objectKey) => services.artifacts.getObjectBytes(objectKey),
-                  job.kind === 'start',
+                  initialize,
                 ),
               ),
               // 用户附件按引用取回：图片→视觉输入，文本→内联正文，二进制→工作区文件。
-              job.kind === 'start' && job.attachments.length > 0
+              job.kind === 'start' && initialize && job.attachments.length > 0
                 ? observed('attachments.prepare', () =>
                     prepareRunAttachments(
                       services,
                       acquiredSandbox,
                       remotePath,
-                      job.attachments,
+                      lease.input.kind === 'start' ? lease.input.attachments : [],
                     ),
                   )
                 : Promise.resolve({ appendedMessage: '', images: [] as ChatImageAttachment[] }),
@@ -735,7 +758,7 @@ export function createRunProcessor(
                   job,
                   projectId,
                   job.kind === 'start' ? job.message : '',
-                  { refreshProfile: job.kind === 'start' },
+                  { refreshProfile: initialize },
                 ),
               ),
             ]),
@@ -748,7 +771,7 @@ export function createRunProcessor(
                 runId: job.runId,
                 sessionId: job.sessionId,
                 userId: job.userId,
-                runKind: job.kind,
+                runKind: lease.input.kind,
               }),
             ) ?? undefined
           : undefined;
@@ -763,6 +786,7 @@ export function createRunProcessor(
             langchainCallbacks,
             agentResources,
             longTermMemory,
+            lease,
           ),
         );
         if (telemetry) {
@@ -778,30 +802,27 @@ export function createRunProcessor(
           );
         }
         await observed('agent.execute', async () => {
-          const events =
-            job.kind === 'start'
-              ? runtime!.run(
-                  `${job.message}${preparedAttachments.appendedMessage}`,
-                  preparedAttachments.images,
-                )
-              : job.kind === 'resume-approval'
-                ? runtime!.resume({
-                    kind: 'approval',
-                    decision: job.decision.decision,
-                    ...(job.decision.message ? { message: job.decision.message } : {}),
-                  })
-                : runtime!.resume({
-                    kind: 'question',
-                    answer: {
-                      selections: job.answer.selections,
-                      ...(job.answer.customText ? { customText: job.answer.customText } : {}),
-                    },
-                  });
+          // A reclaimed start dispatch resumes its checkpoint; it never adds input twice.
+          const invocation = lease.input;
+          const input = invocation.kind === 'start'
+            ? { kind: 'start' as const, message: `${invocation.message}${preparedAttachments.appendedMessage}`, images: preparedAttachments.images }
+            : invocation.kind === 'resume-approval'
+              ? { kind: 'approval' as const, decision: invocation.decision.decision,
+                  ...(invocation.interruptId ? { interruptId: invocation.interruptId } : {}),
+                  ...(invocation.decision.message ? { message: invocation.decision.message } : {}) }
+              : { kind: 'question' as const,
+                  ...(invocation.interruptId ? { interruptId: invocation.interruptId } : {}),
+                  answer: { selections: invocation.answer.selections,
+                    ...(invocation.answer.customText ? { customText: invocation.answer.customText } : {}) } };
+          const events = lease.recovery ? runtime!.recover(input)
+            : input.kind === 'start' ? runtime!.run(input.message, input.images) : runtime!.resume(input);
           for await (const event of events) {
             let persistOutcome: 'success' | 'failure' = 'success';
             const persistStartedAt = Date.now();
             try {
-              await persistEvent(services, job, event);
+              const persisted = await persistEvent(services, job, event, lease);
+              terminalEventWritten = terminalStatus(persisted) !== null;
+              if (persisted.type === 'run.cancelled') shouldKill = true;
             } catch (persistError) {
               persistOutcome = 'failure';
               throw persistError;
@@ -814,43 +835,33 @@ export function createRunProcessor(
                 }),
               );
             }
-            terminalEventWritten = terminalStatus(event) !== null;
             if (event.type === 'run.cancelled') shouldKill = true;
             // 步数耗尽时工作区是完整的，保留它用户才能接着上一轮继续；
             // 只有真正的执行失败才回收沙箱。
-            if (event.type === 'run.failed' && event.code !== 'AGENT_STEP_LIMIT') {
+            if (event.type === 'run.failed' && event.code !== 'AGENT_STEP_LIMIT' && event.code !== 'RECOVERY_LEGACY_EXECUTION') {
               shouldKill = true;
             }
           }
         });
       } catch (error) {
-        shouldKill = controller.signal.aborted || !terminalEventWritten;
         if (!terminalEventWritten) {
+          interrupted = true;
+          if (!controller.signal.aborted) controller.abort(new DurableExecutionError('Worker execution interrupted', { cause: error }));
           const latest = await services.repository.getRunForWorker(
             job.tenantId,
             job.runId,
           );
-          const cancelled = controller.signal.aborted || Boolean(latest?.cancelRequestedAt);
-          await persistEvent(
-            services,
-            job,
-            cancelled
-              ? {
-                  runId: job.runId,
-                  timestamp: new Date().toISOString(),
-                  type: 'run.cancelled',
-                }
-              : {
-                  runId: job.runId,
-                  timestamp: new Date().toISOString(),
-                  type: 'run.failed',
-                  code: 'WORKER_EXECUTION_FAILED',
-                  message: error instanceof Error ? error.message : String(error),
-                },
-          );
+          if (latest?.cancelRequestedAt) {
+            await persistEvent(services, job, { runId: job.runId, timestamp: new Date().toISOString(), type: 'run.cancelled' }, lease);
+            terminalEventWritten = true;
+            interrupted = false;
+            shouldKill = true;
+          }
         }
-        if (!controller.signal.aborted) throw error;
+        if (interrupted || !controller.signal.aborted) throw error;
       } finally {
+        clearInterval(heartbeat);
+        await renewing;
         services.controllers.delete(job.runId);
         await runtime?.dispose().catch(() => undefined);
         await observed('cleanup', async () => {
@@ -889,6 +900,7 @@ export function createRunProcessor(
             }
           }
         });
+        await services.repository.durable.releaseLease(lease, interrupted).catch(() => undefined);
       }
           },
           (outcome, durationMs) =>

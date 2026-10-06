@@ -52,6 +52,7 @@ test('outbox publishes with a stable job id before marking the row complete', as
     },
   } as unknown as AgentRepository;
   const queue = {
+    async getJob() { return undefined; },
     async add(_name: string, _data: RunJob, options: { jobId: string }) {
       operations.push(`queued:${options.jobId}`);
     },
@@ -95,6 +96,7 @@ test('outbox reschedules a failed queue publish', async () => {
     },
   } as unknown as AgentRepository;
   const queue = {
+    async getJob() { return undefined; },
     async add() {
       throw new Error('redis unavailable');
     },

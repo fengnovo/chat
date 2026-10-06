@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { DurableExecutionRepository } from './durable-execution.js';
 
 import type {
   AgentEvent,
@@ -344,7 +345,11 @@ async function insertDispatch(client: PoolClient, job: RunJob): Promise<string> 
 }
 
 export class AgentRepository {
-  constructor(private readonly pool: Pool) {}
+  readonly durable: DurableExecutionRepository;
+
+  constructor(private readonly pool: Pool) {
+    this.durable = new DurableExecutionRepository(pool);
+  }
 
   async ping(): Promise<void> {
     await this.pool.query('SELECT 1');
@@ -994,11 +999,11 @@ export class AgentRepository {
          WHERE dispatch.published_at IS NOT NULL
            AND dispatch.consumed_at IS NULL
            AND dispatch.published_at < now() - ($1::integer * interval '1 millisecond')
-           AND run.cancel_requested_at IS NULL
            AND (
              (dispatch.job_kind = 'start' AND run.status = 'queued')
              OR (dispatch.job_kind = 'resume-approval' AND run.status = 'waiting_approval')
              OR (dispatch.job_kind = 'resume-question' AND run.status = 'waiting_question')
+             OR (dispatch.job_kind = 'recover' AND run.status = 'running')
            )
          ORDER BY dispatch.published_at ASC
          FOR UPDATE OF dispatch SKIP LOCKED
@@ -1270,6 +1275,7 @@ export class AgentRepository {
         userId: String(run.rows[0].user_id),
         sessionId: String(run.rows[0].session_id),
         runId,
+        interruptId,
         workspacePath: String(run.rows[0].workspace_path),
         approvalMode,
         knowledgeBaseIds: Array.isArray(run.rows[0].knowledge_base_ids)

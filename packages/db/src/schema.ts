@@ -129,6 +129,15 @@ export const agentRuns = pgTable(
     userId: uuid('user_id').notNull().references(() => users.id),
     sessionId: uuid('session_id').notNull().references(() => agentSessions.id),
     status: text('status').notNull(),
+    executionState: text('execution_state').notNull().default('pending'),
+    leaseToken: uuid('lease_token'),
+    leaseEpoch: bigint('lease_epoch', { mode: 'number' }).notNull().default(0),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    workerId: text('worker_id'),
+    executionInput: jsonb('execution_input'),
+    checkpointId: text('checkpoint_id'),
+    recoveryAttempts: integer('recovery_attempts').notNull().default(0),
+    legacyExecution: boolean('legacy_execution').notNull().default(false),
     userMessage: text('user_message').notNull(),
     continuation: boolean('continuation').notNull().default(false),
     knowledgeBaseIds: uuid('knowledge_base_ids').array().notNull().default([]),
@@ -148,6 +157,7 @@ export const agentRuns = pgTable(
       table.idempotencyKey,
     ),
     index('agent_runs_tenant_created_idx').on(table.tenantId, table.createdAt),
+    index('agent_runs_execution_recovery_idx').on(table.leaseExpiresAt, table.updatedAt).where(sql`${table.executionState} IN ('running', 'recovering')`),
   ],
 );
 
@@ -460,12 +470,14 @@ export const runEvents = pgTable(
     tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
     seq: integer('seq').notNull(),
     eventType: text('event_type').notNull(),
+    eventKey: text('event_key'),
     payload: jsonb('payload').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.runId, table.seq] }),
     index('run_events_tenant_run_idx').on(table.tenantId, table.runId, table.seq),
+    uniqueIndex('run_events_identity_idx').on(table.runId, table.eventKey).where(sql`${table.eventKey} IS NOT NULL`),
   ],
 );
 
@@ -489,5 +501,54 @@ export const runDispatchOutbox = pgTable(
     index('run_dispatch_outbox_pending_idx').on(table.availableAt, table.createdAt),
     index('run_dispatch_outbox_run_idx').on(table.tenantId, table.runId, table.createdAt),
     index('run_dispatch_outbox_unconsumed_idx').on(table.publishedAt, table.createdAt),
+  ],
+);
+
+export const toolExecutions = pgTable(
+  'tool_executions',
+  {
+    executionId: uuid('execution_id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+    scopeId: text('scope_id').notNull(),
+    toolCallId: text('tool_call_id').notNull(),
+    toolName: text('tool_name').notNull(),
+    inputHash: text('input_hash').notNull(),
+    input: jsonb('input').notNull(),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    replayPolicy: text('replay_policy').notNull(),
+    retryCount: integer('retry_count').notNull().default(0),
+    status: text('status').notNull().default('started'),
+    result: jsonb('result'),
+    leaseEpoch: bigint('lease_epoch', { mode: 'number' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('tool_executions_identity_idx').on(table.runId, table.scopeId, table.toolCallId)],
+);
+
+export const childExecutions = pgTable(
+  'child_executions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    rootRunId: uuid('root_run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+    parentToolCallId: text('parent_tool_call_id').notNull(),
+    threadId: text('thread_id').notNull().unique(),
+    input: jsonb('input').notNull(),
+    background: boolean('background').notNull(),
+    status: text('status').notNull().default('pending'),
+    attempt: integer('attempt').notNull().default(1),
+    feedback: text('feedback'),
+    attemptResult: jsonb('attempt_result'),
+    summary: text('summary'),
+    review: jsonb('review'),
+    leaseEpoch: bigint('lease_epoch', { mode: 'number' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('child_executions_identity_idx').on(table.rootRunId, table.parentToolCallId),
+    index('child_executions_background_idx').on(table.rootRunId, table.createdAt).where(sql`${table.background}`),
   ],
 );

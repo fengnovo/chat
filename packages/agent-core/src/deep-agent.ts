@@ -21,9 +21,15 @@ import { createResilientModelRouter } from './model-router.js';
 import {
   createBackgroundRunContext,
   createSpawnSubagentTool,
+  rehydrateBackgroundChildren,
+  resumeBackgroundChild,
+  DurableChildInterruptError,
+  type SpawnSubagentOptions,
   type BackgroundRunContext,
   type BackgroundTaskResult,
 } from './subagent.js';
+import { canonicalAssistantText, chooseRecoveryInput, type RecoverySnapshot } from './graph-recovery.js';
+import { createToolExecutionMiddleware, DurableExecutionError, isDurableExecutionError } from './tool-execution.js';
 import type {
   AgentResumeInput,
   AgentTelemetry,
@@ -594,17 +600,28 @@ export async function createDeepAgentRuntime(
   ]);
   if (!options.backend) throw new Error('DeepAgent requires an external sandbox backend');
   const backendMode = options.backendMode ?? 'e2b';
-  // 逐个包一层：MCP 工具的业务错误（抓不到页面、超时、5xx 等）转成可恢复结果，
-  // 不再让单个外部工具失败冒泡成 run.failed。name/schema 保持不变，审批规则不受影响。
-  const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools].map(wrapMcpToolAsRecoverable);
+  // Legacy mode converts MCP errors into tool results. Durable mode keeps raw errors
+  // so an unknown external outcome cannot be recorded as a successful execution.
+  const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools].map((item) =>
+    options.durable ? item : wrapMcpToolAsRecoverable(item));
   // 子 Agent 派发工具（P1 同步模式）：工具池交给策略层过滤，事件经 custom 流透出。
-  const spawnSubagentTool = createSpawnSubagentTool({
+  const childOptions: SpawnSubagentOptions = {
     runId: options.runId,
     router: { primary: router.primary, middleware: router.middleware },
     tools: mcpTools,
     backend: options.backend,
     ...(options.signal ? { signal: options.signal } : {}),
-  });
+    ...(options.durable ? { durable: {
+      store: options.durable.children,
+      checkpointer: options.checkpointer,
+      toolMiddleware: (scopeId: string) => createToolExecutionMiddleware({
+        store: options.durable!.tools, scopeId,
+        assertOwnership: options.durable!.assertOwnership,
+        ...(options.durable!.toolPolicies ? { policies: options.durable!.toolPolicies } : {}),
+      }),
+    } } : {}),
+  };
+  const spawnSubagentTool = createSpawnSubagentTool(childOptions);
   const protectedToolApproval = { allowedDecisions: ['approve', 'reject'] };
   // 会话级自动批准（用户点过“本会话都允许”）时，所有工具一律放行；
   // 否则写操作、命令、MCP 工具都要逐项审批（graphrag_search 只读，始终免批）。
@@ -766,6 +783,12 @@ export async function createDeepAgentRuntime(
     ].join('\n'),
     middleware: [
       router.middleware as never,
+      ...(options.durable ? [createToolExecutionMiddleware({
+        store: options.durable.tools,
+        scopeId: options.runId,
+        assertOwnership: options.durable.assertOwnership,
+        ...(options.durable.toolPolicies ? { policies: options.durable.toolPolicies } : {}),
+      }) as never] : []),
       todoListMiddleware() as never,
       modelCallLimitMiddleware({
         runLimit: options.modelCallLimit ?? DEFAULT_MODEL_CALL_LIMIT,
@@ -798,7 +821,8 @@ export async function createDeepAgentRuntime(
       ? { callbacks: options.callbacks as never[] }
       : {}),
     metadata: {
-      run_id: options.runId,
+      run_id: `${options.runId}:initial`,
+      business_run_id: options.runId,
       thread_id: options.sessionId,
       backend: backendMode,
       cwd: options.workspacePath,
@@ -806,6 +830,7 @@ export async function createDeepAgentRuntime(
     streamMode: ['values', 'messages', 'tools', 'custom'] as Array<
       'values' | 'messages' | 'tools' | 'custom'
     >,
+    durability: 'sync' as const,
     ...(options.signal ? { signal: options.signal } : {}),
   };
 
@@ -874,6 +899,7 @@ export async function createDeepAgentRuntime(
     const backgroundCtx = createBackgroundRunContext(options.signal);
     let lastClosedTodos: ClosedTodos = null;
     try {
+      if (options.durable) await rehydrateBackgroundChildren(childOptions, backgroundCtx);
       let passInput: unknown = input;
       for (let followup = 0; ; followup += 1) {
         const outcome: GraphPassOutcome = yield* runGraphPass(passInput, backgroundCtx);
@@ -884,16 +910,23 @@ export async function createDeepAgentRuntime(
         if (outcome.kind === 'error') throw outcome.error;
         lastClosedTodos = outcome.closedTodos;
 
-        if (backgroundCtx.size() > 0 && followup < MAX_BACKGROUND_FOLLOWUPS) {
+        const hasChildren = options.durable
+          ? (await options.durable.children.listBackground()).length > 0
+          : backgroundCtx.size() > 0;
+        if (hasChildren && followup < MAX_BACKGROUND_FOLLOWUPS) {
           yield* pumpBackgroundEvents(backgroundCtx);
-          const results = await backgroundCtx.settled();
+          const settled = await backgroundCtx.settled();
+          const snapshot = await runnable.getState(config) as { values?: { messages?: Array<{ id?: string }> } };
+          const committedIds = new Set(snapshot.values?.messages?.map((message) => message.id));
+          const results = settled.filter((result) => !committedIds.has(`child-result-${result.subagentId}`));
           yield* yieldBackgroundEvents(backgroundCtx.drainEvents());
-          passInput = {
-            messages: [
-              buildBackgroundFollowup(results, followup + 1 >= MAX_BACKGROUND_FOLLOWUPS),
-            ],
-          };
-          continue;
+          if (results.length > 0) {
+            passInput = { messages: results.map((result) => new HumanMessage({
+              id: `child-result-${result.subagentId}`,
+              content: buildBackgroundFollowup([result], followup + 1 >= MAX_BACKGROUND_FOLLOWUPS).content,
+            })) };
+            continue;
+          }
         }
         // 达到续轮上限仍有任务（模型在最后一轮仍派发后台任务）：收割掉，run 正常结束。
         if (backgroundCtx.size() > 0) await backgroundCtx.abortAll();
@@ -906,11 +939,27 @@ export async function createDeepAgentRuntime(
           };
         }
         safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'completed' }));
+        const finalState = await runnable.getState(config) as { values?: { messages?: Array<AIMessage | HumanMessage | ToolMessage> } };
+        yield { runId: options.runId, timestamp: timestamp(), type: 'assistant.snapshot',
+          text: canonicalAssistantText(finalState.values?.messages, options.runId) };
         yield { runId: options.runId, timestamp: timestamp(), type: 'run.completed' };
         return;
       }
     } catch (error) {
       await backgroundCtx.abortAll();
+      if (error instanceof DurableChildInterruptError) {
+        const request = error.request as HITLRequest;
+        yield { runId: options.runId, timestamp: timestamp(), type: 'approval.required',
+          interruptId: error.interruptId,
+          actions: request.actionRequests.map((action) => ({ name: action.name,
+            args: (action.args ?? {}) as Record<string, unknown>,
+            summary: action.description || summarizeArgs(action.name, (action.args ?? {}) as Record<string, unknown>) })) };
+        return;
+      }
+      if (isDurableExecutionError(error) || (error as { code?: string })?.code === 'DURABLE_EXECUTION_INTERRUPTED' ||
+        isDurableExecutionError(options.signal?.reason) || (error as { code?: string })?.code === 'EXECUTION_LEASE_LOST') {
+        throw error;
+      }
       if (options.signal?.aborted) {
         safeTelemetry((sink) => sink.event('run.terminal', { outcome: 'cancelled' }));
         yield { runId: options.runId, timestamp: timestamp(), type: 'run.cancelled' };
@@ -941,6 +990,9 @@ export async function createDeepAgentRuntime(
     let lastTodos = '';
     const passConfig = {
       ...config,
+      metadata: { ...config.metadata, run_id: (passInput as { messages?: Array<{ id?: string }> } | null)?.messages?.[0]?.id?.startsWith('child-result-')
+        ? `${options.runId}:followup:${(passInput as { messages: Array<{ id?: string }> }).messages.map((message) => message.id).join(',')}`
+        : config.metadata.run_id },
       configurable: { ...(config.configurable as Record<string, unknown>), backgroundCtx },
     };
     try {
@@ -1151,7 +1203,7 @@ export async function createDeepAgentRuntime(
         const firstInterrupt = interrupts?.[0];
         if (firstInterrupt?.value) {
           interruptRequest = firstInterrupt.value;
-          interruptId = firstInterrupt.id ?? interruptId;
+          interruptId = (firstInterrupt.value as { durableApprovalId?: string }).durableApprovalId ?? firstInterrupt.id ?? interruptId;
         }
       }
 
@@ -1180,7 +1232,7 @@ export async function createDeepAgentRuntime(
       const pausedInterrupt = paused?.interrupts?.[0];
       if (pausedInterrupt) {
         interruptRequest = pausedInterrupt.value;
-        interruptId = pausedInterrupt.id ?? interruptId;
+        interruptId = (pausedInterrupt.value as { durableApprovalId?: string }).durableApprovalId ?? pausedInterrupt.id ?? interruptId;
       } else {
         // 正常结束收口：模型交付最终答复后常漏标最后一个 todo（官方中间件无此能力），
         // 计算收口结果交给外层 execute——仅最终 pass 才真正发出，
@@ -1214,7 +1266,7 @@ export async function createDeepAgentRuntime(
             actions: interruptRequest.actionRequests.map((request) => ({
               name: request.name,
               args: (request.args ?? {}) as Record<string, unknown>,
-              summary: summarizeArgs(request.name, (request.args ?? {}) as Record<string, unknown>),
+              summary: request.description || summarizeArgs(request.name, (request.args ?? {}) as Record<string, unknown>),
             })),
           };
         }
@@ -1252,8 +1304,9 @@ export async function createDeepAgentRuntime(
     };
     const firstMessage =
       images.length === 0
-        ? new HumanMessage(message)
+        ? new HumanMessage({ content: message, id: `user-${options.runId}` })
         : new HumanMessage({
+            id: `user-${options.runId}`,
             content: [
               { type: 'text', text: message },
               ...images.map((image) => ({
@@ -1268,6 +1321,12 @@ export async function createDeepAgentRuntime(
   async function* resumeApproval(
     input: Extract<AgentResumeInput, { kind: 'approval' }>,
   ): AsyncIterable<AgentEvent> {
+    const childResponse: HITLResponse = { decisions: [input.decision === 'approve'
+      ? { type: 'approve' } : { type: 'reject', message: input.message ?? '用户拒绝重复执行' }] };
+    if (await resumeBackgroundChild(childOptions, childResponse, input.interruptId)) {
+      yield* execute(null);
+      return;
+    }
     const state = (await runnable.getState(config)) as {
       tasks?: Array<{ interrupts?: Array<{ value?: AgentInterruptRequest }> }>;
     };
@@ -1277,6 +1336,8 @@ export async function createDeepAgentRuntime(
       .find((value): value is HITLRequest => Boolean(value && !isQuestion(value)));
     const decisionCount = Math.max(1, request?.actionRequests.length ?? 1);
     const response: HITLResponse = {
+      ...((request as { durableApprovalId?: string } | undefined)?.durableApprovalId
+        ? { durableApprovalId: (request as HITLRequest & { durableApprovalId: string }).durableApprovalId } : {}),
       decisions: Array.from({ length: decisionCount }, () =>
         input.decision === 'approve'
           ? ({ type: 'approve' } as const)
@@ -1294,6 +1355,12 @@ export async function createDeepAgentRuntime(
     );
   }
 
+  async function* legacyExecutionFailure(): AsyncIterable<AgentEvent> {
+    yield { runId: options.runId, timestamp: timestamp(), type: 'run.failed',
+      code: 'RECOVERY_LEGACY_EXECUTION',
+      message: '该任务在持久化执行协议启用前启动，缺少可靠的执行归属和工具账本，无法安全自动恢复。工作区与 checkpoint 已保留，请核对之前的外部操作结果后再发起任务。' };
+  }
+
   return {
     backendMode,
     workspacePath: options.workspacePath,
@@ -1302,10 +1369,42 @@ export async function createDeepAgentRuntime(
       return runInitial(message, images);
     },
     resume(input: AgentResumeInput) {
+      if (options.durable?.legacyExecution) return legacyExecutionFailure();
       if (input.kind === 'question') {
         return execute(new Command({ resume: input.answer }));
       }
       return resumeApproval(input);
+    },
+    async *recover(input) {
+      if (options.durable?.legacyExecution) { yield* legacyExecutionFailure(); return; }
+      let snapshot: RecoverySnapshot & { values?: { messages?: Array<AIMessage | HumanMessage | ToolMessage> } };
+      try { snapshot = await runnable.getState(config) as typeof snapshot; }
+      catch (error) { throw new DurableExecutionError('Unable to load execution checkpoint', { cause: error }); }
+      const owned = snapshot.metadata?.business_run_id === options.runId || snapshot.metadata?.run_id === options.runId;
+      if (!owned) {
+        if (input.kind !== 'start') throw new DurableExecutionError('Cannot resume: checkpoint does not belong to this run');
+        yield* runInitial(input.message, input.images);
+        return;
+      }
+      yield { runId: options.runId, timestamp: timestamp(), type: 'assistant.snapshot',
+        text: canonicalAssistantText(snapshot.values?.messages, options.runId) };
+      if (input.kind === 'approval' && await resumeBackgroundChild(childOptions, {
+        decisions: [input.decision === 'approve' ? { type: 'approve' } : { type: 'reject', message: input.message ?? '用户拒绝重复执行' }],
+      }, input.interruptId)) { yield* execute(null); return; }
+      let command: unknown;
+      const pending = snapshot.tasks?.flatMap((task) => task.interrupts ?? [])[0] as { id?: string; value?: HITLRequest & { durableApprovalId?: string } } | undefined;
+      const pendingId = pending?.value?.durableApprovalId ?? pending?.id;
+      // A saved answer authorizes only its own interrupt. Recovery can expose a later one.
+      const matching = input.kind === 'start' || !input.interruptId || !pendingId || input.interruptId === pendingId;
+      if (input.kind === 'question' && matching) command = new Command({ resume: input.answer });
+      if (input.kind === 'approval' && matching) {
+        const count = Math.max(1, pending?.value?.actionRequests?.length ?? 1);
+        command = new Command({ resume: {
+          ...(pending?.value?.durableApprovalId ? { durableApprovalId: pending.value.durableApprovalId } : {}),
+          decisions: Array.from({ length: count }, () =>
+          input.decision === 'approve' ? { type: 'approve' } : { type: 'reject', message: input.message ?? '用户拒绝操作' }) } });
+      }
+      yield* execute(chooseRecoveryInput(snapshot, options.runId, undefined, command));
     },
     async dispose() {
       // base MCP client 是进程级共享资源（mcp-client-cache.ts），生命周期不绑定

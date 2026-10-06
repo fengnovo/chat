@@ -452,10 +452,10 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     );
     const messages = runs.flatMap((run, index) => {
       const events = eventGroups[index] ?? [];
-      const assistantText = events
-        .filter((event) => event.type === 'assistant.delta')
-        .map((event) => event.text)
-        .join('');
+      const assistantText = events.reduce((text, event) => {
+        if (event.type === 'assistant.snapshot') return event.text;
+        return event.type === 'assistant.delta' ? text + event.text : text;
+      }, '');
       const reasoning = events
         .filter((event) => event.type === 'assistant.reasoning')
         .map((event) => event.text)

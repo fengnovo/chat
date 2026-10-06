@@ -12,10 +12,10 @@ import type {
 } from './types';
 
 function messageText(message: ResilientMessage) {
-  return message.parts
-    .filter((part) => part.type === 'text')
-    .map((part) => part.text)
-    .join('');
+  return message.parts.reduce((text, part) => {
+    if (part.type === 'data-text-recovery') return part.data.text;
+    return part.type === 'text' ? text + part.text : text;
+  }, '');
 }
 
 function formatDuration(seconds: number) {

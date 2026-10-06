@@ -1,12 +1,90 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 
 import type { PersistedAgentEvent } from '@repo/contracts';
 import Fastify from 'fastify';
 
 import { chunksFrom, createChunkEncoder, createCoalescedRunner, streamWorkflowRun } from '../src/chat-stream.js';
+import { streamAgentEvents } from '../src/sse.js';
 
 const runId = '00000000-0000-4000-8000-000000000001';
+
+test('snapshots replace stale text and keep subsequent deltas in a new text part', () => {
+  const timestamp = new Date().toISOString();
+  const events: PersistedAgentEvent[] = [
+    { runId, seq: 1, timestamp, type: 'assistant.delta', text: 'unfinished' },
+    { runId, seq: 2, timestamp, type: 'assistant.snapshot', text: '' },
+    { runId, seq: 3, timestamp, type: 'assistant.delta', text: 'answer' },
+    { runId, seq: 4, timestamp, type: 'assistant.snapshot', text: 'correct answer' },
+    { runId, seq: 5, timestamp, type: 'run.completed' },
+  ];
+  const encode = createChunkEncoder(runId);
+  const chunks = events.flatMap((event) => encode([event]));
+  assert.deepEqual(chunks, chunksFrom(runId, events));
+  assert.deepEqual(chunks.filter((chunk) => chunk.type === 'data-text-recovery').map((chunk) => [chunk.data, chunk.transient]), [
+    [{ text: '' }, false], [{ text: 'correct answer' }, false],
+  ]);
+  const starts = chunks.filter((chunk) => chunk.type === 'text-start');
+  assert.equal(starts.length, 2);
+  assert.notEqual(starts[0]!.id, starts[1]!.id);
+  assert.equal(chunks.filter((chunk) => chunk.type === 'text-end').length, 2);
+  assert.equal(chunks[chunks.findIndex((chunk) => chunk.type === 'data-text-recovery') - 1]!.type, 'text-end');
+});
+
+for (const [name, stream] of [['workflow', streamWorkflowRun], ['raw events', streamAgentEvents]] as const) {
+  test(`${name} heartbeat delivers durable completion without a Redis notification`, async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const events: PersistedAgentEvent[] = [];
+    const written: string[] = [];
+    let ended = false;
+    const raw = Object.assign(new EventEmitter(), {
+      setHeader() {}, writeHead() {}, flushHeaders() {},
+      write(value: string) { written.push(value); }, end() { ended = true; },
+    });
+    const services = {
+      repository: {
+        getRun: async () => ({ id: runId, status: events.length ? 'completed' : 'running' }),
+        listEvents: async (_auth: unknown, _id: string, cursor: number) => events.filter((event) => event.seq > cursor),
+      },
+      streamSubscriptions: { subscribe: async () => () => {} },
+    };
+    await stream({ auth: {}, headers: {}, query: {}, log: { warn() {} } } as never,
+      { raw, hijack() {}, getHeaders: () => ({}) } as never, services as never, runId);
+    events.push({ runId, seq: 1, timestamp: new Date().toISOString(), type: 'assistant.snapshot', text: 'recovered answer' },
+      { runId, seq: 2, timestamp: new Date().toISOString(), type: 'run.completed' });
+    t.mock.timers.tick(15_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.match(written.join(''), /recovered answer/);
+    assert.equal(ended, true);
+    raw.emit('close');
+  });
+}
+
+test('raw SSE drains events committed between its last read and terminal status check', async () => {
+  const events: PersistedAgentEvent[] = [];
+  const written: string[] = [];
+  let runReads = 0;
+  let ended = false;
+  const raw = Object.assign(new EventEmitter(), {
+    setHeader() {}, writeHead() {}, flushHeaders() {},
+    write(value: string) { written.push(value); }, end() { ended = true; },
+  });
+  const services = {
+    repository: {
+      getRun: async () => {
+        if (++runReads === 2) events.push({ runId, seq: 1, timestamp: new Date().toISOString(), type: 'run.completed' });
+        return { id: runId, status: events.length ? 'completed' : 'running' };
+      },
+      listEvents: async (_auth: unknown, _id: string, cursor: number) => events.filter((event) => event.seq > cursor),
+    },
+    streamSubscriptions: { subscribe: async () => () => {} },
+  };
+  await streamAgentEvents({ auth: {}, headers: {}, query: {}, log: { warn() {} } } as never,
+    { raw, hijack() {}, getHeaders: () => ({}) } as never, services as never, runId);
+  assert.match(written.join(''), /run.completed/);
+  assert.equal(ended, true);
+});
 
 test('durable agent events map to a valid framed text response', () => {
   const events: PersistedAgentEvent[] = [

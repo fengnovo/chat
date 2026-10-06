@@ -101,6 +101,7 @@ test('dispatch creates a producer span and re-injects its context into the queue
 
     let queuedPayload: RunJob | undefined;
     const queue = {
+      async getJob() { return undefined; },
       async add(_name: string, data: RunJob) {
         queuedPayload = data;
       },
@@ -168,6 +169,7 @@ test('dispatch failure marks the span errored and reschedules without throwing',
       async rescheduleDispatch() {},
     } as unknown as AgentRepository;
     const queue = {
+      async getJob() { return undefined; },
       async add() {
         throw new Error('redis unavailable');
       },
