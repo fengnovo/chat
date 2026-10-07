@@ -37,6 +37,8 @@ export interface ToolExecutionMiddlewareOptions {
   scopeId: string;
   policies?: Record<string, ToolReplayPolicy>;
   assertOwnership?: () => Promise<void>;
+  /** Session authorization also covers repeating an execution with an unknown outcome. */
+  autoApproveTools?: boolean;
 }
 
 /** Infrastructure or unknown execution outcomes must escape tool error handlers. */
@@ -170,7 +172,7 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
       if (record.status === 'succeeded') return deserializeToolResult(record.result);
       if (record.status !== 'started' && record.status !== 'uncertain') throw new DurableExecutionError('Invalid durable tool execution status');
       const effectiveReplayPolicy = policy?.replaySafe === undefined ? record.replayPolicy : replayPolicy;
-      if (!fresh && effectiveReplayPolicy === 'unsafe') {
+      if (!fresh && effectiveReplayPolicy === 'unsafe' && !options.autoApproveTools) {
         const approval: HITLRequest & { durableApprovalId: string } = {
           durableApprovalId: `tool-${record.executionId}-${record.retryCount}`,
           actionRequests: [{ name: toolName, args: input, description: 'Previous external execution outcome is unknown. It may already have succeeded. Approve to repeat this action, or reject to leave it unrepeated.' }],
@@ -217,9 +219,18 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
       try { result = await handler(handlerRequest); }
       catch (cause) {
         if (isGraphInterrupt(cause)) throw cause;
-        await storage(() => options.store.uncertain(record.executionId));
-        if (isDurableExecutionError(cause)) throw cause;
-        throw new DurableExecutionError(`Tool ${toolName} execution outcome is uncertain`, { cause });
+        // The MCP adapter throws ToolException for both transport failures and
+        // explicit isError responses. Only the latter is a known tool result:
+        // persist it so the model can respond and checkpoint replay won't call it again.
+        if (!request.runtime.signal?.aborted && !isDurableExecutionError(cause) &&
+          cause instanceof Error && cause.name === 'ToolException' &&
+          /^MCP tool '[^']+' on server '[^']+' returned an error: /.test(cause.message)) {
+          result = new ToolMessage({ tool_call_id: toolCallId, name: toolName, content: cause.message, status: 'error' });
+        } else {
+          await storage(() => options.store.uncertain(record.executionId));
+          if (isDurableExecutionError(cause)) throw cause;
+          throw new DurableExecutionError(`Tool ${toolName} execution outcome is uncertain`, { cause });
+        }
       }
       // A failure to persist success leaves started/uncertain; replay must reconcile it.
       await ownership();

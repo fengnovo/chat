@@ -9,6 +9,7 @@
     "dev": "node --env-file-if-exists=.env scripts/free-dev-ports.mjs && node --env-file-if-exists=.env node_modules/concurrently/dist/bin/concurrently.js -n web,api,worker,knowledge -c blue,green,magenta,yellow \"pnpm --filter web dev\" \"pnpm --filter @repo/agent-api dev\" \"pnpm --filter @repo/agent-worker dev\" \"pnpm --filter @repo/knowledge-service dev\"",
     "dev:api": "pnpm --filter @repo/agent-api dev",
     "dev:worker": "pnpm --filter @repo/agent-worker dev",
+    "mcp:firecrawl": "FIRECRAWL_API_URL=http://localhost:3088 HTTP_STREAMABLE_SERVER=true PORT=3089 pnpm dlx firecrawl-mcp@3.24.0",
     "desktop:dev": "pnpm --filter @repo/desktop dev",
     "desktop:start": "pnpm --filter @repo/desktop start",
     "desktop:typecheck": "pnpm --filter @repo/desktop typecheck",

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AIMessage, HumanMessage, RemoveMessage, ToolMessage } from '@langchain/core/messages';
 import { Command, GraphInterrupt, MemorySaver, Overwrite, Send } from '@langchain/langgraph';
+import { loadMcpTools } from '@langchain/mcp-adapters';
 import { createAgent, FakeToolCallingModel, todoListMiddleware, tool, type AnyAgentMiddleware, type ToolCallRequest } from 'langchain';
 import { z } from 'zod';
 import {
@@ -56,6 +57,69 @@ test('succeeded replay returns stored ToolMessage without repeating its external
   assert.ok(replay instanceof ToolMessage);
   assert.deepEqual(replay.artifact, { version: 3 });
   assert.equal(replay.content, 'saved');
+});
+
+test('an explicit MCP error reaches the model and replays without another remote call', async () => {
+  const store = new Ledger();
+  let calls = 0;
+  const [search] = await loadMcpTools('firecrawl', {
+    listTools: async () => ({ tools: [{ name: 'firecrawl_search', description: 'Search the web', inputSchema: { type: 'object', properties: {} } }] }),
+    callTool: async () => {
+      calls++;
+      return { isError: true, content: [{ type: 'text', text: 'Request failed with status code 400' }] };
+    },
+  } as unknown as Parameters<typeof loadMcpTools>[1]);
+  for (const thread of ['initial', 'replay']) {
+    const saver = new MemorySaver();
+    const agent = createAgent({
+      model: new FakeToolCallingModel({ toolCalls: [[{ name: 'firecrawl_search', id: 'call-1', args: {} }], []] }),
+      tools: [search!], middleware: [createToolExecutionMiddleware({ store, scopeId: 'root' })], checkpointer: saver,
+    });
+    const config = { configurable: { thread_id: thread } };
+    const result = await agent.invoke({ messages: [new HumanMessage('Compare these cars')] }, config);
+    const errorMessage = result.messages.find((message) => ToolMessage.isInstance(message));
+    assert.ok(errorMessage instanceof ToolMessage);
+    assert.equal(errorMessage.status, 'error');
+    assert.match(String(errorMessage.content), /status code 400/);
+    const answer = result.messages.at(-1);
+    assert.ok(answer instanceof AIMessage);
+    assert.equal(answer.tool_calls?.length ?? 0, 0);
+    assert.match(String(answer.content), /status code 400/);
+  }
+  assert.equal(calls, 1);
+  assert.equal(store.records.get('root:call-1')?.status, 'succeeded');
+});
+
+test('MCP transport failures and malformed responses keep their execution outcome uncertain', async () => {
+  for (const failure of ['transport', 'malformed'] as const) {
+    const store = new Ledger();
+    const [search] = await loadMcpTools('firecrawl', {
+      listTools: async () => ({ tools: [{ name: 'firecrawl_search', inputSchema: { type: 'object', properties: {} } }] }),
+      callTool: async () => {
+        // Even error-like remote text is not proof of a completed call when the transport throws.
+        if (failure === 'transport') throw new Error("MCP tool 'firecrawl_search' on server 'firecrawl' returned an error: connection lost");
+        return { content: 'invalid result' };
+      },
+    } as unknown as Parameters<typeof loadMcpTools>[1]);
+    const middleware = createToolExecutionMiddleware({ store, scopeId: 'root' });
+    await assert.rejects(async () => middleware.wrapToolCall!(request('firecrawl_search'),
+      async (req) => search!.invoke(req.toolCall)), isDurableExecutionError);
+    assert.equal(store.records.get('root:call-1')?.status, 'uncertain');
+    assert.equal(store.records.get('root:call-1')?.result, null);
+  }
+});
+
+test('an explicit MCP error received after cancellation is not saved as a completed result', async () => {
+  const store = new Ledger();
+  const controller = new AbortController();
+  const req = request('firecrawl_search');
+  req.runtime.signal = controller.signal;
+  const middleware = createToolExecutionMiddleware({ store, scopeId: 'root' });
+  await assert.rejects(async () => middleware.wrapToolCall!(req, async () => {
+    controller.abort(new Error('worker shutting down'));
+    throw Object.assign(new Error("MCP tool 'firecrawl_search' on server 'firecrawl' returned an error: cancelled"), { name: 'ToolException' });
+  }), isDurableExecutionError);
+  assert.equal(store.records.get('root:call-1')?.status, 'uncertain');
 });
 
 test('Command replay preserves state updates and nested BaseMessages after JSON storage', () => {
@@ -240,6 +304,60 @@ test('an unsafe tool error leaves its graph checkpoint resumable and requires ap
   await agent.invoke(new Command({ resume: { decisions: [{ type: 'approve' }] } }), config);
   assert.equal(writes, 2);
   assert.equal(store.records.get('root:call-1')?.status, 'succeeded');
+});
+
+test('session approval applies to a paused unsafe retry and survives another lost response', async () => {
+  const store = new Ledger();
+  await store.begin({ scopeId: 'root', toolCallId: 'call-1', toolName: 'external_write', inputHash: stableToolInputHash({}), input: {}, replayPolicy: 'unsafe' });
+  await store.uncertain('root:call-1');
+  let writes = 0;
+  const externalTool = tool(async () => {
+    writes++;
+    if (writes === 1) throw new Error('response lost after the approved retry');
+    return 'saved';
+  }, { name: 'external_write', description: 'External write', schema: z.object({}) });
+  const checkpointer = new MemorySaver();
+  const model = new FakeToolCallingModel({ toolCalls: [[{ name: 'external_write', id: 'call-1', args: {} }], []] });
+  const build = (autoApproveTools: boolean) => createAgent({ model, tools: [externalTool],
+    middleware: [createToolExecutionMiddleware({ store, scopeId: 'root', ...{ autoApproveTools } })], checkpointer });
+  const config = { configurable: { thread_id: 'session-approved-retry' } };
+  const manual = build(false);
+  const paused = await manual.invoke({ messages: [new HumanMessage('write')] }, config);
+  assert.equal(paused.__interrupt__?.length, 1);
+  assert.equal(writes, 0);
+  const approval = paused.__interrupt__![0]!.value as { durableApprovalId: string };
+  // Worker rebuilds the runtime with the persisted session authorization on resume/recovery.
+  await assert.rejects(() => build(true).invoke(new Command({ resume: {
+    decisions: [{ type: 'approve' }], durableApprovalId: approval.durableApprovalId,
+  } }), config), isDurableExecutionError);
+  assert.equal(writes, 1);
+  const recovered = await build(true).invoke(null, config);
+  assert.equal(recovered.__interrupt__?.length ?? 0, 0);
+  assert.equal(writes, 2);
+  assert.equal(store.records.get('root:call-1')?.retryCount, 2);
+  assert.equal(store.records.get('root:call-1')?.replayPolicy, 'unsafe');
+  assert.equal(store.records.get('root:call-1')?.status, 'succeeded');
+});
+
+test('session authorization does not carry into another manual execution scope', async () => {
+  const store = new Ledger();
+  for (const scopeId of ['authorized', 'manual']) {
+    await store.begin({ scopeId, toolCallId: 'call-1', toolName: 'external_write', inputHash: stableToolInputHash({}), input: {}, replayPolicy: 'unsafe' });
+    await store.uncertain(`${scopeId}:call-1`);
+  }
+  let writes = 0;
+  const externalTool = tool(async () => { writes++; return 'saved'; }, { name: 'external_write', description: 'External write', schema: z.object({}) });
+  for (const scopeId of ['authorized', 'manual']) {
+    const agent = createAgent({
+      model: new FakeToolCallingModel({ toolCalls: [[{ name: 'external_write', id: 'call-1', args: {} }], []] }),
+      tools: [externalTool], middleware: [createToolExecutionMiddleware({ store, scopeId, ...{ autoApproveTools: scopeId === 'authorized' } })],
+      checkpointer: new MemorySaver(),
+    });
+    const result = await agent.invoke({ messages: [new HumanMessage('write')] }, { configurable: { thread_id: scopeId } });
+    assert.equal(result.__interrupt__?.length ?? 0, scopeId === 'authorized' ? 0 : 1);
+  }
+  assert.equal(writes, 1);
+  assert.equal(store.records.get('manual:call-1')?.status, 'uncertain');
 });
 
 test('a lost response after approved unsafe replay requires a fresh approval before another effect', async () => {

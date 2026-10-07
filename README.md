@@ -256,6 +256,26 @@ DOCKER_SANDBOX_IMAGE=chat-agent-sandbox:latest
 # MCP_CONFIG_PATH=/absolute/path/to/mcp.json
 ```
 
+### 本地 Firecrawl MCP
+
+本地 Firecrawl Docker API 监听 `http://localhost:3088` 时，在独立终端启动 MCP：
+
+```bash
+pnpm mcp:firecrawl
+```
+
+项目固定使用 `firecrawl-mcp@3.24.0`。3.25.0 起的搜索请求会自动加入本地 API 不支持的 `domainTools`、`toolDetail` 等云端参数，导致 HTTP 400（[上游问题 #471](https://github.com/firecrawl/firecrawl-mcp-server/issues/471)）。升级前需确认与本地 API 兼容。
+
+Worker / CLI 使用现有 `packages/ai-cli/mcp/mcp.json`，地址为 `http://localhost:3089/mcp`。在根目录 `.env` 设置：
+
+```dotenv
+MCP_CONFIG_PATH=packages/ai-cli/mcp/mcp.json
+```
+
+该启动命令连接本地 Docker API；API 关闭认证时无需设置 Firecrawl API Key。
+
+`mcp.json` 的 `defaultToolTimeout` 为 90000 毫秒，给抓取与后端返回错误留出时间。Docker 需要能访问目标网站；若宿主机依赖代理，还需在 Firecrawl 的 Docker 配置中设置容器可访问的 `PROXY_SERVER`。
+
 ### 沙箱镜像构建
 
 Worker 默认使用本机 Docker 沙箱，需要先构建镜像：
