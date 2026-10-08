@@ -338,6 +338,7 @@ export const uploadProjectSchema = z.object({
 });
 
 export const createRunSchema = z.object({
+  attachmentIds: z.array(z.uuid()).max(5).default([]),
   message: z.string().trim().min(1).max(100_000),
   knowledgeBaseIds: knowledgeBaseIdsSchema.default([]),
 });

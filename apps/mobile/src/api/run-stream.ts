@@ -83,12 +83,13 @@ export function createRunStream(
   token: string,
   runId: string,
   callbacks: RunStreamCallbacks,
+  cursor = 0,
 ): RunStreamHandle {
   let closed = false;
   let attempt = 0;
   let controller = new AbortController();
   // 跨连接保存事件位点（seq 数值），重连时用 cursor=<seq> 查询参数续传。
-  let lastSeq = 0;
+  let lastSeq = cursor;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   const scheduleReconnect = () => {
@@ -134,9 +135,7 @@ export function createRunStream(
         scheduleReconnect();
         return;
       }
-      if (attempt > 0) {
-        callbacks.onResumed?.();
-      }
+      callbacks.onResumed?.();
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();

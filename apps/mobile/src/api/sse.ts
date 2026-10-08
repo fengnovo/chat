@@ -7,6 +7,7 @@ export function subscribeRunStream(
   token: string,
   runId: string,
   callbacks: RunStreamCallbacks,
+  cursor = 0,
 ) {
   return createRunStream(
     streamingFetch as typeof fetch,
@@ -14,5 +15,6 @@ export function subscribeRunStream(
     token,
     runId,
     callbacks,
+    cursor,
   );
 }

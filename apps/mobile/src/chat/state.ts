@@ -1,4 +1,8 @@
-import type { StreamAgentEvent } from '../api/types';
+import type {
+  StreamAgentEvent,
+  HistoryResponse,
+  ChatAttachment,
+} from '../api/types';
 import type {
   ApprovalRequest,
   QuestionRequest,
@@ -10,6 +14,7 @@ export interface ChatItem {
   role: 'user' | 'assistant';
   text: string;
   reasoning?: string;
+  attachments?: ChatAttachment[];
   run?: ActiveRun;
 }
 
@@ -24,6 +29,7 @@ export interface ActiveRun {
   question: QuestionRequest | null;
   reconnecting: boolean;
   finished: boolean;
+  outcome?: 'completed' | 'failed' | 'cancelled';
   lastSeq: number;
   connectionError: boolean;
 }
@@ -36,8 +42,18 @@ export interface ChatState {
 }
 
 export type ChatAction =
-  | { type: 'history'; items: ChatItem[]; activeRunId: string | null }
-  | { type: 'run-started'; runId: string; userText: string }
+  | {
+      type: 'history';
+      items: ChatItem[];
+      activeRunId: string | null;
+      snapshot?: HistoryResponse;
+    }
+  | {
+      type: 'run-started';
+      runId: string;
+      userText: string;
+      attachments?: ChatAttachment[];
+    }
   | { type: 'event'; event: StreamAgentEvent }
   | { type: 'reset' }
   | { type: 'finished'; runId: string }
@@ -68,12 +84,17 @@ function emptyActive(runId: string): ActiveRun {
   };
 }
 
-function finalize(state: ChatState, failureMessage: string | null): ChatState {
+function finalize(
+  state: ChatState,
+  failureMessage: string | null,
+  outcome: 'completed' | 'failed' | 'cancelled' = 'completed',
+): ChatState {
   const active = state.active;
   if (!active || active.finished) return state;
   const completed = {
     ...active,
     finished: true,
+    outcome,
     reconnecting: false,
     connectionError: false,
     approval: null,
@@ -108,6 +129,11 @@ function applyEvent(state: ChatState, event: StreamAgentEvent): ChatState {
   state = { ...state, active };
 
   switch (event.type) {
+    case 'run.started':
+      return {
+        ...state,
+        active: { ...active, approval: null, question: null },
+      };
     case 'assistant.delta':
       return {
         ...state,
@@ -238,10 +264,11 @@ function applyEvent(state: ChatState, event: StreamAgentEvent): ChatState {
         },
       };
     case 'run.failed':
-      return finalize(state, `运行失败：${event.message}`);
+      return finalize(state, `运行失败：${event.message}`, 'failed');
     case 'run.completed':
-    case 'run.cancelled':
       return finalize(state, null);
+    case 'run.cancelled':
+      return finalize(state, null, 'cancelled');
     default:
       return state;
   }
@@ -252,6 +279,7 @@ export function reducer(state: ChatState, action: ChatAction): ChatState {
     case 'reset':
       return initialState;
     case 'history':
+      if (action.snapshot) return restoreHistory(action.snapshot);
       return {
         ...state,
         error: null,
@@ -261,11 +289,17 @@ export function reducer(state: ChatState, action: ChatAction): ChatState {
         active: action.activeRunId ? emptyActive(action.activeRunId) : null,
       };
     case 'run-started':
+      if (state.active?.runId === action.runId) return state;
       return {
         ...state,
         items: [
           ...state.items,
-          { id: `user-${action.runId}`, role: 'user', text: action.userText },
+          {
+            id: `user-${action.runId}`,
+            role: 'user',
+            text: action.userText,
+            attachments: action.attachments,
+          },
         ],
         active: emptyActive(action.runId),
         error: null,
@@ -349,4 +383,69 @@ export function selectChatItems(state: ChatState): ChatItem[] {
         },
       ]
     : state.items;
+}
+
+export function isRunActive(status: string): boolean {
+  return ['queued', 'running', 'waiting_approval', 'waiting_question'].includes(
+    status,
+  );
+}
+
+/** Rebuild the latest turn from persisted events, then reconcile with authoritative run status. */
+export function restoreHistory(history: HistoryResponse): ChatState {
+  const latest = history.latestRun;
+  const replay = latest && history.latestRunEvents !== undefined;
+  let state: ChatState = {
+    items: history.messages
+      .filter(
+        (message) =>
+          !(
+            latest &&
+            (replay || isRunActive(latest.status)) &&
+            message.runId === latest.id &&
+            message.role === 'assistant'
+          ),
+      )
+      .map((message) => ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        reasoning: message.reasoning,
+        attachments: message.attachments,
+      })),
+    active:
+      latest && (replay || isRunActive(latest.status))
+        ? emptyActive(latest.id)
+        : null,
+    loadingHistory: false,
+    error: null,
+  };
+  if (!latest || !replay) return state;
+  for (const event of history.latestRunEvents!)
+    state = applyEvent(state, event);
+  if (!isRunActive(latest.status)) {
+    state = finalize(
+      state,
+      latest.status === 'failed'
+        ? `运行失败：${latest.errorMessage ?? '任务未完成'}`
+        : null,
+      latest.status === 'failed'
+        ? 'failed'
+        : latest.status === 'cancelled'
+          ? 'cancelled'
+          : 'completed',
+    );
+  } else if (state.active) {
+    state = {
+      ...state,
+      active: {
+        ...state.active,
+        approval:
+          latest.status === 'waiting_approval' ? state.active.approval : null,
+        question:
+          latest.status === 'waiting_question' ? state.active.question : null,
+      },
+    };
+  }
+  return state;
 }

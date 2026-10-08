@@ -439,10 +439,15 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
 
   app.get('/api/agent/sessions/:sessionId/history', async (request, reply) => {
     const { sessionId } = request.params as { sessionId: string };
-    const session = await services.repository.getSession(request.auth, sessionId);
+    let session = await services.repository.getSession(request.auth, sessionId);
     if (!session) return reply.code(404).send({ error: 'session_not_found' });
 
     const runs = await services.repository.listSessionRuns(request.auth, sessionId);
+    if (session.title === '新会话') {
+      const first = runs.find(run => !run.continuation);
+      const title = first?.userMessage.trim().split('\n')[0]?.slice(0, 120);
+      if (title) session = await services.repository.setInitialSessionTitle(request.auth, sessionId, title) ?? session;
+    }
     const eventGroups = await Promise.all(
       runs.map((run) => services.repository.listEvents(request.auth, run.id, 0, 100_000)),
     );
@@ -499,6 +504,9 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       session,
       messages,
       latestRun: runs.at(-1) ?? null,
+      ...((request.query as {includeLatestEvents?: string}).includeLatestEvents === '1'
+        ? { latestRunEvents: eventGroups.at(-1) ?? [] }
+        : {}),
     };
   });
 
@@ -551,6 +559,18 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     const input = createRunSchema.parse(request.body);
     const session = await services.repository.getSession(request.auth, sessionId);
     if (!session) return reply.code(404).send({ error: 'session_not_found' });
+    let attachments: RunAttachmentRef[] = [];
+    if (input.attachmentIds.length) {
+      const records = await services.repository.getReadyChatAttachments(request.auth, input.attachmentIds);
+      if (records.length !== new Set(input.attachmentIds).size) {
+        return reply.code(400).send({error: 'invalid_attachment'});
+      }
+      attachments = records.map(record => ({
+        id: record.id, kind: record.kind, objectKey: record.objectKey,
+        filename: record.filename, contentType: record.contentType, sizeBytes: record.sizeBytes,
+        ...(record.contentEncoding ? {contentEncoding: record.contentEncoding as 'gzip'} : {}),
+      }));
+    }
     const enqueue = services.observability
       ? startRunEnqueue(services.observability, { requestId: request.id, jobKind: 'start' })
       : null;
@@ -559,6 +579,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       const result = await services.repository.createRun(request.auth, {
         sessionId,
         message: input.message,
+        attachments,
         ...(key ? { idempotencyKey: key } : {}),
         knowledgeBaseIds: input.knowledgeBaseIds,
         ...(enqueue ? { observabilityContext: enqueue.observabilityContext } : {}),
@@ -1128,7 +1149,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   async function resolveSandboxWorkspacePathBySession(sessionId: string): Promise<string | null> {
     if (services.config.SANDBOX_RUNTIME !== 'docker') return null;
     
-    // 通过 sessionId（external_key）查询对应的 workspace_id
+    // Web 传 external_key，原生客户端传内部会话 ID。
     const workspaceId = await services.repository.getWorkspaceIdByExternalKey(sessionId);
     if (!workspaceId) return null;
     
@@ -1202,6 +1223,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     const origin = request.headers.origin ?? request.headers.referer ?? '';
     const allowedOrigins = [
       services.config.WEB_ORIGIN,
+      `${request.protocol}://${request.headers.host}`,
       `http://localhost:${services.config.API_PORT}`,
       `http://127.0.0.1:${services.config.API_PORT}`,
     ];

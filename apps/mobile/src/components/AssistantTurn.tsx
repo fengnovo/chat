@@ -14,10 +14,12 @@ import { colors, spacing } from '../theme';
 
 function AssistantTurn({
   item,
+  sessionId,
   onApproval,
   onQuestion,
 }: {
   item: ChatItem;
+  sessionId: string;
   onApproval: (
     request: ApprovalRequest,
     approve: boolean,
@@ -41,7 +43,9 @@ function AssistantTurn({
           streaming={streaming && !waiting && !item.text}
         />
       ) : null}
-      {run ? <ActivityPanel items={run.activities} /> : null}
+      {run ? (
+        <ActivityPanel items={run.activities} finished={run.finished} />
+      ) : null}
       {run?.approval ? (
         <ApprovalCard
           key={run.approval.interruptId}
@@ -60,8 +64,22 @@ function AssistantTurn({
           }
         />
       ) : null}
+      {run?.finished && run.outcome && run.outcome !== 'completed' ? (
+        <Text
+          style={{
+            color: run.outcome === 'failed' ? colors.danger : colors.warning,
+            padding: spacing.md,
+          }}
+        >
+          {run.outcome === 'failed' ? '本次任务未完成' : '任务已停止'}
+        </Text>
+      ) : null}
       {item.text ? (
-        <AssistantMessage text={item.text} streaming={streaming && !waiting} />
+        <AssistantMessage
+          sessionId={sessionId}
+          text={item.text}
+          streaming={streaming && !waiting}
+        />
       ) : streaming && !waiting ? (
         <View
           style={{ padding: spacing.md, flexDirection: 'row', gap: spacing.sm }}

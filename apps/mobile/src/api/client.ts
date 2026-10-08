@@ -16,6 +16,7 @@ export class ApiError extends Error {
 
 const TOKEN_STORAGE_KEY = 'keenai.token';
 const SERVER_STORAGE_KEY = 'keenai.server';
+const CHAT_STORAGE_KEY = 'keenai.lastChat';
 
 /**
  * 面向 Fastify Agent API 的移动端客户端。
@@ -91,6 +92,7 @@ export class ApiClient {
       method: 'POST',
       body: { username, password },
     });
+    await this.forgetChat();
     this.token = result.token;
     return result;
   }
@@ -100,6 +102,7 @@ export class ApiClient {
       await this.request('/api/auth/logout', { method: 'POST' });
     } finally {
       this.token = null;
+      await this.forgetChat();
     }
   }
 
@@ -139,16 +142,46 @@ export class ApiClient {
 
   history(sessionId: string) {
     return this.request<HistoryResponse>(
-      `/api/agent/sessions/${sessionId}/history`,
+      `/api/agent/sessions/${sessionId}/history?includeLatestEvents=1`,
     );
+  }
+
+  getSession(sessionId: string) {
+    return this.request<SessionSummary>(`/api/agent/sessions/${sessionId}`);
+  }
+
+  async rememberChat(sessionId: string, title: string) {
+    const SecureStore = await import('expo-secure-store');
+    await SecureStore.setItemAsync(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({ sessionId, title }),
+    );
+  }
+  async rememberedChat(): Promise<{ sessionId: string; title: string } | null> {
+    const SecureStore = await import('expo-secure-store');
+    const raw = await SecureStore.getItemAsync(CHAT_STORAGE_KEY);
+    try {
+      const value = raw ? JSON.parse(raw) : null;
+      return value &&
+        typeof value.sessionId === 'string' &&
+        typeof value.title === 'string'
+        ? value
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  async forgetChat() {
+    const SecureStore = await import('expo-secure-store');
+    await SecureStore.deleteItemAsync(CHAT_STORAGE_KEY);
   }
 
   // ---- 运行 ----
 
-  createRun(sessionId: string, message: string) {
+  createRun(sessionId: string, message: string, attachmentIds: string[] = []) {
     return this.request<RunRecord>(`/api/agent/sessions/${sessionId}/runs`, {
       method: 'POST',
-      body: { message },
+      body: { message, attachmentIds },
     });
   }
 
@@ -158,7 +191,12 @@ export class ApiClient {
     });
   }
 
-  respondApproval(runId: string, interruptId: string, approve: boolean, scope: 'once' | 'session' = 'once') {
+  respondApproval(
+    runId: string,
+    interruptId: string,
+    approve: boolean,
+    scope: 'once' | 'session' = 'once',
+  ) {
     return this.request<{ status: string }>(
       `/api/agent/runs/${runId}/approvals/${interruptId}`,
       {

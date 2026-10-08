@@ -22,6 +22,7 @@ export interface RunRecord {
     | 'cancelled';
   createdAt: string;
   updatedAt: string;
+  errorMessage?: string | null;
 }
 
 /** GET /sessions/:id/history 返回的消息条目。 */
@@ -32,12 +33,14 @@ export interface HistoryMessage {
   text: string;
   createdAt: string;
   reasoning?: string;
+  attachments?: ChatAttachment[];
 }
 
 export interface HistoryResponse {
   session: SessionSummary;
   messages: HistoryMessage[];
   latestRun: RunRecord | null;
+  latestRunEvents?: StreamAgentEvent[];
 }
 
 export interface CurrentUser {
@@ -50,3 +53,12 @@ export interface CurrentUser {
 
 /** SSE data-agent 事件（服务端持久化后的 AgentEvent + seq）。 */
 export type StreamAgentEvent = AgentEvent & { seq: number };
+
+export interface ChatAttachment {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  kind: 'image' | 'text' | 'file';
+  url: string;
+}

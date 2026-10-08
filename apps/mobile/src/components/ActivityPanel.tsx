@@ -3,9 +3,21 @@ import { Pressable, Text, View } from 'react-native';
 import { formatDetail, type ActivityItem } from '../chat/activity';
 import { colors, spacing } from '../theme';
 
-function ToolRow({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
+function ToolRow({
+  item,
+  finished,
+}: {
+  item: Extract<ActivityItem, { kind: 'tool' }>;
+  finished?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const status = item.running ? '执行中' : item.failed ? '失败' : '完成';
+  const status = item.running
+    ? finished
+      ? '未完成'
+      : '执行中'
+    : item.failed
+      ? '失败'
+      : '完成';
   return (
     <View>
       <Pressable
@@ -71,11 +83,17 @@ function ToolRow({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
 }
 
 /** Execution details belong to their assistant turn, including after completion. */
-export default function ActivityPanel({ items }: { items: ActivityItem[] }) {
+export default function ActivityPanel({
+  items,
+  finished,
+}: {
+  items: ActivityItem[];
+  finished?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   if (!items.length) return null;
   const running = items.filter(
-    (item) => item.kind === 'tool' && item.running,
+    (item) => item.kind === 'tool' && item.running && !finished,
   ).length;
   return (
     <View
@@ -116,7 +134,11 @@ export default function ActivityPanel({ items }: { items: ActivityItem[] }) {
         >
           {items.map((item, index) =>
             item.kind === 'tool' ? (
-              <ToolRow key={item.invocationId} item={item} />
+              <ToolRow
+                key={item.invocationId}
+                item={item}
+                finished={finished}
+              />
             ) : (
               <Text
                 key={`note-${index}`}

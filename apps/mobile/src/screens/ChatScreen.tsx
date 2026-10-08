@@ -1,9 +1,7 @@
-import * as Clipboard from 'expo-clipboard';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, {
   useCallback,
-  useEffect,
   useMemo,
   useReducer,
   useRef,
@@ -11,6 +9,7 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -28,11 +27,14 @@ import {
   reducer,
   initialState,
   selectChatItems,
+  restoreHistory,
   type ChatItem,
 } from '../chat/state';
 import { UserMessage } from '../components/MessageBubble';
 import AssistantTurn from '../components/AssistantTurn';
 import TaskProgress from '../components/TaskProgress';
+import AttachmentComposer from '../components/AttachmentComposer';
+import { useAttachments } from '../attachments/useAttachments';
 import type {
   ApprovalRequest,
   QuestionRequest,
@@ -46,6 +48,11 @@ export default function ChatScreen({ route }: Props) {
   const navigation = useNavigation();
   const [state, dispatch] = useReducer(reducer, initialState);
   const [draft, setDraft] = useState('');
+  const attachments = useAttachments();
+  const [picking, setPicking] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState(route.params.title);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [sending, setSending] = useState(false);
   const streamRef = useRef<RunStreamHandle | null>(null);
   const listRef = useRef<FlatList<ChatItem> | null>(null);
@@ -68,101 +75,139 @@ export default function ChatScreen({ route }: Props) {
   const runInProgress = active !== null && !active.finished;
 
   // 建立/复用事件流订阅：发送新 run 或恢复活跃 run 都走这里。
-  const subscribe = useCallback((runId: string) => {
+  const subscribe = useCallback((runId: string, cursor = 0) => {
     streamRef.current?.close();
     const token = api.bearerToken;
     if (!token) return;
-    streamRef.current = subscribeRunStream(api.baseUrl, token, runId, {
-      onEvent: (event) => dispatch({ type: 'event', event }),
-      onFinished: () => dispatch({ type: 'finished', runId }),
-      onReconnecting: (attempt) =>
-        dispatch({ type: 'reconnecting', runId, attempt }),
-      onResumed: () => dispatch({ type: 'resumed', runId }),
-      onError: (message) =>
-        dispatch({
-          type: 'send-failed',
-          runId,
-          message,
-          connectionError: true,
-        }),
-    });
-  }, []);
-
-  // 加载历史；若最新 run 未结束则直接续订事件流（服务端按 seq 重放）。
-  useEffect(() => {
-    let cancelled = false;
-    streamRef.current?.close();
-    dispatch({ type: 'reset' });
-    setDraft('');
-    stickToBottom.current = true;
-    (async () => {
-      try {
-        const history = await api.history(sessionId);
-        if (cancelled) return;
-        const latest = history.latestRun;
-        const activeRunId =
-          latest &&
-          [
-            'queued',
-            'running',
-            'waiting_approval',
-            'waiting_question',
-          ].includes(latest.status)
-            ? latest.id
-            : null;
-        // 活跃 run 的 assistant 半成品正文不进历史列表，由事件重放重建，避免重复。
-        const items: ChatItem[] = history.messages
-          .filter(
-            (message) =>
-              !(
-                activeRunId &&
-                message.runId === activeRunId &&
-                message.role === 'assistant'
-              ),
-          )
-          .map((message) => ({
-            id: message.id,
-            role: message.role,
-            text: message.text,
-            reasoning: message.reasoning,
-          }));
-        dispatch({ type: 'history', items, activeRunId });
-        if (activeRunId) subscribe(activeRunId);
-      } catch (err) {
-        if (!cancelled) {
+    streamRef.current = subscribeRunStream(
+      api.baseUrl,
+      token,
+      runId,
+      {
+        onEvent: (event) => dispatch({ type: 'event', event }),
+        onFinished: () => dispatch({ type: 'finished', runId }),
+        onReconnecting: (attempt) =>
+          dispatch({ type: 'reconnecting', runId, attempt }),
+        onResumed: () => dispatch({ type: 'resumed', runId }),
+        onError: (message) =>
           dispatch({
             type: 'send-failed',
-            message: `加载历史失败：${err instanceof Error ? err.message : '未知错误'}`,
-          });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      streamRef.current?.close();
-      streamRef.current = null;
-    };
-  }, [sessionId, subscribe]);
+            runId,
+            message,
+            connectionError: true,
+          }),
+      },
+      cursor,
+    );
+  }, []);
 
-  // 会话标题跟随最新内容更新（无侵入：仅显示）。
-  useEffect(() => {
-    if (state.items.length > 0) {
-      const last = state.items[state.items.length - 1];
-      if (last.role === 'user') {
-        navigation.setOptions({ title: last.text.slice(0, 24) });
-      }
+  // The server owns execution. Losing focus/backgrounding only disconnects SSE.
+  useFocusEffect(
+    useCallback(() => {
+      let disposed = false;
+      let generation = 0;
+      dispatch({ type: 'reset' });
+      stickToBottom.current = true;
+      const load = async () => {
+        const request = ++generation;
+        streamRef.current?.close();
+        try {
+          const history = await api.history(sessionId);
+          if (disposed || request !== generation) return;
+          const restored = restoreHistory(history);
+          dispatch({
+            type: 'history',
+            items: [],
+            activeRunId: null,
+            snapshot: history,
+          });
+          setSessionTitle(history.session.title);
+          navigation.setOptions({ title: history.session.title });
+          void api
+            .rememberChat(sessionId, history.session.title)
+            .catch(() => {});
+          if (restored.active && !restored.active.finished)
+            subscribe(restored.active.runId, restored.active.lastSeq);
+        } catch (err) {
+          if (!disposed && request === generation) {
+            dispatch({
+              type: 'send-failed',
+              message: `恢复会话失败：${err instanceof Error ? err.message : '未知错误'}`,
+              connectionError:
+                !!stateRef.current.active && !stateRef.current.active.finished,
+            });
+          }
+        }
+      };
+      void load();
+      const listener = AppState.addEventListener('change', (status) => {
+        if (status === 'active') void load();
+        else {
+          generation++;
+          streamRef.current?.close();
+        }
+      });
+      return () => {
+        disposed = true;
+        generation++;
+        listener.remove();
+        streamRef.current?.close();
+        streamRef.current = null;
+      };
+    }, [sessionId, subscribe, navigation]),
+  );
+
+  const pickAttachment = async () => {
+    if (picking || runInProgress || sending) return;
+    setPicking(true);
+    try {
+      await attachments.pick();
+    } catch (error) {
+      dispatch({
+        type: 'send-failed',
+        message: error instanceof Error ? error.message : '附件选择失败',
+      });
+    } finally {
+      setPicking(false);
     }
-  }, [state.items, navigation]);
+  };
 
   const send = async () => {
-    const message = draft.trim();
-    if (!message || runInProgress || sending) return;
+    const selected = attachments.files
+      .map((file) => file.attachment!)
+      .filter(Boolean);
+    const message =
+      draft.trim() ||
+      (selected.length ? '（用户发送了附件，请结合附件内容完成任务）' : '');
+    if (
+      !message ||
+      runInProgress ||
+      sending ||
+      (attachments.files.length > 0 && !attachments.ready)
+    )
+      return;
     stickToBottom.current = true;
     setSending(true);
     setDraft('');
     try {
-      const run = await api.createRun(sessionId, message);
-      dispatch({ type: 'run-started', runId: run.id, userText: message });
+      const run = await api.createRun(
+        sessionId,
+        message,
+        selected.map((file) => file.id),
+      );
+      dispatch({
+        type: 'run-started',
+        runId: run.id,
+        userText: message,
+        attachments: selected,
+      });
+      attachments.consume();
+      if (sessionTitle === '新会话') {
+        const title = message.split('\n')[0].slice(0, 120);
+        setSessionTitle(title);
+        navigation.setOptions({ title });
+        void api.rememberChat(sessionId, title).catch(() => {});
+      }
       subscribe(run.id);
     } catch (err) {
       const code = err instanceof Error ? err.message : '';
@@ -234,15 +279,16 @@ export default function ChatScreen({ route }: Props) {
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<ChatItem>) =>
       item.role === 'user' ? (
-        <UserMessage text={item.text} />
+        <UserMessage text={item.text} attachments={item.attachments} />
       ) : (
         <AssistantTurn
           item={item}
+          sessionId={sessionId}
           onApproval={respondApproval}
           onQuestion={respondQuestion}
         />
       ),
-    [respondApproval, respondQuestion],
+    [respondApproval, respondQuestion, sessionId],
   );
 
   return (
@@ -325,13 +371,20 @@ export default function ChatScreen({ route }: Props) {
           accessibilityRole="button"
           onPress={() => {
             dispatch({ type: 'reconnecting', runId: active.runId, attempt: 1 });
-            subscribe(active.runId);
+            subscribe(active.runId, active.lastSeq);
           }}
           style={{ minHeight: 44, padding: spacing.md }}
         >
           <Text style={{ color: colors.accent }}>重新连接</Text>
         </Pressable>
       ) : null}
+      <AttachmentComposer
+        files={attachments.files}
+        onRemove={attachments.remove}
+        onRetry={(file) => {
+          void attachments.retry(file);
+        }}
+      />
       <TaskProgress todos={active?.todos ?? []} />
 
       <View
@@ -356,37 +409,20 @@ export default function ChatScreen({ route }: Props) {
         />
         {!runInProgress ? (
           <Pressable
-            onPress={async () => {
-              try {
-                const res = await fetch(`${api.baseUrl}/api/clipboard`, {
-                  headers: { Authorization: `Bearer ${api.bearerToken}` },
-                });
-                const data = await res.json();
-                if (data.text) setDraft(data.text);
-              } catch {
-                // fallback: expo-clipboard
-                const text = await Clipboard.getStringAsync();
-                if (text) setDraft(text);
-              }
-            }}
+            accessibilityRole="button"
+            accessibilityLabel="上传附件"
+            disabled={picking || sending || attachments.files.length >= 5}
+            onPress={() => void pickAttachment()}
             style={{
+              minHeight: 44,
               paddingHorizontal: spacing.md,
               paddingVertical: 12,
               borderRadius: 10,
               borderWidth: 1,
               borderColor: colors.border,
-              backgroundColor: colors.background,
             }}
           >
-            <Text
-              style={{
-                color: colors.textSecondary,
-                fontSize: 13,
-                fontWeight: '600',
-              }}
-            >
-              粘贴
-            </Text>
+            <Text style={{ color: colors.accent, fontSize: 16 }}>📎</Text>
           </Pressable>
         ) : null}
         {runInProgress ? (
@@ -407,14 +443,19 @@ export default function ChatScreen({ route }: Props) {
         ) : (
           <Pressable
             onPress={() => void send()}
-            disabled={!draft.trim() || sending}
+            disabled={
+              (!draft.trim() && !attachments.ready) ||
+              sending ||
+              (attachments.files.length > 0 && !attachments.ready)
+            }
             style={({ pressed }) => ({
               paddingHorizontal: spacing.lg,
               paddingVertical: 12,
               borderRadius: 10,
-              backgroundColor: draft.trim()
-                ? colors.accent
-                : colors.surfaceElevated,
+              backgroundColor:
+                draft.trim() || attachments.ready
+                  ? colors.accent
+                  : colors.surfaceElevated,
               opacity: pressed ? 0.8 : 1,
             })}
           >
@@ -423,7 +464,10 @@ export default function ChatScreen({ route }: Props) {
             ) : (
               <Text
                 style={{
-                  color: draft.trim() ? '#ffffff' : colors.textMuted,
+                  color:
+                    draft.trim() || attachments.ready
+                      ? '#ffffff'
+                      : colors.textMuted,
                   fontWeight: '600',
                 }}
               >

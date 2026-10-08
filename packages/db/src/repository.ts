@@ -771,6 +771,18 @@ export class AgentRepository {
     return result.rows[0] ? sessionOf(result.rows[0]) : null;
   }
 
+  async setInitialSessionTitle(context: AuthContext, sessionId: string, title: string): Promise<SessionRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE agent_sessions AS s SET title = $4
+       FROM workspaces w
+       WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.id = $3
+         AND s.deleted_at IS NULL AND s.title = '新会话' AND w.id = s.workspace_id
+       RETURNING s.*, w.path AS workspace_path`,
+      [context.tenantId, context.userId, sessionId, title],
+    );
+    return result.rows[0] ? sessionOf(result.rows[0]) : null;
+  }
+
   async renameSession(
     context: AuthContext,
     sessionId: string,
@@ -899,9 +911,15 @@ export class AgentRepository {
           input.idempotencyKey ?? null,
         ],
       );
-      await client.query('UPDATE agent_sessions SET updated_at = now() WHERE id = $1', [
-        input.sessionId,
-      ]);
+      // Keep the title and first run in the same transaction; custom titles are preserved.
+      const firstTitle = input.continuation ? null : input.message.trim().split('\n')[0]?.slice(0, 120);
+      await client.query(
+        `UPDATE agent_sessions
+         SET updated_at = now(), title = CASE WHEN title = '新会话' AND $2::text IS NOT NULL
+           THEN $2 ELSE title END
+         WHERE id = $1`,
+        [input.sessionId, firstTitle || null],
+      );
       if (input.attachments && input.attachments.length > 0) {
         // 原子关联：只有「本人、本租户、已上传就绪、尚未关联其他 run」的附件才能被占用，
         // 行数不匹配说明附件不存在/未就绪/被复用，直接让整个创建事务失败。
@@ -1076,10 +1094,10 @@ export class AgentRepository {
       : null;
   }
 
-  /** 通过 external_key 获取对应的 workspace_id（用于公开预览路由）。 */
+  /** 通过 external_key 或内部会话 ID 获取 workspace_id（用于公开预览路由）。 */
   async getWorkspaceIdByExternalKey(externalKey: string): Promise<string | null> {
     const result = await this.pool.query(
-      `SELECT w.id AS workspace_id FROM agent_sessions s JOIN workspaces w ON w.id = s.workspace_id WHERE s.external_key = $1`,
+      `SELECT w.id AS workspace_id FROM agent_sessions s JOIN workspaces w ON w.id = s.workspace_id WHERE (s.external_key = $1 OR s.id::text = $1) AND s.deleted_at IS NULL`,
       [externalKey]
     );
     const row = result.rows[0];

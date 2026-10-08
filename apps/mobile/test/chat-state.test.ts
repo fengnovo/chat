@@ -172,3 +172,116 @@ test('a new question supersedes approval and terminal replay never reopens a fin
     1,
   );
 });
+
+test('reopening a completed run restores one answer, task progress and tool results', () => {
+  const snapshot = {
+    session: { id: 's', title: '首条消息' },
+    messages: [
+      { id: 'user-r1', runId: 'r1', role: 'user', text: '首条消息' },
+      { id: 'message-r1', runId: 'r1', role: 'assistant', text: '完成' },
+    ],
+    latestRun: { id: 'r1', status: 'completed' },
+    latestRunEvents: [
+      {
+        runId: 'r1',
+        seq: 1,
+        type: 'todo.updated',
+        todos: [{ content: '测试', status: 'completed' }],
+      },
+      {
+        runId: 'r1',
+        seq: 2,
+        type: 'tool.completed',
+        invocationId: 't',
+        tool: 'read_file',
+        output: '内容',
+      },
+      { runId: 'r1', seq: 3, type: 'assistant.snapshot', text: '完成' },
+      { runId: 'r1', seq: 4, type: 'run.completed' },
+    ],
+  };
+  const state = reducer(initialState, {
+    type: 'history',
+    items: [],
+    activeRunId: null,
+    snapshot,
+  } as any);
+  assert.equal(state.active?.finished, true);
+  assert.equal(state.active?.todos[0]?.status, 'completed');
+  assert.equal(state.active?.activities.length, 1);
+  assert.equal(
+    selectChatItems(state).filter((item) => item.text === '完成').length,
+    1,
+  );
+});
+
+test('foreground recovery rebuilds an unanswered question and resumes at its persisted cursor', () => {
+  const state = reducer(initialState, {
+    type: 'history',
+    items: [],
+    activeRunId: 'r1',
+    snapshot: {
+      session: { id: 's', title: '问题' },
+      messages: [],
+      latestRun: { id: 'r1', status: 'waiting_question' },
+      latestRunEvents: [
+        {
+          runId: 'r1',
+          seq: 7,
+          type: 'question.required',
+          interruptId: 'q',
+          question: {
+            question: '请选择',
+            options: [{ label: 'A' }],
+            multiple: true,
+            allowCustom: true,
+          },
+        },
+      ],
+    },
+  } as any);
+  assert.equal(state.active?.question?.interruptId, 'q');
+  assert.equal(state.active?.lastSeq, 7);
+  assert.equal(state.active?.finished, false);
+});
+
+test('foreground recovery does not reopen an already answered interrupt', () => {
+  const state = reducer(initialState, {
+    type: 'history',
+    items: [],
+    activeRunId: 'r1',
+    snapshot: {
+      session: { id: 's', title: '问题' },
+      messages: [],
+      latestRun: { id: 'r1', status: 'running' },
+      latestRunEvents: [
+        {
+          runId: 'r1',
+          seq: 7,
+          type: 'question.required',
+          interruptId: 'q',
+          question: {
+            question: '请选择',
+            options: [],
+            multiple: false,
+            allowCustom: true,
+          },
+        },
+      ],
+    },
+  } as any);
+  assert.equal(state.active?.question, null);
+  assert.equal(state.active?.finished, false);
+});
+
+test('a delayed create response after foreground recovery never duplicates or resets the recovered turn', () => {
+  let state = event(start(), 'assistant.delta', 1, { text: '后台结果' });
+  const before = state;
+  state = reducer(state, {
+    type: 'run-started',
+    runId: 'r1',
+    userText: '你好',
+  });
+  assert.equal(state, before);
+  assert.equal(state.active?.assistantText, '后台结果');
+});
