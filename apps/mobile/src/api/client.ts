@@ -158,14 +158,14 @@ export class ApiClient {
     });
   }
 
-  respondApproval(runId: string, interruptId: string, approve: boolean) {
+  respondApproval(runId: string, interruptId: string, approve: boolean, scope: 'once' | 'session' = 'once') {
     return this.request<{ status: string }>(
       `/api/agent/runs/${runId}/approvals/${interruptId}`,
       {
         method: 'POST',
         body: {
           decision: approve ? 'approve' : 'reject',
-          scope: 'once',
+          scope: approve ? scope : 'once',
         },
       },
     );

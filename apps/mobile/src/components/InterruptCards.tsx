@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { colors, inputStyle, spacing } from '../theme';
 
@@ -15,13 +21,23 @@ export function ApprovalCard({
   onRespond,
 }: {
   request: ApprovalRequest;
-  onRespond: (approve: boolean) => Promise<void>;
+  onRespond: (approve: boolean, scope: 'once' | 'session') => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
-  const respond = async (approve: boolean) => {
+  const [error, setError] = useState<string | null>(null);
+  const respond = async (
+    approve: boolean,
+    scope: 'once' | 'session' = 'once',
+  ) => {
+    if (busy) return;
     setBusy(true);
+    setError(null);
     try {
-      await onRespond(approve);
+      await onRespond(approve, scope);
+    } catch (err) {
+      setError(
+        `审批提交失败：${err instanceof Error ? err.message : '请重试'}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -42,43 +58,70 @@ export function ApprovalCard({
       <Text style={{ color: colors.warning, fontSize: 14, fontWeight: '700' }}>
         需要人工审批
       </Text>
-      {request.actions.map((action) => (
-        <View key={`${action.name}-${action.summary.slice(0, 16)}`}>
-          <Text style={{ color: colors.textPrimary, fontSize: 13, fontFamily: 'monospace' }}>
+      {request.actions.map((action, index) => (
+        <View key={`${index}-${action.name}`}>
+          <Text
+            style={{
+              color: colors.textPrimary,
+              fontSize: 13,
+              fontFamily: 'monospace',
+            }}
+          >
             {action.name}
           </Text>
-          <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{action.summary}</Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+            {action.summary}
+          </Text>
         </View>
       ))}
+      {error ? (
+        <Text accessibilityLiveRegion="polite" style={{ color: colors.danger }}>
+          {error}
+        </Text>
+      ) : null}
       {busy ? (
         <ActivityIndicator color={colors.accent} />
       ) : (
-        <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs }}>
-          <Pressable
-            onPress={() => void respond(false)}
-            style={{
-              flex: 1,
-              paddingVertical: 10,
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor: colors.danger,
-              alignItems: 'center',
-            }}
-          >
-            <Text style={{ color: colors.danger, fontWeight: '600' }}>拒绝</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => void respond(true)}
-            style={{
-              flex: 1,
-              paddingVertical: 10,
-              borderRadius: 8,
-              backgroundColor: colors.success,
-              alignItems: 'center',
-            }}
-          >
-            <Text style={{ color: '#ffffff', fontWeight: '600' }}>允许</Text>
-          </Pressable>
+        <View
+          style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}
+        >
+          {[
+            { label: '拒绝', approve: false, scope: 'once' as const },
+            { label: '仅批准这一次', approve: true, scope: 'once' as const },
+            { label: '本会话都允许', approve: true, scope: 'session' as const },
+          ].map((option) => (
+            <Pressable
+              key={option.label}
+              accessibilityRole="button"
+              onPress={() => void respond(option.approve, option.scope)}
+              style={({ pressed }) => ({
+                minHeight: 44,
+                paddingHorizontal: spacing.md,
+                paddingVertical: 12,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: option.approve ? colors.accent : colors.danger,
+                backgroundColor:
+                  option.approve && option.scope === 'once'
+                    ? colors.accent
+                    : 'transparent',
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Text
+                style={{
+                  color: !option.approve
+                    ? colors.danger
+                    : option.scope === 'once'
+                      ? '#ffffff'
+                      : colors.accent,
+                  fontWeight: '600',
+                }}
+              >
+                {option.label}
+              </Text>
+            </Pressable>
+          ))}
         </View>
       )}
     </View>
@@ -108,6 +151,7 @@ export function QuestionCard({
   const [selected, setSelected] = useState<number[]>([]);
   const [customText, setCustomText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const toggle = (index: number) => {
     setSelected((prev) =>
@@ -127,10 +171,15 @@ export function QuestionCard({
       label: request.options[index].label,
     }));
     const custom = customText.trim();
-    if (selections.length === 0 && !custom) return;
+    if (busy || (selections.length === 0 && !custom)) return;
     setBusy(true);
+    setError(null);
     try {
       await onRespond(selections, custom || undefined);
+    } catch (err) {
+      setError(
+        `回答提交失败：${err instanceof Error ? err.message : '请重试'}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -150,31 +199,56 @@ export function QuestionCard({
       }}
     >
       <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '700' }}>
-        Agent 提问
+        需要你选择{request.multiple ? '（可多选）' : '（单选）'}
       </Text>
-      <Text style={{ color: colors.textPrimary, fontSize: 14 }}>{request.question}</Text>
+      <Text style={{ color: colors.textPrimary, fontSize: 14 }}>
+        {request.question}
+      </Text>
       <View style={{ gap: spacing.sm }}>
         {request.options.map((option, index) => {
           const active = selected.includes(index);
           return (
             <Pressable
               key={`${index}-${option.label}`}
+              accessibilityRole={request.multiple ? 'checkbox' : 'radio'}
+              accessibilityState={{ checked: active, disabled: busy }}
+              disabled={busy}
               onPress={() => toggle(index)}
               style={{
+                minHeight: 44,
                 borderWidth: 1,
                 borderColor: active ? colors.accent : colors.border,
-                backgroundColor: active ? colors.surfaceElevated : 'transparent',
+                backgroundColor: active
+                  ? colors.surfaceElevated
+                  : 'transparent',
                 borderRadius: 8,
                 paddingHorizontal: spacing.md,
                 paddingVertical: spacing.sm,
               }}
             >
-              <Text style={{ color: active ? colors.accent : colors.textPrimary, fontSize: 14 }}>
-                {request.multiple ? (active ? '☑ ' : '☐ ') : active ? '◉ ' : '○ '}
+              <Text
+                style={{
+                  color: active ? colors.accent : colors.textPrimary,
+                  fontSize: 14,
+                }}
+              >
+                {request.multiple
+                  ? active
+                    ? '☑ '
+                    : '☐ '
+                  : active
+                    ? '◉ '
+                    : '○ '}
                 {option.label}
               </Text>
               {option.description ? (
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
+                <Text
+                  style={{
+                    color: colors.textMuted,
+                    fontSize: 12,
+                    marginTop: 2,
+                  }}
+                >
                   {option.description}
                 </Text>
               ) : null}
@@ -185,6 +259,7 @@ export function QuestionCard({
       {request.allowCustom ? (
         <TextInput
           style={inputStyle}
+          editable={!busy}
           value={customText}
           onChangeText={setCustomText}
           placeholder="补充说明（可选）"
@@ -192,15 +267,29 @@ export function QuestionCard({
           multiline
         />
       ) : null}
+      {error ? (
+        <Text accessibilityLiveRegion="polite" style={{ color: colors.danger }}>
+          {error}
+        </Text>
+      ) : null}
       {busy ? (
         <ActivityIndicator color={colors.accent} />
       ) : (
         <Pressable
+          accessibilityRole="button"
+          disabled={selected.length === 0 && !customText.trim()}
+          accessibilityState={{
+            disabled: selected.length === 0 && !customText.trim(),
+          }}
           onPress={() => void submit()}
           style={{
             paddingVertical: 10,
             borderRadius: 8,
-            backgroundColor: colors.accent,
+            minHeight: 44,
+            backgroundColor:
+              selected.length || customText.trim()
+                ? colors.accent
+                : colors.surfaceElevated,
             alignItems: 'center',
             marginTop: spacing.xs,
           }}

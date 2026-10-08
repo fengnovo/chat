@@ -1,18 +1,27 @@
 import React from 'react';
 import Markdown from 'react-native-markdown-display';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { colors, markdownStyles, spacing } from '../theme';
 
-export function UserMessage({ text }: { text: string }) {
+export const UserMessage = React.memo(function UserMessage({
+  text,
+}: {
+  text: string;
+}) {
   return (
     <View style={styles.row}>
       <View style={styles.userBubble}>
-        <Markdown style={markdownStyles}>{text}</Markdown>
+        <Text
+          selectable
+          style={{ color: colors.textPrimary, fontSize: 15, lineHeight: 23 }}
+        >
+          {text}
+        </Text>
       </View>
     </View>
   );
-}
+});
 
 export function AssistantMessage({
   text,
@@ -54,7 +63,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderTopLeftRadius: 4,
     padding: spacing.md,
-    maxWidth: '90%',
+    width: '100%',
     borderWidth: 1,
     borderColor: colors.border,
   },

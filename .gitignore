@@ -19,6 +19,8 @@ sessions/
 skills/
 test/
 apps/worker/data/
+!apps/mobile/test/
+!apps/mobile/test/**
 !apps/web/test/
 !apps/web/test/**
 !apps/desktop/test/

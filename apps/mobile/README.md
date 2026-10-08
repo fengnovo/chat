@@ -6,8 +6,8 @@ Keen AI 平台的 iOS / Android 原生客户端，直接对接 Fastify Agent API
 - **会话列表**：keyset 游标分页、下拉刷新、新建 / 重命名 / 删除。
 - **聊天**：`POST /sessions/:id/runs` 发起运行，订阅原生事件流 `GET /runs/:runId/events`（SSE）实时渲染。
 - **可恢复流**：SSE 断线后带 `Last-Event-ID` 自动重连，服务端从 PostgreSQL 按 seq 重放，不重跑 Agent。App 退后台再回来也能自动续传。
-- **过程可见**：工具调用 / 模型重试 / 降级 / 上下文压缩在折叠面板展示；`assistant.reasoning` 思考过程单独折叠；`todo.updated` 渲染任务清单。
-- **人机交互**：`approval.required` 审批卡（允许 / 拒绝）、`question.required` 提问卡（单选 / 多选 / 自定义补充）、运行取消。
+- **过程可见**：每轮回答只展示一次，思考 / 工具过程跟随该轮保留。工具参数、返回结果、失败状态可展开查看；工具调用 / 模型重试 / 降级 / 上下文压缩在折叠面板展示；`assistant.reasoning` 思考过程单独折叠；`todo.updated` 在输入框上方显示可折叠任务清单、完成数和当前步骤。
+- **人机交互**：`approval.required` 审批卡（拒绝 / 仅批准这一次 / 本会话都允许）、`question.required` 提问卡（单选 / 多选 / 自定义补充）、运行取消。
 - **契约复用**：`import type { AgentEvent } from '@repo/contracts'`，事件类型与后端 Zod schema 单一来源对齐（类型导入，零运行时开销）。
 
 ## 运行
@@ -43,6 +43,7 @@ apps/mobile/
     │   ├── client.ts       HTTP 客户端（Bearer 鉴权、SecureStore 持久化）
     │   ├── sse.ts          可恢复 SSE 流（expo/fetch + Last-Event-ID 重连）
     │   └── types.ts        复用 @repo/contracts 的事件类型
+    ├── chat/               消息状态、事件去重、工具过程数据
     ├── store/auth.tsx      登录态（冷启动恢复 + /auth/me 校验）
     ├── screens/            Login / Sessions / Chat
     └── components/         消息气泡、思考过程、过程面板、审批/提问卡
@@ -51,4 +52,14 @@ apps/mobile/
 ## 已知边界
 
 - 推送通知未接入（App 在后台时 SSE 挂起，回到前台自动续传）；生产化需要 FCM / APNs 集成。
-- 附件上传、知识库管理、审批 `scope: session` 等能力暂未覆盖，走 Web 端。
+- 附件上传、知识库管理等能力暂未覆盖，走 Web 端。
+
+## 验证
+
+```bash
+pnpm --filter mobile test
+pnpm mobile:typecheck
+```
+
+回归测试覆盖单次回答渲染、SSE 重放/重连续传、旧订阅隔离、终态处理、审批范围和多选请求。
+历史接口目前只返回正文和思考过程；退出页面后重新打开，已结束任务的工具详情和任务清单不会从历史恢复。

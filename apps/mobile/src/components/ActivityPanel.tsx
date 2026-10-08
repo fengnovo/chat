@@ -1,42 +1,82 @@
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-
+import { formatDetail, type ActivityItem } from '../chat/activity';
 import { colors, spacing } from '../theme';
 
-export type ActivityItem =
-  | { kind: 'tool'; invocationId: string; tool: string; summary: string; running: boolean }
-  | { kind: 'note'; summary: string };
-
-function summarizeToolInput(tool: string, input: unknown): string {
-  if (!input || typeof input !== 'object') return tool;
-  const record = input as Record<string, unknown>;
-  const hint =
-    record.file_path ?? record.path ?? record.command ?? record.pattern ?? record.query ?? '';
-  return hint ? `${tool} · ${String(hint).slice(0, 80)}` : tool;
+function ToolRow({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const status = item.running ? '执行中' : item.failed ? '失败' : '完成';
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={() => setExpanded((value) => !value)}
+        style={{ minHeight: 44, justifyContent: 'center' }}
+      >
+        <Text
+          style={{
+            color: item.failed
+              ? colors.danger
+              : item.running
+                ? colors.warning
+                : colors.textSecondary,
+            fontSize: 13,
+          }}
+        >
+          {item.running ? '▶' : item.failed ? '✕' : '✓'} {item.summary} ·{' '}
+          {status} {expanded ? '▲' : '▼'}
+        </Text>
+      </Pressable>
+      {expanded ? (
+        <View style={{ gap: spacing.xs, paddingBottom: spacing.sm }}>
+          {item.input !== undefined ? (
+            <>
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                请求参数
+              </Text>
+              <Text
+                selectable
+                style={{
+                  color: colors.textSecondary,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                }}
+              >
+                {formatDetail(item.input)}
+              </Text>
+            </>
+          ) : null}
+          {item.output !== undefined ? (
+            <>
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                返回结果
+              </Text>
+              <Text
+                selectable
+                style={{
+                  color: item.failed ? colors.danger : colors.textSecondary,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                }}
+              >
+                {formatDetail(item.output)}
+              </Text>
+            </>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
-export function toolStartedItem(
-  invocationId: string,
-  tool: string,
-  input: unknown,
-): ActivityItem {
-  return {
-    kind: 'tool',
-    invocationId,
-    tool,
-    summary: summarizeToolInput(tool, input),
-    running: true,
-  };
-}
-
-/** 工具调用与过程旁白的可折叠面板：执行过程不混入最终答复正文。 */
+/** Execution details belong to their assistant turn, including after completion. */
 export default function ActivityPanel({ items }: { items: ActivityItem[] }) {
   const [expanded, setExpanded] = useState(false);
-  if (items.length === 0) return null;
-  const runningCount = items.filter(
+  if (!items.length) return null;
+  const running = items.filter(
     (item) => item.kind === 'tool' && item.running,
   ).length;
-  const title = runningCount > 0 ? `执行中（${runningCount} 个工具）` : `过程（${items.length} 条）`;
   return (
     <View
       style={{
@@ -50,36 +90,47 @@ export default function ActivityPanel({ items }: { items: ActivityItem[] }) {
       }}
     >
       <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
         onPress={() => setExpanded((value) => !value)}
         style={{
+          minHeight: 44,
           flexDirection: 'row',
           justifyContent: 'space-between',
           alignItems: 'center',
           paddingHorizontal: spacing.md,
-          paddingVertical: spacing.sm,
         }}
       >
-        <Text style={{ color: colors.textSecondary, fontSize: 13 }}>{title}</Text>
+        <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
+          {running
+            ? `正在执行 · ${running} 个工具`
+            : `执行过程 · ${items.length} 条`}
+        </Text>
         <Text style={{ color: colors.textMuted, fontSize: 12 }}>
           {expanded ? '收起 ▲' : '展开 ▼'}
         </Text>
       </Pressable>
       {expanded ? (
-        <View style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: spacing.xs }}>
-          {items.map((item, index) => (
-            <Text
-              key={item.kind === 'tool' ? item.invocationId : `note-${index}`}
-              style={{
-                color: item.kind === 'tool' && item.running ? colors.warning : colors.textMuted,
-                fontSize: 12,
-                fontFamily: 'monospace',
-              }}
-            >
-              {item.kind === 'tool'
-                ? `${item.running ? '▶' : '✓'} ${item.summary}`
-                : `· ${item.summary}`}
-            </Text>
-          ))}
+        <View
+          style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.sm }}
+        >
+          {items.map((item, index) =>
+            item.kind === 'tool' ? (
+              <ToolRow key={item.invocationId} item={item} />
+            ) : (
+              <Text
+                key={`note-${index}`}
+                selectable
+                style={{
+                  color: colors.textSecondary,
+                  fontSize: 13,
+                  paddingVertical: spacing.xs,
+                }}
+              >
+                · {item.summary}
+              </Text>
+            ),
+          )}
         </View>
       ) : null}
     </View>

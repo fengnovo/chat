@@ -26,8 +26,11 @@ export default function ReasoningBlock({
       }}
     >
       <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
         onPress={() => setExpanded((value) => !value)}
         style={{
+          minHeight: 44,
           flexDirection: 'row',
           justifyContent: 'space-between',
           alignItems: 'center',
@@ -44,6 +47,7 @@ export default function ReasoningBlock({
       </Pressable>
       {expanded ? (
         <Text
+          selectable
           style={{
             paddingHorizontal: spacing.md,
             paddingBottom: spacing.md,

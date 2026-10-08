@@ -7,7 +7,8 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@react-navigation/native": "^7.1.14",
@@ -24,7 +25,9 @@
     "react-native-screens": "~4.16.0"
   },
   "devDependencies": {
+    "@types/node": "^26.5.1",
     "@types/react": "~19.1.10",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.2"
   }
 }
