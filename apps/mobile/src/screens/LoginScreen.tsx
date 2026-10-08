@@ -13,9 +13,13 @@ import {
 import { useAuth } from '../store/auth';
 import { colors, inputStyle, primaryButton, primaryButtonText, spacing } from '../theme';
 
+const defaultServerUrl = __DEV__
+  ? (Platform.OS === 'android' ? 'http://10.0.2.2:8002' : 'http://127.0.0.1:8002')
+  : 'https://chat.keen-tech.top';
+
 export default function LoginScreen() {
   const { login } = useAuth();
-  const [serverUrl, setServerUrl] = useState('');
+  const [serverUrl, setServerUrl] = useState(defaultServerUrl);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -61,7 +65,7 @@ export default function LoginScreen() {
               Keen Chat
             </Text>
             <Text style={{ color: colors.textSecondary, marginTop: spacing.xs }}>
-              Coding Agent 移动客户端
+              {__DEV__ ? 'Debug · 本地开发' : 'Release · 线上服务'}
             </Text>
           </View>
 
@@ -70,15 +74,16 @@ export default function LoginScreen() {
             style={inputStyle}
             value={serverUrl}
             onChangeText={setServerUrl}
-            placeholder="http://10.0.2.2:8002"
+            placeholder={defaultServerUrl}
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
           />
           <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-            指向 Agent API（本仓库 .env 中 PORT，默认开发端口 8002）。模拟器访问本机可填
-            http://127.0.0.1:8002（iOS）或 http://10.0.2.2:8002（Android）；真机请填电脑局域网 IP。
+            {__DEV__
+              ? '默认连接本机 API，需启动 API、Worker 和 Metro。真机调试请改为电脑局域网 IP。'
+              : '默认连接线上服务，使用线上账号登录，无需 Metro。'}
           </Text>
 
           <Text style={{ color: colors.textSecondary, fontSize: 13 }}>用户名</Text>

@@ -23,6 +23,7 @@
     "mobile:run": "node scripts/run-mobile.mjs",
     "mobile:run:android": "node scripts/run-mobile.mjs android",
     "mobile:run:ios": "node scripts/run-mobile.mjs ios",
+    "mobile:build:android": "node scripts/build-mobile-android.mjs",
     "mobile:ios": "pnpm --filter mobile ios",
     "mobile:android": "pnpm --filter mobile android",
     "mobile:typecheck": "pnpm --filter mobile typecheck",

@@ -14,9 +14,13 @@ export class ApiError extends Error {
   }
 }
 
-const TOKEN_STORAGE_KEY = 'keenai.token';
-const SERVER_STORAGE_KEY = 'keenai.server';
-const CHAT_STORAGE_KEY = 'keenai.lastChat';
+// Debug and Release must not restore each other's server, credentials or chat.
+const storagePrefix = typeof __DEV__ !== 'undefined' && __DEV__
+  ? 'keenai.debug'
+  : 'keenai.release';
+const TOKEN_STORAGE_KEY = `${storagePrefix}.token`;
+const SERVER_STORAGE_KEY = `${storagePrefix}.server`;
+const CHAT_STORAGE_KEY = `${storagePrefix}.lastChat`;
 
 /**
  * 面向 Fastify Agent API 的移动端客户端。

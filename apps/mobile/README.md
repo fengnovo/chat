@@ -14,6 +14,14 @@ Keen AI 平台的 iOS / Android 原生客户端，直接对接 Fastify Agent API
 
 ## 运行
 
+| 构建环境 | 默认服务器 | Metro（8081） | 用途 |
+| --- | --- | --- | --- |
+| Debug Android | `http://10.0.2.2:8002` | 需要 | 模拟器开发、Fast Refresh |
+| Debug iOS | `http://127.0.0.1:8002` | 需要 | 模拟器开发、Fast Refresh |
+| Release | `https://chat.keen-tech.top` | 不需要 | 手机安装、连接线上服务 |
+
+由 React Native 的 `__DEV__` 自动识别构建类型，登录页显示环境名称。两个环境分别保存服务器地址、登录凭据和上次会话，避免混用本地与线上账号；改为隔离存储后首次启动需要重新登录。仍使用相同应用标识，Debug 与 Release 会覆盖安装。
+
 ```bash
 pnpm install
 pnpm mobile:run all       # 重建、安装并启动 Android + iOS 模拟器
@@ -35,6 +43,16 @@ pnpm mobile:run --help
 
 日志及 iOS 构建产物位于 `node_modules/.cache/mobile/`；Android APK 位于 `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`。这些是供模拟器开发验证的 Debug 构建，需要 Metro；商店发布包需另外配置 Release 签名和构建。新增原生依赖后用上述脚本重建，纯 JS / TS 修改通常通过 Fast Refresh 即可更新。
 
+### Android 真机安装包
+
+```bash
+pnpm mobile:build:android
+```
+
+生成 `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`，内置 JS 和资源，安装后不需要 Metro 或 8081。默认包含 arm64-v8a、armeabi-v7a、x86 和 x86_64 四种架构，生成通用大包；可用 `ANDROID_ARCHITECTURES` 覆盖。登录页默认填写 `https://chat.keen-tech.top`，使用线上账号登录，地址仍可修改。当前工程使用开发签名，适合内部安装验证，商店发布需配置正式签名。
+
+Release 登录页填写手机能够访问的 HTTPS Agent API 地址。当前 Release 保留 Android 默认的明文 HTTP 限制，本地 HTTP 地址适用于 Debug 开发调试。`10.0.2.2` 是安卓模拟器专用地址，不能用于真机访问电脑。
+
 ### 服务器地址
 
 登录页需要填 Agent API 地址：
@@ -43,7 +61,7 @@ pnpm mobile:run --help
 | --- | --- |
 | iOS 模拟器 | `http://127.0.0.1:8002` |
 | Android 模拟器 | `http://10.0.2.2:8002` |
-| 真机（同一局域网） | `http://<电脑局域网 IP>:8000` |
+| 真机（同一局域网） | `http://<电脑局域网 IP>:8002` |
 
 > 真机调试还需要 API 监听 `0.0.0.0` 并允许局域网访问（默认开发配置即是）。
 
