@@ -289,7 +289,7 @@ async function ios() {
   } finally {
     closeSync(fd);
   }
-  const app = join(build, 'Build/Products/Debug-iphonesimulator/KeenAI.app');
+  const app = join(build, 'Build/Products/Debug-iphonesimulator/KeenChat.app');
   await run('xcrun', ['simctl', 'install', device.udid, app]);
   // Stop an old process so the newly installed native binary is used.
   spawnSync('xcrun', ['simctl', 'terminate', device.udid, 'ai.keen.mobile'], {

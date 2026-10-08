@@ -58,7 +58,7 @@ export default function LoginScreen() {
         <View style={{ gap: spacing.md }}>
           <View style={{ alignItems: 'center', marginBottom: spacing.xl }}>
             <Text style={{ fontSize: 32, fontWeight: '700', color: colors.textPrimary }}>
-              Keen AI
+              Keen Chat
             </Text>
             <Text style={{ color: colors.textSecondary, marginTop: spacing.xs }}>
               Coding Agent 移动客户端

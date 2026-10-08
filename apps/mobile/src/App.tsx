@@ -96,7 +96,7 @@ function RootNavigator() {
             <Stack.Screen
               name="Sessions"
               component={SessionsScreen}
-              options={{ title: 'Keen AI' }}
+              options={{ title: 'Keen Chat' }}
             />
             <Stack.Screen
               name="Chat"
