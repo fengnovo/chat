@@ -31,6 +31,15 @@ async function fetchSessionPage(cursor?: string, signal?: AbortSignal) {
   } satisfies SessionPage;
 }
 
+export async function sessionBelongsToChat(sessionId: string, chatId: string, sessions: WebSessionSummary[]): Promise<boolean> {
+  const known = sessions.find((session) => session.externalKey === chatId);
+  if (known) return known.id === sessionId;
+  const response = await apiFetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}`);
+  if (!response.ok) return false;
+  const session = (await response.json()) as SessionSummary;
+  return (session.externalKey || session.id) === chatId;
+}
+
 type SessionFile = {
   path: string;
   content: string | null;

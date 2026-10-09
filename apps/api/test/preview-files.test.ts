@@ -5,6 +5,35 @@ import os from 'node:os';
 import path from 'node:path';
 import { readPreviewFile } from '../src/preview-files.js';
 
+test('selected build root never falls back to workspace source files', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'preview-root-'));
+  const workspace = path.join(root, 'id', 'user-data', 'workspace');
+  try {
+    await mkdir(path.join(workspace, 'dist'), { recursive: true });
+    await writeFile(path.join(workspace, 'dist', 'index.html'), 'BUILT');
+    await writeFile(path.join(workspace, 'index.html'), 'SOURCE');
+    await writeFile(path.join(workspace, '.env'), 'PRIVATE');
+    await writeFile(path.join(workspace, 'dist', 'asset.js'), 'ASSET');
+    assert.equal((await readPreviewFile(root, 'id', 'index.html')).toString(), 'BUILT');
+    assert.equal((await readPreviewFile(root, 'id', 'asset.js')).toString(), 'ASSET');
+    await assert.rejects(readPreviewFile(root, 'id', '.env'), (error: unknown) => (error as { status: number }).status === 404);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('selected nested build does not fall back to another project', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'preview-nested-'));
+  const workspace = path.join(root, 'id', 'user-data', 'workspace');
+  try {
+    for (const name of ['a', 'b']) {
+      await mkdir(path.join(workspace, name, 'dist'), { recursive: true });
+      await writeFile(path.join(workspace, name, 'dist', 'index.html'), name);
+    }
+    await writeFile(path.join(workspace, 'b', 'dist', 'other.js'), 'OTHER');
+    assert.equal((await readPreviewFile(root, 'id', '')).toString(), 'a');
+    await assert.rejects(readPreviewFile(root, 'id', 'other.js'), (error: unknown) => (error as { status: number }).status === 404);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('production preview stays contained during directory replacement', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'preview-race-'));
   const workspace = path.join(root, 'id', 'user-data', 'workspace');

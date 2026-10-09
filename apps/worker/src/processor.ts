@@ -260,58 +260,60 @@ async function acquireSandbox(
 /**
  * 读取长期记忆并写入 DeepAgents Store 的 /memories/profile.md，同时返回
  * createDeepAgentRuntime 需要的 longTermMemory 选项（含 remember/forget 工具）。
- * 任何子步骤失败都 fail-open：记录指标后返回 undefined，让对话正常进行。
+ * 读取失败时仅跳过本轮上下文，保留 Store 与工具，避免改变恢复描述。
  */
-async function buildLongTermMemory(
+export async function buildLongTermMemory(
   services: ProcessorServices,
   job: RunJob,
   projectId: string | null,
   query: string,
   options: { refreshProfile: boolean } = { refreshProfile: true },
-): Promise<NonNullable<Parameters<typeof createDeepAgentRuntime>[0]['longTermMemory']> | undefined> {
+): Promise<NonNullable<Parameters<typeof createDeepAgentRuntime>[0]['longTermMemory']>> {
   const retrieveStartedAt = Date.now();
+  const assistantKey = 'chat';
+  const scope: 'global' | `project:${string}` = projectId ? `project:${projectId}` : 'global';
+  const namespace = memoryNamespace({ tenantId: job.tenantId, userId: job.userId, assistantKey, scope });
+  const toMemoryRecord = (row: Awaited<ReturnType<AgentRepository['listMemories']>>[number]): MemoryRecord => ({
+    id: row.id,
+    tenantId: row.tenantId,
+    userId: row.userId,
+    projectId: row.projectId,
+    assistantKey: row.assistantKey,
+    scope: row.scope,
+    kind: row.kind,
+    content: row.content,
+    normalizedKey: row.normalizedKey,
+    importance: row.importance,
+    confidence: row.confidence,
+    status: row.status,
+    sourceSessionId: row.sourceSessionId,
+    sourceRunId: row.sourceRunId,
+    supersedesId: row.supersedesId,
+    createdAt: new Date(row.createdAt),
+    updatedAt: new Date(row.updatedAt),
+    lastAccessedAt: row.lastAccessedAt ? new Date(row.lastAccessedAt) : null,
+    metadata: row.metadata,
+  });
+  const retriever = createMemoryRetriever({
+    list: async (input) => {
+      const rows = await services.repository.listMemories({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        assistantKey: input.assistantKey,
+        scope: input.scope,
+        ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+        limit: input.limit,
+      });
+      return rows.map(toMemoryRecord);
+    },
+    search: async (input: MemoryQuery) => services.memoryIndex
+      ? services.memoryIndex.search(input.query, input.tenantId, input.userId, input.limit, input.projectId)
+      : [],
+  });
+  let records: MemoryRecord[] = [];
+  let context = '';
   try {
-    const assistantKey = 'chat';
-    const scope: 'global' | `project:${string}` = projectId ? `project:${projectId}` : 'global';
-    const namespace = memoryNamespace({ tenantId: job.tenantId, userId: job.userId, assistantKey, scope });
-    const toMemoryRecord = (row: Awaited<ReturnType<AgentRepository['listMemories']>>[number]): MemoryRecord => ({
-      id: row.id,
-      tenantId: row.tenantId,
-      userId: row.userId,
-      projectId: row.projectId,
-      assistantKey: row.assistantKey,
-      scope: row.scope,
-      kind: row.kind,
-      content: row.content,
-      normalizedKey: row.normalizedKey,
-      importance: row.importance,
-      confidence: row.confidence,
-      status: row.status,
-      sourceSessionId: row.sourceSessionId,
-      sourceRunId: row.sourceRunId,
-      supersedesId: row.supersedesId,
-      createdAt: new Date(row.createdAt),
-      updatedAt: new Date(row.updatedAt),
-      lastAccessedAt: row.lastAccessedAt ? new Date(row.lastAccessedAt) : null,
-      metadata: row.metadata,
-    });
-    const retriever = createMemoryRetriever({
-      list: async (input) => {
-        const rows = await services.repository.listMemories({
-          tenantId: input.tenantId,
-          userId: input.userId,
-          assistantKey: input.assistantKey,
-          scope: input.scope,
-          ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-          limit: input.limit,
-        });
-        return rows.map(toMemoryRecord);
-      },
-      search: async (input: MemoryQuery) => services.memoryIndex
-        ? services.memoryIndex.search(input.query, input.tenantId, input.userId, input.limit, input.projectId)
-        : [],
-    });
-    const { records, context } = await retriever.retrieve({
+    ({ records, context } = await retriever.retrieve({
       tenantId: job.tenantId,
       userId: job.userId,
       assistantKey,
@@ -319,69 +321,70 @@ async function buildLongTermMemory(
       query,
       limit: 12,
       maxChars: 6_000,
-    });
+    }));
     // start 轮用 PG 最新状态重渲染 profile；续跑轮保留文件现状——
     // 审批恢复时可能正挂着针对旧文件内容的 edit_file，重写会让其 old_string 失配。
     if (options.refreshProfile && records.length > 0) {
       await writeLongTermMemoryProfile(services.memoryStore, namespace, renderProfile(records, { maxChars: 6_000 }));
     }
     services.memoryMetrics?.memoryOperation?.({ operation: 'retrieve', outcome: 'success', durationMs: Date.now() - retrieveStartedAt });
-    const remember = async (input: { content: string; kind?: string; normalizedKey?: string }) => {
-      try {
-        if (isSensitiveMemory(input.content)) return '保存失败：检测到疑似敏感信息（密钥/密码/凭证），不予记忆。';
-        const kind = input.kind ? memoryKindSchema.parse(input.kind) : 'preference';
-        const saved = await services.repository.upsertMemory({
-          id: randomUUID(),
-          tenantId: job.tenantId,
-          userId: job.userId,
-          projectId,
-          assistantKey,
-          scope,
-          kind,
-          content: input.content.slice(0, 2_000),
-          normalizedKey: input.normalizedKey ?? `manual:${Date.now()}`,
-          importance: 0.7,
-          confidence: 0.9,
-          status: 'active',
-          sourceSessionId: job.sessionId,
-          sourceRunId: job.runId,
-          supersedesId: null,
-          metadata: { source: 'remember_fact_tool' },
-        });
-        await services.memoryIndex?.upsert({
-          id: saved.id, tenantId: saved.tenantId, userId: saved.userId, content: saved.content,
-          normalizedKey: saved.normalizedKey, kind: saved.kind, importance: saved.importance,
-          confidence: saved.confidence, projectId, scope,
-        }).catch(() => undefined);
-        return `已记住（id: ${saved.id}）`;
-      } catch (error) {
-        return `保存失败：${error instanceof Error ? error.message : String(error)}`;
-      }
-    };
-    const forget = async (memoryId: string) => {
-      try {
-        const existing = await services.repository.getMemory(job.tenantId, job.userId, memoryId);
-        if (!existing) return false;
-        await services.repository.deleteMemory(job.tenantId, job.userId, memoryId);
-        await services.memoryIndex?.remove(memoryId).catch(() => undefined);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    return {
-      store: services.memoryStore,
-      namespace,
-      ...(records.length > 0 ? { profilePath: '/memories/profile.md' as const } : {}),
-      context,
-      remember,
-      forget,
-    };
   } catch (error) {
     services.memoryMetrics?.memoryOperation?.({ operation: 'retrieve', outcome: 'failure', durationMs: Date.now() - retrieveStartedAt });
     console.error('[processor] long-term memory retrieval failed (fail-open)', error);
-    return undefined;
+    records = [];
+    context = '';
   }
+  const remember = async (input: { content: string; kind?: string; normalizedKey?: string }) => {
+    try {
+      if (isSensitiveMemory(input.content)) return '保存失败：检测到疑似敏感信息（密钥/密码/凭证），不予记忆。';
+      const kind = input.kind ? memoryKindSchema.parse(input.kind) : 'preference';
+      const saved = await services.repository.upsertMemory({
+        id: randomUUID(),
+        tenantId: job.tenantId,
+        userId: job.userId,
+        projectId,
+        assistantKey,
+        scope,
+        kind,
+        content: input.content.slice(0, 2_000),
+        normalizedKey: input.normalizedKey ?? `manual:${Date.now()}`,
+        importance: 0.7,
+        confidence: 0.9,
+        status: 'active',
+        sourceSessionId: job.sessionId,
+        sourceRunId: job.runId,
+        supersedesId: null,
+        metadata: { source: 'remember_fact_tool' },
+      });
+      await services.memoryIndex?.upsert({
+        id: saved.id, tenantId: saved.tenantId, userId: saved.userId, content: saved.content,
+        normalizedKey: saved.normalizedKey, kind: saved.kind, importance: saved.importance,
+        confidence: saved.confidence, projectId, scope,
+      }).catch(() => undefined);
+      return `已记住（id: ${saved.id}）`;
+    } catch (error) {
+      return `保存失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+  const forget = async (memoryId: string) => {
+    try {
+      const existing = await services.repository.getMemory(job.tenantId, job.userId, memoryId);
+      if (!existing) return false;
+      await services.repository.deleteMemory(job.tenantId, job.userId, memoryId);
+      await services.memoryIndex?.remove(memoryId).catch(() => undefined);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return {
+    store: services.memoryStore,
+    namespace,
+    ...(records.length > 0 ? { profilePath: '/memories/profile.md' as const } : {}),
+    context,
+    remember,
+    forget,
+  };
 }
 
 async function createRuntime(

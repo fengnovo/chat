@@ -8,6 +8,18 @@ import { loadWorkerConfig } from '../src/config.js';
 import { createRunProcessor } from '../src/processor.js';
 import { buildHostExecutionDescriptor } from '../src/execution-compatibility.js';
 
+test('optional missing, unreadable and malformed MCP files do not block host preflight', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'optional-mcp-'));
+  try {
+    const malformed = path.join(root, 'bad.json');
+    await writeFile(malformed, '{bad json');
+    for (const file of [path.join(root, 'missing.json'), root, malformed]) {
+      const descriptor = await buildHostExecutionDescriptor(loadWorkerConfig({ NODE_ENV: 'test', OPENAI_API_KEY: 'test-key', MCP_CONFIG_PATH: file }), job);
+      assert.equal(descriptor.mcpConfigHash, null);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 const job: RunJob = { kind: 'start', tenantId: '11111111-1111-4111-8111-111111111111', userId: '22222222-2222-4222-8222-222222222222', sessionId: '33333333-3333-4333-8333-333333333333', runId: '44444444-4444-4444-8444-444444444444', message: 'test', workspacePath: '/tmp/workspace', attachments: [], knowledgeBaseIds: [], approvalMode: 'manual' };
 
 test('granting session approval does not change deployment compatibility', async () => {

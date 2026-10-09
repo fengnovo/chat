@@ -75,7 +75,15 @@ async function snapshotResources(config: WorkerConfig): Promise<ResourceSnapshot
 
 export async function prepareHostExecution(config: WorkerConfig, job: RunJob): Promise<{ descriptor: Record<string, unknown>; resources: ResourceSnapshot }> {
   const resources = await snapshotResources(config);
-  const mcpRaw = config.MCP_CONFIG_PATH ? await readFile(config.MCP_CONFIG_PATH, 'utf8') : null;
+  // Optional MCP loading must retain the agent's fail-open behavior. Discovery
+  // still checks actual tools before accepting an established runtime.
+  let mcpConfigHash: string | null = null;
+  if (config.MCP_CONFIG_PATH) {
+    try {
+      const raw = await readFile(config.MCP_CONFIG_PATH, 'utf8');
+      mcpConfigHash = hash(stableJson(nonSecretConfig(JSON.parse(raw))));
+    } catch { /* Missing/unreadable/invalid config disables optional MCP. */ }
+  }
   const knowledgeEnabled = config.KNOWLEDGE_MCP_ENABLED && Boolean(config.KNOWLEDGE_MCP_URL && config.KNOWLEDGE_MCP_SECRET) && job.knowledgeBaseIds.length > 0;
   return {
     resources,
@@ -91,7 +99,7 @@ export async function prepareHostExecution(config: WorkerConfig, job: RunJob): P
         ? { runtime: 'docker', image: config.DOCKER_SANDBOX_IMAGE, workspacePath: config.DOCKER_SANDBOX_WORKSPACE_PATH, commandTimeoutMs: config.DOCKER_SANDBOX_COMMAND_TIMEOUT_MS }
         : { runtime: 'e2b', template: config.E2B_TEMPLATE, workspacePath: config.E2B_WORKSPACE_PATH, apiUrl: config.E2B_API_URL ? publicUrl(config.E2B_API_URL) : null, sandboxUrl: config.E2B_SANDBOX_URL ? publicUrl(config.E2B_SANDBOX_URL) : null },
       resourceHashes: resources.hashes,
-      mcpConfigHash: mcpRaw ? hash(stableJson(nonSecretConfig(JSON.parse(mcpRaw)))) : null,
+      mcpConfigHash,
       knowledgeMcp: { enabled: knowledgeEnabled, url: config.KNOWLEDGE_MCP_URL ? publicUrl(config.KNOWLEDGE_MCP_URL) : null, timeoutMs: config.KNOWLEDGE_MCP_TIMEOUT_MS },
     },
   };

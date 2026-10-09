@@ -76,14 +76,16 @@ export async function readPreviewFile(sessionsRoot: string, workspaceId: string,
   const base = await realpath(sessionsRoot);
   const workspace = `${workspaceId}/user-data/workspace`;
   for (const candidate of [`${workspace}/dist`, workspace]) {
+    let isFile: boolean;
     try {
       const index = await secureOpen(base, `${candidate}/index.html`);
-      let isFile: boolean;
       try { isFile = (await index.stat()).isFile(); } finally { await index.close(); }
-      if (isFile) return await readBounded(base, `${candidate}/${requested || 'index.html'}`);
     } catch (error) {
       if (!(error instanceof PreviewFileError) || error.status !== 404) throw error;
+      continue;
     }
+    // Once an entry point selects the root, missing assets must stay 404.
+    if (isFile) return readBounded(base, `${candidate}/${requested || 'index.html'}`);
   }
   const directory = await secureOpen(base, workspace, true);
   const names: string[] = [];
@@ -99,10 +101,11 @@ export async function readPreviewFile(sessionsRoot: string, workspaceId: string,
   for (const candidate of candidates) {
     try {
       await readBounded(base, `${candidate}/index.html`);
-      return await readBounded(base, `${candidate}/${requested || 'index.html'}`);
     } catch (error) {
       if (!(error instanceof PreviewFileError) || error.status !== 404) throw error;
+      continue;
     }
+    return readBounded(base, `${candidate}/${requested || 'index.html'}`);
   }
   throw new PreviewFileError(404, 'no_preview_built');
 }

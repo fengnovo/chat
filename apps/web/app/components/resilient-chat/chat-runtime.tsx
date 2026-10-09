@@ -30,6 +30,7 @@ import {
   fetchSessionFilePage,
   fetchSessionHistoryPage,
   fetchSessionPage,
+  sessionBelongsToChat,
   responseError,
 } from './api';
 import { Composer } from './composer';
@@ -343,18 +344,8 @@ function ChatRuntime() {
     sessionsRef.current = sessions;
   }, [sessions]);
   const runBelongsToChat = useCallback(
-    async (run: RunSummary, chatId: string) => {
-      const known = sessionsRef.current.find(
-        (session) => session.externalKey === chatId,
-      );
-      if (known) return known.id === run.sessionId;
-      const response = await apiFetch(
-        `/api/agent/sessions/${encodeURIComponent(run.sessionId)}`,
-      );
-      if (!response.ok) return false;
-      const session = (await response.json()) as WebSessionSummary;
-      return session.externalKey === chatId;
-    },
+    (run: RunSummary, chatId: string) =>
+      sessionBelongsToChat(run.sessionId, chatId, sessionsRef.current),
     [],
   );
   const refreshHistoryFiles = useCallback(async () => {
