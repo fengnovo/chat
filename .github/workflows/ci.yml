@@ -48,6 +48,61 @@ jobs:
       - name: Build
         run: pnpm build
 
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUN_INTEGRATION_TESTS: '1'
+      DATABASE_URL: postgresql://agent:agent@127.0.0.1:55433/agent_ci_test
+      REDIS_URL: redis://127.0.0.1:56379/0
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent
+          POSTGRES_DB: agent_ci_test
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U agent -d agent_ci_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test integration runner guards
+        run: node --test scripts/run-integration-tests.test.mjs
+
+      - name: Run database, fenced-checkpoint and SIGKILL recovery suites
+        run: pnpm test:integration
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20

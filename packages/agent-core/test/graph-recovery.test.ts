@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { MemorySaver, MessagesAnnotation, StateGraph } from '@langchain/langgraph';
-import { chooseRecoveryInput, canonicalAssistantText } from '../src/graph-recovery.js';
+import { chooseRecoveryInput, canonicalAssistantText, createRecoveryResumeCommand } from '../src/graph-recovery.js';
 
 test('crash recovery resumes the pending node without reappending the initial message', async () => {
   // Same metadata contract as the production fenced Postgres saver.
@@ -52,4 +52,14 @@ test('canonical text excludes incomplete streamed tokens and tool narration from
     new AIMessage({ content: 'tool narration', tool_calls: [{ name: 'x', args: {}, id: 'call-x' }] }),
     new AIMessage('result')];
   assert.equal(canonicalAssistantText(messages, 'r'), 'result');
+});
+
+test('saved recovery decisions target the current retry and preserve multi-action approval identity', () => {
+  const snapshot = { metadata: { business_run_id: 'run' }, tasks: [{ interrupts: [{ id: 'native-id', value: {
+    durableApprovalId: 'tool-execution-2', actionRequests: [{ name: 'a', args: {} }, { name: 'b', args: {} }],
+  } }] }] };
+  assert.equal(createRecoveryResumeCommand(snapshot, { kind: 'approval', interruptId: 'tool-execution-1', decision: 'approve' }), undefined);
+  assert.deepEqual(createRecoveryResumeCommand(snapshot, { kind: 'approval', interruptId: 'tool-execution-2', decision: 'reject', message: 'stop' })?.resume, {
+    durableApprovalId: 'tool-execution-2', decisions: [{ type: 'reject', message: 'stop' }, { type: 'reject', message: 'stop' }],
+  });
 });

@@ -8,6 +8,7 @@ import type { AgentEvent } from '@repo/contracts';
 import { createDeepAgent } from 'deepagents';
 import { createMiddleware, modelCallLimitMiddleware } from 'langchain';
 import { z } from 'zod';
+import { stableToolInputHash } from './tool-execution.js';
 
 import { childStoreOperation, durableChildFailure, invokeDurableChildGraph, isDurableChildError } from './durable-child.js';
 export { DurableChildInterruptError, invokeDurableChildGraph, resumeBackgroundChild, isDurableChildError } from './durable-child.js';
@@ -25,11 +26,17 @@ export { DurableChildInterruptError, invokeDurableChildGraph, resumeBackgroundCh
  * - 评审闭环（P2）：每轮成功产出由独立的结构化 LLM 评审器按 task 里的验收标准打分，
  *   不达标则把 feedback 作为 prior_feedback 重派（最多 SUBAGENT_MAX_ATTEMPTS 轮）。
  *
- * P3 异步派发（background）的扩展位已预留：schema 保持兼容。
+ * Background children remain attached to this run. Local pause/shutdown aborts
+ * execution without cancelling durable intent; parent terminal transitions cancel
+ * unfinished children in the repository. Recovery resumes the saved attempt.
  */
 
 /** 子 Agent 单次运行的模型调用轮次上限。 */
-const SUBAGENT_MODEL_CALL_LIMIT = Number(process.env.SUBAGENT_MODEL_CALL_LIMIT ?? 50);
+const boundedLimit = (value: string | undefined, fallback: number, max: number) => {
+  const parsed = Number(value ?? fallback);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+};
+const SUBAGENT_MODEL_CALL_LIMIT = boundedLimit(process.env.SUBAGENT_MODEL_CALL_LIMIT, 50, 100);
 /** 子 Agent 递归步数硬上限（兜底，正常由轮次上限先触发）。 */
 const SUBAGENT_RECURSION_LIMIT = 200;
 /** 子 Agent 墙钟超时：超时强制中止并回传失败摘要。 */
@@ -37,7 +44,7 @@ const SUBAGENT_TIMEOUT_MS = 10 * 60_000;
 /** 回传给主 Agent 的摘要文本上限。 */
 const SUBAGENT_SUMMARY_MAX_CHARS = 2_000;
 /** 评审闭环总尝试上限：首轮 + 重派（3 = 首轮 + 2 次整改重派）。 */
-const SUBAGENT_MAX_ATTEMPTS = Math.max(1, Number(process.env.SUBAGENT_MAX_ATTEMPTS ?? 3));
+const SUBAGENT_MAX_ATTEMPTS = boundedLimit(process.env.SUBAGENT_MAX_ATTEMPTS, 3, 5);
 /** 评审器调用墙钟超时：评审是单次结构化调用，不应长时间阻塞派发。 */
 const REVIEW_TIMEOUT_MS = 60_000;
 /** 事件里角色名/任务简述的展示上限（与 contracts 校验上限一致）。 */
@@ -56,7 +63,7 @@ const PLATFORM_BASELINE = [
   '输出要求：最终回复只写一段摘要——结论、关键依据/产物路径、未完成事项与原因；不要逐条罗列执行过程，不要出现工具名或内部环境细节。',
 ].join('\n');
 
-/** spawn_subagent 工具入参 schema（方案 3.2：P1 仅同步路径，background 预留给 P3）。 */
+/** Foreground and parent-attached background dispatch share the same durable identity. */
 export const spawnSubagentSchema = z.object({
   role_prompt: z
     .string()
@@ -79,7 +86,7 @@ export const spawnSubagentSchema = z.object({
   background: z
     .boolean()
     .default(false)
-    .describe('是否后台运行；当前仅支持同步模式，传 true 会返回明确错误'),
+    .describe('是否在当前主任务内后台运行；主任务取消或结束时未完成的子任务一并取消'),
 });
 
 export interface SpawnSubagentInput {
@@ -100,7 +107,7 @@ export interface DurableChildRecord {
   threadId: string;
   input: unknown;
   background: boolean;
-  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
   attempt: number;
   feedback: string | null;
   attemptResult: { status: SubagentRunStatus; summary: string; toolCalls: number } | null;
@@ -273,6 +280,7 @@ async function runSubagent(
   options: SpawnSubagentOptions,
   input: SpawnSubagentInput,
 ): Promise<{ status: SubagentRunStatus; summary: string; toolCalls: number }> {
+  assertChildRunning(options);
   // 平台策略层（第二道）：在模型请求边界强制收敛工具集。
   // 即便 allowlist 覆盖不了（如 deepagents 内置文件系统工具在中间件层生成），
   // 请求级过滤也会剔除被禁工具与 allowlist 之外的一切工具。
@@ -321,6 +329,7 @@ async function runSubagent(
   }, SUBAGENT_TIMEOUT_MS);
   const onParentAbort = () => controller.abort();
   options.signal?.addEventListener('abort', onParentAbort, { once: true });
+  if (options.signal?.aborted) onParentAbort();
   try {
     // 流隔离（三道，缺一不可）：
     // 1) writer 换成丢弃函数：LangGraph 嵌套图发现 config.writer 已存在时会直接复用，
@@ -582,6 +591,14 @@ async function ensureDurableChild(options: SpawnSubagentOptions, input: SpawnSub
   return childStoreOperation(() => options.durable!.store.ensure(parentToolCallId(config), input, input.background));
 }
 
+/** An aborted local pass is recoverable, never a successful durable child result. */
+function assertChildRunning(options: SpawnSubagentOptions): void {
+  if (!options.signal?.aborted) return;
+  const error = options.signal.reason ?? new Error('Child execution was stopped with its parent');
+  if (options.durable) throw durableChildFailure(error);
+  throw error;
+}
+
 /** 从派发输入提取卡片展示用的角色名（首行非空文本）与任务简述。 */
 export function describeSubagentInput(input: SpawnSubagentInput): {
   role: string;
@@ -610,6 +627,7 @@ export async function runSpawnLoop(
   override: { subagentId?: string; background?: boolean; childRecord?: DurableChildRecord | undefined } = {},
 ): Promise<string> {
   let record = override.childRecord ?? await ensureDurableChild(options, input, config);
+  if (record?.status === 'cancelled') return record.summary ?? '子任务已随主任务取消，不会重新执行。';
   if (record && (record.status === 'completed' || record.status === 'failed') && record.summary !== null) {
     return record.summary;
   }
@@ -628,6 +646,7 @@ export async function runSpawnLoop(
   let priorFeedback: string | undefined = record?.feedback ?? undefined;
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    assertChildRunning(options);
     const runInput: SpawnSubagentInput = priorFeedback
       ? { ...input, prior_feedback: priorFeedback }
       : input;
@@ -655,6 +674,7 @@ export async function runSpawnLoop(
         if (options.durable) throw durableChildFailure(error);
         throw error;
       }
+      assertChildRunning(options);
       await save({ attemptResult: result, review: null });
     }
     deps.emit(config, {
@@ -671,7 +691,7 @@ export async function runSpawnLoop(
 
     // 失败/超时不评审：失败摘要本身已告诉主 Agent 如何处置（拆小任务/基于部分产出继续）。
     if (result.status !== 'completed') return finish(result.summary, 'failed');
-    if (options.signal?.aborted) return finish(result.summary);
+    assertChildRunning(options);
 
     let review = record?.review as ReviewOutcome | null | undefined;
     if (!review) {
@@ -681,6 +701,7 @@ export async function runSpawnLoop(
         throw error;
       }
     }
+    assertChildRunning(options);
     await save({ review });
     if (review.skipped) return finish(result.summary);
 
@@ -735,7 +756,7 @@ export interface BackgroundRunContext {
   drainEvents(): AgentEvent[];
   /** 等待全部后台任务结束并取回摘要（事件应先/再 drainEvents 取净）。 */
   settled(): Promise<BackgroundTaskResult[]>;
-  /** 中止全部后台任务（人审挂起/run 失败/取消），给 3s 收尾宽限。 */
+  /** Stop local tasks within 3s; this does not mutate durable child status. */
   abortAll(): Promise<void>;
 }
 
@@ -744,7 +765,55 @@ const BACKGROUND_EVENT_QUEUE_MAX = 500;
 /** abortAll 的收尾宽限：不能让 interrupt/error 路径被卡住。 */
 const BACKGROUND_ABORT_GRACE_MS = 3_000;
 
-export function createBackgroundRunContext(runSignal?: AbortSignal): BackgroundRunContext {
+/** Compatibility includes child prompts and effective resource limits, without task text. */
+export function subagentRuntimeDescriptor(): Record<string, unknown> {
+  return {
+    promptHash: stableToolInputHash(subagentSystemPrompt({ role_prompt: '<role>', task: '<task>',
+      context: '<context>', prior_feedback: '<feedback>', model_tier: 'primary', background: true })),
+    reviewPromptHash: stableToolInputHash(REVIEW_SYSTEM_PROMPT),
+    modelCallLimit: SUBAGENT_MODEL_CALL_LIMIT,
+    recursionLimit: SUBAGENT_RECURSION_LIMIT,
+    attemptLimit: SUBAGENT_MAX_ATTEMPTS,
+    timeoutMs: SUBAGENT_TIMEOUT_MS,
+    reviewTimeoutMs: REVIEW_TIMEOUT_MS,
+    summaryMaxChars: SUBAGENT_SUMMARY_MAX_CHARS,
+    backgroundConcurrency: 3,
+    backgroundEventQueueMax: BACKGROUND_EVENT_QUEUE_MAX,
+  };
+}
+
+export function createBackgroundRunContext(
+  runSignal?: AbortSignal,
+  limits: { maxConcurrency?: number } = {},
+): BackgroundRunContext {
+  const maxConcurrency = limits.maxConcurrency ?? 3;
+  if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 10) {
+    throw new Error('Background concurrency must be an integer between 1 and 10');
+  }
+  let active = 0;
+  const waiting: Array<{ resolve: () => void; reject: (reason: unknown) => void }> = [];
+  const acquire = async (signal: AbortSignal) => {
+    signal.throwIfAborted();
+    if (active < maxConcurrency) { active++; return; }
+    await new Promise<void>((resolve, reject) => {
+      const waiter = {
+        resolve: () => { signal.removeEventListener('abort', onAbort); resolve(); },
+        reject,
+      };
+      const onAbort = () => {
+        const index = waiting.indexOf(waiter);
+        if (index >= 0) waiting.splice(index, 1);
+        reject(signal.reason);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      waiting.push(waiter);
+    });
+  };
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next.resolve(); // Transfer the occupied slot to this queued task.
+    else active--;
+  };
   interface Entry {
     subagentId: string;
     role: string;
@@ -784,7 +853,11 @@ export function createBackgroundRunContext(runSignal?: AbortSignal): BackgroundR
         }),
       };
       entry.promise = Promise.resolve()
-        .then(() => task.run(emit, signal))
+        .then(async () => {
+          await acquire(signal);
+          try { signal.throwIfAborted(); return await task.run(emit, signal); }
+          finally { release(); }
+        })
         .then((summary) => ({
           subagentId: task.subagentId,
           role: task.role,
@@ -826,10 +899,13 @@ export function createBackgroundRunContext(runSignal?: AbortSignal): BackgroundR
       for (const entry of entries) {
         if (!entry.done) entry.controller.abort();
       }
-      await Promise.race([
-        Promise.allSettled(entries.map((entry) => entry.promise)),
-        new Promise((resolve) => setTimeout(resolve, BACKGROUND_ABORT_GRACE_MS)),
-      ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.allSettled(entries.map((entry) => entry.promise)),
+          new Promise((resolve) => { timer = setTimeout(resolve, BACKGROUND_ABORT_GRACE_MS); }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
     },
   };
 }
@@ -843,6 +919,7 @@ export async function rehydrateBackgroundChildren(
   if (!options.durable) return;
   const records = await childStoreOperation(() => options.durable!.store.listBackground());
   for (const childRecord of records) {
+    if (childRecord.status === 'cancelled') continue;
     const input = spawnSubagentSchema.parse(childRecord.input) as SpawnSubagentInput;
     const { role, description } = describeSubagentInput(input);
     backgroundCtx.register({
@@ -875,6 +952,7 @@ export function createSpawnSubagentTool(
   return tool(
     async (input: SpawnSubagentInput, config: unknown) => {
       const childRecord = await ensureDurableChild(options, input, config);
+      if (childRecord?.status === 'cancelled') return childRecord.summary ?? '子任务已随主任务取消，不会重新执行。';
       if (input.background) {
         const bg = (
           config as { configurable?: { backgroundCtx?: BackgroundRunContext } }

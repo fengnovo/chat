@@ -85,4 +85,5 @@ export * from './knowledge-repository.js';
 export * from './password.js';
 
 export * from './durable-execution.js';
+export * from './history-repository.js';
 export type { Pool, PoolClient } from 'pg';

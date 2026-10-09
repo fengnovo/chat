@@ -37,7 +37,7 @@ export interface ToolExecutionMiddlewareOptions {
   scopeId: string;
   policies?: Record<string, ToolReplayPolicy>;
   assertOwnership?: () => Promise<void>;
-  /** Session authorization also covers repeating an execution with an unknown outcome. */
+  /** Ordinary tool authorization never authorizes an unsafe unknown-outcome retry. */
   autoApproveTools?: boolean;
 }
 
@@ -143,6 +143,11 @@ export function deserializeToolResult(result: unknown): ToolMessage | Command {
 
 const SAFE_BUILTINS = new Set(['ls', 'read_file', 'glob', 'grep', 'write_todos', 'spawn_subagent']);
 
+/** Trusted platform defaults, shared with the durable runtime descriptor. */
+export function trustedBuiltinReplayPolicies(): Record<string, 'safe'> {
+  return Object.fromEntries([...SAFE_BUILTINS].sort().map((name) => [name, 'safe' as const]));
+}
+
 export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOptions) {
   const storage = async <T>(operation: () => Promise<T>): Promise<T> => {
     try { return await operation(); }
@@ -161,8 +166,9 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
       if (!toolCallId || !toolCallId.trim()) throw new DurableExecutionError('Durable tools require a stable tool_call_id');
       if (!options.scopeId) throw new DurableExecutionError('Durable tools require an execution scope');
       const policy = options.policies?.[toolName];
-      const metadata = request.tool && 'metadata' in request.tool ? request.tool.metadata as { annotations?: { readOnlyHint?: boolean; idempotentHint?: boolean } } | undefined : undefined;
-      const replayPolicy = (policy?.replaySafe ?? (SAFE_BUILTINS.has(toolName) || metadata?.annotations?.readOnlyHint === true || metadata?.annotations?.idempotentHint === true)) ? 'safe' : 'unsafe';
+      // Third-party MCP hints describe intent, not a trusted guarantee that repeating
+      // an unknown outcome is safe. Only platform policy can establish safety.
+      const replayPolicy = (policy?.replaySafe ?? SAFE_BUILTINS.has(toolName)) ? 'safe' : 'unsafe';
       const inputHash = stableToolInputHash(input);
       await ownership();
       const { record, fresh } = await storage(() => options.store.begin({ scopeId: options.scopeId, toolCallId, toolName, inputHash, input, replayPolicy }));
@@ -171,8 +177,9 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
       if (!Number.isSafeInteger(record.retryCount) || record.retryCount < 0) throw new DurableExecutionError('Durable tool record has an invalid retry count');
       if (record.status === 'succeeded') return deserializeToolResult(record.result);
       if (record.status !== 'started' && record.status !== 'uncertain') throw new DurableExecutionError('Invalid durable tool execution status');
-      const effectiveReplayPolicy = policy?.replaySafe === undefined ? record.replayPolicy : replayPolicy;
-      if (!fresh && effectiveReplayPolicy === 'unsafe' && !options.autoApproveTools) {
+      // A policy change cannot retroactively bless an uncertain earlier effect, nor
+      // can a stored safe flag override a current policy that no longer trusts it.
+      if (!fresh && !(record.replayPolicy === 'safe' && replayPolicy === 'safe')) {
         const approval: HITLRequest & { durableApprovalId: string } = {
           durableApprovalId: `tool-${record.executionId}-${record.retryCount}`,
           actionRequests: [{ name: toolName, args: input, description: 'Previous external execution outcome is unknown. It may already have succeeded. Approve to repeat this action, or reject to leave it unrepeated.' }],

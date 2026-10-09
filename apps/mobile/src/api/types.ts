@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@repo/contracts';
+import type { AgentEvent, RunMessageProjection } from '@repo/contracts';
 
 /** 会话记录（与 apps/api sessions 路由返回一致，字段按需取子集）。 */
 export interface SessionSummary {
@@ -41,6 +41,10 @@ export interface HistoryResponse {
   messages: HistoryMessage[];
   latestRun: RunRecord | null;
   latestRunEvents?: StreamAgentEvent[];
+  latestRunProjection?: RunMessageProjection | null;
+  latestRunEventsTruncated?: boolean;
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 export interface CurrentUser {

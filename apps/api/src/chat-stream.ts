@@ -4,6 +4,7 @@ import { redactTelemetryValue } from '@repo/observability';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ApiServices } from './types.js';
+import { createSseWriter } from './sse-writer.js';
 
 type UiChunk = Record<string, unknown>;
 
@@ -146,19 +147,34 @@ export async function streamWorkflowRun(
   const run = await services.repository.getRun(request.auth, runId);
   if (!run) return reply.code(404).send({ error: 'run_not_found' });
 
-  const initialEvents = await services.repository.listEvents(request.auth, runId, 0, 100_000);
+  // Count the stable replay prefix without retaining it in memory. A second paged
+  // pass preserves the existing chunk-index resume protocol and streams its body.
+  const countChunks = createChunkEncoder(runId);
+  let initialChunkCount = 0;
+  let initialCursor = 0;
+  const replayEnd = Number.isSafeInteger(run.lastEventSeq) ? run.lastEventSeq : undefined;
+  let firstPage: PersistedAgentEvent[] | undefined;
+  for (;;) {
+    const events = await services.repository.listEvents(request.auth, runId, initialCursor, 500);
+    firstPage ??= events;
+    const prefix = replayEnd === undefined ? events : events.filter((event) => event.seq <= replayEnd);
+    initialChunkCount += countChunks(prefix).length;
+    if (prefix.length) initialCursor = prefix.at(-1)!.seq;
+    if ((replayEnd !== undefined && (initialCursor >= replayEnd || events.some((event) => event.seq > replayEnd))) || events.length < 500 || prefix.some((event) => ['run.completed', 'run.failed', 'run.cancelled'].includes(event.type))) break;
+  }
   const encodeEvents = createChunkEncoder(runId);
-  const initialChunks = encodeEvents(initialEvents);
-  const initialFinished = initialChunks.some((chunk) => chunk.type === 'finish');
-  let eventCursor = initialEvents.at(-1)?.seq ?? 0;
-  let replayChunks = initialChunks.slice(requestedStart(request, initialChunks.length));
+  const startChunk = requestedStart(request, initialChunkCount);
+  let chunkCursor = 0;
+  let eventCursor = 0;
   let closed = false;
+  const writer = createSseWriter(reply.raw);
   const telemetry = services.observability?.startSse('chat');
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const finish = (reason: 'client' | 'server' | 'error') => {
     if (closed) return;
     closed = true;
+    writer.close();
     clearInterval(heartbeat);
     unsubscribe?.();
     telemetry?.finish(reason);
@@ -181,7 +197,7 @@ export async function streamWorkflowRun(
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
     'x-workflow-run-id': runId,
-    'x-workflow-stream-tail-index': String(Math.max(initialChunks.length - 1, 0)),
+    'x-workflow-stream-tail-index': String(Math.max(initialChunkCount - 1, 0)),
     'x-vercel-ai-ui-message-stream': 'v1',
     'x-request-id': request.id,
   });
@@ -193,34 +209,36 @@ export async function streamWorkflowRun(
   const flush = createCoalescedRunner(async () => {
     // 已经收尾：后续通知直接视为完成，避免重复 end()。
     if (closed) return true;
-    // 首次订阅先把已经持久化的事件送出去，不让第二次数据库查询挡住首屏正文。
-    const initial = replayChunks;
-    replayChunks = [];
-    for (const chunk of initial) {
-      telemetry?.firstByte();
-      reply.raw.write(frame(chunk));
+    let terminal = false;
+    for (;;) {
+      const cached = firstPage !== undefined;
+      const events = firstPage ?? await services.repository.listEvents(request.auth, runId, eventCursor, 500);
+      firstPage = undefined;
+      if (closed) return true;
+      if (events.length) eventCursor = events.at(-1)!.seq;
+      const chunks = encodeEvents(events);
+      for (const chunk of chunks) {
+        if (chunkCursor++ < startChunk) continue;
+        telemetry?.firstByte();
+        if (!await writer.write(frame(chunk))) return true;
+      }
+      if (chunks.some((chunk) => chunk.type === 'finish')) {
+        finish('server');
+        return true;
+      }
+      // Notifications may precede subscription during prefix counting. Always
+      // catch up after replaying its cached first page, including an empty page.
+      if (cached) continue;
+      if (events.length >= 500) continue;
+      if (terminal) { finish('server'); return true; }
+      const latest = await services.repository.getRun(request.auth, runId);
+      terminal = !!latest && ['completed', 'failed', 'cancelled'].includes(latest.status);
+      if (!terminal) {
+        if (!events.length) await writer.write(': heartbeat\n\n');
+        return false;
+      }
+      // Read again after observing terminal status, covering a racing final commit.
     }
-    if (initialFinished) {
-      finish('server');
-      return true;
-    }
-    // 只取上次 flush 后的新事件。逐 token 重查并编码整个 run 会随着回复
-    // 变长退化为平方复杂度，使正文在浏览器里看起来像延迟后整块出现。
-    const events = await services.repository.listEvents(request.auth, runId, eventCursor, 100_000);
-    if (closed) return true;
-    if (events.length > 0) {
-      eventCursor = events.at(-1)!.seq;
-    }
-    const chunks = encodeEvents(events);
-    for (const chunk of chunks) {
-      telemetry?.firstByte();
-      reply.raw.write(frame(chunk));
-    }
-    if (chunks.some((chunk) => chunk.type === 'finish')) {
-      finish('server');
-      return true;
-    }
-    return false;
   });
 
   try {
@@ -233,10 +251,7 @@ export async function streamWorkflowRun(
     await flush();
     if (closed) return;
     heartbeat = setInterval(() => {
-      if (!closed) {
-        reply.raw.write(': heartbeat\n\n');
-        void flush().catch(fail);
-      }
+      if (!closed) void flush().catch(fail);
     }, 15_000);
   } catch (error) {
     fail(error);

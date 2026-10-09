@@ -102,6 +102,10 @@ export interface HeadlessAgentOptions {
     children: DurableChildStore;
     assertOwnership: () => Promise<void>;
     toolPolicies?: Record<string, ToolReplayPolicy>;
+    /** Persist or compare before graph construction; incompatible recovery must fail. */
+    bindRuntimeDescriptor?: (descriptor: Record<string, unknown>) => Promise<void>;
+    /** Host-provided content hashes for uploaded skills, instructions and MCP resources. */
+    runtimeResources?: Record<string, string>;
   };
   models: ModelSpec[];
   circuitBreaker?: CircuitBreakerStore;

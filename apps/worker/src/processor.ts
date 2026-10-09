@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { coalesceAgentEvents } from './coalesce-events.js';
 import { gunzipSync } from 'node:zlib';
 
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
@@ -51,6 +52,7 @@ import type { WorkerConfig } from './config.js';
 import { createAgentTelemetry } from './agent-telemetry.js';
 import { withSessionLock } from './lock.js';
 import { createDurableRuntimePorts } from './durable-runtime.js';
+import { compatibilityFailure, prepareHostExecution, uploadPreparedAgentResources } from './execution-compatibility.js';
 import { createFencedCheckpointer } from './fenced-checkpointer.js';
 import type { WorkerObservability } from './observability.js';
 import type { WorkerLangfuse } from './langfuse.js';
@@ -59,7 +61,6 @@ import {
   prepareWorkspace,
   remoteWorkspacePath,
   safeRelativePath,
-  uploadAgentResources,
   type AgentResources,
   type RemoteWorkspaceSandbox,
 } from './workspace.js';
@@ -127,23 +128,13 @@ async function persistEvent(
   const persisted = await services.repository.durable.appendEvent(lease, validated);
   // The event is already durable; SSE heartbeats also replay DB if pub/sub is down.
   await services.publisher.publish(runEventsChannel(job.runId), String(persisted.seq)).catch(() => undefined);
-  const status = terminalStatus(persisted);
-  if (status) {
-    // run 完成后投递后台记忆整理任务：幂等写 memory_jobs 表，再用 BullMQ 唤醒消费者。
-    // 投递失败不影响已完成的聊天（fail-open）。
-    if (status === 'completed') {
-      await services.repository.enqueueMemoryJob({
-        tenantId: job.tenantId,
-        userId: job.userId,
-        sessionId: job.sessionId,
-        runId: job.runId,
-      }).catch(() => undefined);
-      await services.memoryQueue.add('extract', { runId: job.runId }, {
-        jobId: `memory-${job.runId}`,
-        removeOnComplete: 100,
-        removeOnFail: 100,
-      }).catch(() => undefined);
-    }
+  // PostgreSQL already committed the memory intent with completion. Redis only wakes it sooner.
+  if (persisted.type === 'run.completed') {
+    await services.memoryQueue.add('extract', { runId: job.runId }, {
+      jobId: `memory-${job.runId}`,
+      removeOnComplete: 100,
+      removeOnFail: 100,
+    }).catch(() => undefined);
   }
   return persisted;
 }
@@ -404,6 +395,7 @@ async function createRuntime(
   agentResources?: AgentResources,
   longTermMemory?: NonNullable<Parameters<typeof createDeepAgentRuntime>[0]['longTermMemory']>,
   lease?: RunExecutionLease,
+  runtimeResourceHashes?: Record<string, string>,
 ): Promise<HeadlessAgentRuntime> {
   if (!backend) throw new Error('Deep agent requires a sandbox backend');
   const knowledgeMcpEnabled = services.config.KNOWLEDGE_MCP_ENABLED &&
@@ -420,7 +412,7 @@ async function createRuntime(
     backend,
     backendMode: services.config.SANDBOX_RUNTIME === 'docker' ? 'docker' : 'e2b',
     checkpointer: lease ? createFencedCheckpointer(services.checkpointer, services.repository.durable, lease) : services.checkpointer,
-    ...(lease ? { durable: createDurableRuntimePorts(services.repository, lease, services.config.toolReplayPolicies) } : {}),
+    ...(lease ? { durable: createDurableRuntimePorts(services.repository, lease, services.config.toolReplayPolicies, runtimeResourceHashes) } : {}),
     models: services.config.models,
     circuitBreaker: new RedisCircuitBreakerStore(
       services.redis,
@@ -695,6 +687,8 @@ export function createRunProcessor(
           terminalEventWritten = true;
           return;
         }
+        const hostExecution = await prepareHostExecution(services.config, job);
+        await services.repository.durable.bindExecutionDescriptor(lease, hostExecution.descriptor, 'host');
         const workspace = await services.repository.getWorkspaceSandboxForWorker(
           job.tenantId,
           job.sessionId,
@@ -741,11 +735,10 @@ export function createRunProcessor(
                 : Promise.resolve({ appendedMessage: '', images: [] as ChatImageAttachment[] }),
               // 上传 DeepAgents memory/skills 到沙箱（宿主机路径由环境变量配置）。
               observed('agent.resources.upload', () =>
-                uploadAgentResources(
+                uploadPreparedAgentResources(
                   acquiredSandbox,
                   remotePath,
-                  services.config.AGENT_MEMORY_FILE,
-                  services.config.AGENT_SKILLS_DIR,
+                  hostExecution.resources,
                 ),
               ),
               // 长期记忆：start 轮按本轮消息检索并重写 profile.md；
@@ -787,6 +780,7 @@ export function createRunProcessor(
             agentResources,
             longTermMemory,
             lease,
+            hostExecution.resources.hashes,
           ),
         );
         if (telemetry) {
@@ -816,7 +810,7 @@ export function createRunProcessor(
                     ...(invocation.answer.customText ? { customText: invocation.answer.customText } : {}) } };
           const events = lease.recovery ? runtime!.recover(input)
             : input.kind === 'start' ? runtime!.run(input.message, input.images) : runtime!.resume(input);
-          for await (const event of events) {
+          for await (const event of coalesceAgentEvents(events)) {
             let persistOutcome: 'success' | 'failure' = 'success';
             const persistStartedAt = Date.now();
             try {
@@ -844,6 +838,13 @@ export function createRunProcessor(
           }
         });
       } catch (error) {
+        const incompatible = compatibilityFailure(error);
+        if (incompatible && !terminalEventWritten) {
+          await persistEvent(services, job, { runId: job.runId, timestamp: new Date().toISOString(), type: 'run.failed', ...incompatible }, lease);
+          terminalEventWritten = true;
+          // Keep its workspace/checkpoint for inspection; incompatible runs never retry.
+          controller.abort(error);
+        }
         if (!terminalEventWritten) {
           interrupted = true;
           if (!controller.signal.aborted) controller.abort(new DurableExecutionError('Worker execution interrupted', { cause: error }));

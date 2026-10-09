@@ -1,6 +1,7 @@
 import { HumanMessage } from '@langchain/core/messages';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { Command, interrupt, isGraphInterrupt } from '@langchain/langgraph';
+import { adaptLangGraph, firstGraphInterrupt, type GraphSnapshot } from './adapters/langgraph.js';
 
 import { DurableExecutionError, isDurableExecutionError, stableToolInputHash } from './tool-execution.js';
 import type { DurableChildRecord, SpawnSubagentInput, SpawnSubagentOptions } from './subagent.js';
@@ -67,22 +68,6 @@ export async function resumeBackgroundChild(
   return true;
 }
 
-interface ChildSnapshot {
-  config?: { configurable?: { checkpoint_id?: unknown } };
-  metadata?: { child_id?: unknown; child_attempt?: unknown; business_run_id?: unknown } | null;
-  tasks?: Array<{ interrupts?: Array<{ value: unknown }> }>;
-}
-
-interface ChildGraph {
-  getState(config: never): Promise<unknown>;
-  invoke(input: never, config: never): Promise<unknown>;
-}
-
-function firstInterrupt(value: unknown): { value: unknown } | undefined {
-  const snapshot = value as ChildSnapshot & { __interrupt__?: Array<{ value: unknown }> };
-  return snapshot.__interrupt__?.[0] ?? snapshot.tasks?.flatMap((task) => task.interrupts ?? [])[0];
-}
-
 /** Invoke an independently checkpointed attempt, outside the parent graph's inherited config. */
 export async function invokeDurableChildGraph(
   graphValue: unknown,
@@ -92,7 +77,8 @@ export async function invokeDurableChildGraph(
 ): Promise<unknown> {
   const execution = options.childExecution;
   if (!execution || !options.durable) throw new Error('Durable child attempt context is required');
-  const graph = graphValue as ChildGraph;
+  if (execution.record.status === 'cancelled') throw new DurableExecutionError('Cancelled child cannot resume its graph');
+  const graph = adaptLangGraph(graphValue);
   let record = execution.record;
   const threadId = `${record.threadId}:attempt:${record.attempt}`;
   const config = {
@@ -104,7 +90,7 @@ export async function invokeDurableChildGraph(
       child_id: record.id,
       child_attempt: record.attempt,
     },
-    durability: 'sync',
+    durability: 'sync' as const,
   };
   // LangGraph merges the ambient runnable config even when explicit configurable is given.
   // Replacing that ambient context also prevents nested graph read/checkpointer/namespace inheritance.
@@ -157,19 +143,19 @@ export async function invokeDurableChildGraph(
       // spawn invocation before transferring a newer child request into the same parent task.
       for (const previous of history) interrupt(previous.request);
     }
-    let snapshot = await isolated(() => graph.getState(config as never)) as ChildSnapshot;
+    let snapshot: GraphSnapshot = await isolated(() => graph.getState(config));
     const checkpointExists = snapshot.config?.configurable?.checkpoint_id !== undefined;
     if (checkpointExists && (snapshot.metadata?.child_id !== record.id ||
       snapshot.metadata?.child_attempt !== record.attempt || snapshot.metadata?.business_run_id !== options.runId)) {
       throw new Error('Child checkpoint belongs to a different invocation');
     }
     let graphInput: unknown = checkpointExists ? null : { messages: [new HumanMessage(input.task)] };
-    const paused = firstInterrupt(snapshot);
+    const paused = firstGraphInterrupt(snapshot);
     if (paused) graphInput = await approval(paused.value, snapshot.config?.configurable?.checkpoint_id);
     while (true) {
-      const result = await isolated(() => graph.invoke(graphInput as never, config as never));
-      snapshot = await isolated(() => graph.getState(config as never)) as ChildSnapshot;
-      const paused = firstInterrupt(result) ?? firstInterrupt(snapshot);
+      const result = await isolated(() => graph.invoke(graphInput, config));
+      snapshot = await isolated(() => graph.getState(config));
+      const paused = firstGraphInterrupt(result) ?? firstGraphInterrupt(snapshot);
       if (!paused) return result;
       graphInput = await approval(paused.value, snapshot.config?.configurable?.checkpoint_id);
     }

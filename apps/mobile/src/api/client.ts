@@ -144,9 +144,18 @@ export class ApiClient {
     });
   }
 
-  history(sessionId: string) {
+  async previewUrl(sessionId: string): Promise<string> {
+    const result = await this.request<{url: string}>(`/api/agent/sessions/${encodeURIComponent(sessionId)}/preview-token`, {method: 'POST'});
+    return `${this.baseUrl}${result.url}`;
+  }
+
+  history(sessionId: string, options: { cursor?: string; includeLatestEvents?: boolean; signal?: AbortSignal } = {}) {
+    const query = new URLSearchParams();
+    if (options.includeLatestEvents !== false) query.set('includeLatestEvents', '1');
+    if (options.cursor) query.set('cursor', options.cursor);
     return this.request<HistoryResponse>(
-      `/api/agent/sessions/${sessionId}/history?includeLatestEvents=1`,
+      `/api/agent/sessions/${encodeURIComponent(sessionId)}/history?${query}`,
+      { signal: options.signal },
     );
   }
 

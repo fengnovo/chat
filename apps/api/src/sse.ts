@@ -4,6 +4,8 @@ import { redactTelemetryValue } from '@repo/observability';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ApiServices } from './types.js';
+import { createSseWriter } from './sse-writer.js';
+import { createCoalescedRunner } from './chat-stream.js';
 
 function parseCursor(request: FastifyRequest): number {
   const query = request.query as { cursor?: string; startIndex?: string };
@@ -29,13 +31,14 @@ export async function streamAgentEvents(
 
   const telemetry = services.observability?.startSse('events');
   let cursor = parseCursor(request);
-  let flushing = false;
   let closed = false;
+  const writer = createSseWriter(reply.raw);
   let unsubscribe: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const finish = (reason: 'client' | 'server' | 'error') => {
     if (closed) return;
     closed = true;
+    writer.close();
     clearInterval(heartbeat);
     unsubscribe?.();
     telemetry?.finish(reason);
@@ -61,52 +64,45 @@ export async function streamAgentEvents(
   });
   reply.raw.flushHeaders();
 
-  const flush = async () => {
-    if (flushing || closed) return;
-    flushing = true;
-    try {
+  const flush = createCoalescedRunner(async () => {
+    if (closed) return true;
       let terminal = false;
       for (;;) {
-        const events = await services.repository.listEvents(request.auth, runId, cursor);
-        if (closed) return;
+        const events = await services.repository.listEvents(request.auth, runId, cursor, 500);
+        if (closed) return true;
         for (const event of events) {
           if (event.seq <= cursor) continue;
           cursor = event.seq;
           telemetry?.firstByte();
-          reply.raw.write(sseFrame(event));
+          if (!await writer.write(sseFrame(event))) return true;
         }
         if (events.length >= 500) continue;
         if (terminal) {
           finish('server');
-          break;
+          return true;
         }
         const latest = await services.repository.getRun(request.auth, runId);
         terminal = !!latest && ['completed', 'failed', 'cancelled'].includes(latest.status);
-        if (!terminal) break;
+        if (!terminal) {
+          if (!events.length) await writer.write(': heartbeat\n\n');
+          return false;
+        }
         // Terminal status and its final events commit together. Read once more
         // after observing that status so a completion racing this flush is delivered.
       }
-    } catch (error) {
-      fail(error);
-    } finally {
-      flushing = false;
-    }
-  };
+  });
 
   try {
     unsubscribe = await services.streamSubscriptions.subscribe(
       runEventsChannel(runId),
-      () => void flush(),
+      () => void flush().catch(fail),
       fail,
     );
     if (closed) { unsubscribe(); return; }
     await flush();
     if (closed) return;
     heartbeat = setInterval(() => {
-      if (!closed) {
-        reply.raw.write(': heartbeat\n\n');
-        void flush();
-      }
+      if (!closed) void flush().catch(fail);
     }, 15_000);
   } catch (error) {
     fail(error);

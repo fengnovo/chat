@@ -1,4 +1,4 @@
-import type { SessionPage, SessionSummary, WebSessionSummary } from './types';
+import type { SessionHistory, SessionPage, SessionSummary, WebSessionSummary } from './types';
 
 // 统一 fetch 入口：未登录（401）时跳转登录页；/login 页面内不跳转防止循环。
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
@@ -23,10 +23,10 @@ async function fetchSessionPage(cursor?: string, signal?: AbortSignal) {
     nextCursor: string | null;
   };
   return {
-    data: payload.data.filter(
-      (session): session is WebSessionSummary =>
-        typeof session.externalKey === 'string' && session.externalKey.length > 0,
-    ),
+    data: payload.data.map((session): WebSessionSummary => ({
+      ...session,
+      externalKey: session.externalKey || session.id,
+    })),
     nextCursor: payload.nextCursor,
   } satisfies SessionPage;
 }
@@ -37,11 +37,27 @@ type SessionFile = {
   operation: string;
 };
 
+export type SessionFilePage = { files: SessionFile[]; nextCursor?: string | null; hasMore?: boolean };
+
+export async function fetchSessionFilePage(sessionId: string, options: { cursor?: string; signal?: AbortSignal } = {}): Promise<SessionFilePage> {
+  const query = options.cursor ? `?${new URLSearchParams({ cursor: options.cursor })}` : '';
+  const response = await apiFetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/files${query}`, { signal: options.signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json() as Promise<SessionFilePage>;
+}
+
 async function fetchSessionFiles(sessionId: string, signal?: AbortSignal) {
   const response = await apiFetch(`/api/agent/sessions/${sessionId}/files`, { signal });
   if (!response.ok) return [];
   const payload = (await response.json()) as { files: SessionFile[] };
   return payload.files;
+}
+
+export async function fetchSessionHistoryPage(sessionId: string, options: { cursor?: string; signal?: AbortSignal } = {}): Promise<SessionHistory> {
+  const query = options.cursor ? `?${new URLSearchParams({ cursor: options.cursor })}` : '';
+  const response = await apiFetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/history${query}`, { signal: options.signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json() as Promise<SessionHistory>;
 }
 
 async function responseError(response: Response, fallback: string) {

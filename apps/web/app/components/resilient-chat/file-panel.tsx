@@ -274,19 +274,21 @@ function FilePreview({ file, previewUrl, isBuildPreview }: { file: TouchedFile; 
         <iframe
           className="file-browser-frame"
           title="构建预览"
+          sandbox="allow-scripts allow-forms allow-downloads"
           src={previewUrl}
         />
       ) : viewMode === 'browser' && runnable ? (
         <iframe
           className="file-browser-frame"
           title={`预览 ${file.path}`}
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts allow-forms allow-downloads"
           srcDoc={file.content ?? ''}
         />
       ) : previewUrl ? (
         <iframe
           className="file-browser-frame"
           title="实时预览"
+          sandbox="allow-scripts allow-forms allow-downloads"
           src={previewUrl}
         />
       ) : (
@@ -482,6 +484,9 @@ function TreeResizer({
 
 function FilePanel({
   files,
+  hasMoreFiles,
+  loadingMoreFiles,
+  onLoadMoreFiles,
   onClose,
   onResize,
   onResetWidth,
@@ -495,6 +500,9 @@ function FilePanel({
   openBuildPreview,
 }: {
   files: TouchedFile[];
+  hasMoreFiles?: boolean;
+  loadingMoreFiles?: boolean;
+  onLoadMoreFiles?: () => void;
   onClose: () => void;
   onResize: (width: number) => void;
   onResetWidth: () => void;
@@ -567,6 +575,11 @@ function FilePanel({
           <span className="file-panel-count">{files.length}</span>
         </div>
         <div className="file-panel-actions">
+          {hasMoreFiles && (
+            <button type="button" disabled={loadingMoreFiles} onClick={onLoadMoreFiles}>
+              {loadingMoreFiles ? '正在加载…' : '加载更多文件'}
+            </button>
+          )}
           <button
             aria-label={isWide ? '收起文件面板' : '展开文件面板'}
             className={`icon-button expand-toggle${isWide ? ' is-active' : ''}`}

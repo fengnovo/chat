@@ -31,7 +31,7 @@ export interface ChildExecutionRecord {
   threadId: string;
   input: unknown;
   background: boolean;
-  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
   attempt: number;
   feedback: string | null;
   attemptResult: { status: 'completed' | 'failed' | 'timeout'; summary: string; toolCalls: number } | null;
@@ -47,6 +47,15 @@ export class LeaseLostError extends Error {
 export class ExecutionIdentityError extends Error {
   readonly code = 'EXECUTION_IDENTITY_CONFLICT';
   constructor(message: string) { super(message); this.name = 'ExecutionIdentityError'; }
+}
+
+export class ExecutionCompatibilityError extends Error {
+  constructor(readonly code: 'RECOVERY_INCOMPATIBLE' | 'RECOVERY_DESCRIPTOR_MISSING', component: string) {
+    super(code === 'RECOVERY_DESCRIPTOR_MISSING'
+      ? `The ${component} execution descriptor required for safe continuation is missing. Start a new run after reviewing prior tool effects.`
+      : `The ${component} execution configuration changed. This run cannot continue safely; restore its original runtime or start a new run after reviewing prior tool effects.`);
+    this.name = 'ExecutionCompatibilityError';
+  }
 }
 
 function json(value: unknown): string {
@@ -116,6 +125,42 @@ export class DurableExecutionRepository {
 
   async assertLease(lease: RunExecutionLease): Promise<void> {
     await this.withLease(lease, async () => undefined);
+  }
+
+  async bindExecutionDescriptor(lease: RunExecutionLease, descriptor: Record<string, unknown>, component: 'host' | 'agent' = 'host'): Promise<void> {
+    if (!descriptor || Array.isArray(descriptor) || Object.keys(descriptor).length === 0) throw new ExecutionIdentityError('Execution descriptor must be a nonempty JSON object.');
+    const encoded = json(descriptor);
+    await this.withLease(lease, async (client) => {
+      const selected = await client.query(
+        `SELECT execution_descriptor->$3 AS descriptor,(execution_descriptor->$3)=$4::jsonb AS compatible,
+         execution_descriptor->'agent' AS agent_descriptor,
+         execution_descriptor->'contractVersion'='1'::jsonb AS current_contract,
+         last_event_seq=0
+           AND NOT EXISTS(SELECT 1 FROM tool_executions t WHERE t.tenant_id=$1 AND t.run_id=$2)
+           AND NOT EXISTS(SELECT 1 FROM child_executions c WHERE c.tenant_id=$1 AND c.root_run_id=$2) AS no_execution
+         FROM agent_runs WHERE tenant_id=$1 AND id=$2`,
+        [lease.tenantId, lease.runId, component, encoded],
+      );
+      const row = selected.rows[0]!;
+      // New Runs are marked at creation. Their agent component is committed
+      // before graph construction, so its absence proves preparation has not
+      // reached graph/tool execution. A crash in that phase can safely finish
+      // preparation; unmarked legacy Runs have no such proof.
+      const preparing = row.current_contract === true && row.no_execution === true && !row.agent_descriptor && lease.input.kind === 'start';
+      if (row.descriptor) {
+        if (!row.compatible) throw new ExecutionCompatibilityError('RECOVERY_INCOMPATIBLE', component);
+        // Before any host preparation, refuse checkpoints without a complete prior runtime identity.
+        if (component === 'host' && (lease.recovery || lease.input.kind !== 'start') && !row.agent_descriptor && !preparing) {
+          throw new ExecutionCompatibilityError('RECOVERY_DESCRIPTOR_MISSING', 'agent');
+        }
+        return;
+      }
+      if ((lease.recovery && !preparing) || lease.input.kind !== 'start') throw new ExecutionCompatibilityError('RECOVERY_DESCRIPTOR_MISSING', component);
+      await client.query(
+        `UPDATE agent_runs SET execution_descriptor=jsonb_set(COALESCE(execution_descriptor,'{}'::jsonb),ARRAY[$3::text],$4::jsonb) WHERE tenant_id=$1 AND id=$2`,
+        [lease.tenantId, lease.runId, component, encoded],
+      );
+    });
   }
 
   private async invocationInput(client: PoolClient, row: QueryResultRow): Promise<RunExecutionLease['input'] | null> {
@@ -362,8 +407,10 @@ export class DurableExecutionRepository {
   }
 
   async saveChild(lease: RunExecutionLease, id: string, patch: Partial<ChildExecutionRecord>): Promise<ChildExecutionRecord> {
-    const columns: Record<string, string> = { threadId: 'thread_id', status: 'status', attempt: 'attempt', feedback: 'feedback', attemptResult: 'attempt_result', summary: 'summary', review: 'review' };
+    const columns: Record<string, string> = { status: 'status', attempt: 'attempt', feedback: 'feedback', attemptResult: 'attempt_result', summary: 'summary', review: 'review' };
     return this.withLease(lease, async (client) => {
+      const current = await client.query('SELECT status FROM agent_runs WHERE tenant_id=$1 AND id=$2', [lease.tenantId, lease.runId]);
+      if (terminalStatuses.includes(current.rows[0]?.status)) throw new ExecutionIdentityError('Cannot update child execution after its parent is terminal.');
       const values: unknown[] = [lease.tenantId, lease.runId, id, lease.epoch];
       const assignments = ['lease_epoch=$4', 'updated_at=clock_timestamp()'];
       for (const [key, value] of Object.entries(patch)) {

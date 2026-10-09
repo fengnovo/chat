@@ -245,12 +245,13 @@ test('schema must preserve the configured external idempotency argument before e
   assert.equal(effects, 0);
 });
 
-test('explicit replay policy overrides builtin and MCP metadata defaults', async () => {
+test('only trusted builtins and configured policies establish replay safety', async () => {
   for (const [name, annotations, policy, expected] of [
     ['read_file', undefined, undefined, 'safe'],
     ['read_file', undefined, { replaySafe: false }, 'unsafe'],
     ['execute', undefined, undefined, 'unsafe'],
-    ['external', { readOnlyHint: true }, undefined, 'safe'],
+    ['external', { readOnlyHint: true }, undefined, 'unsafe'],
+    ['external', { idempotentHint: true }, undefined, 'unsafe'],
     ['external', { idempotentHint: true }, { replaySafe: false }, 'unsafe'],
   ] as const) {
     const store = new Ledger();
@@ -262,15 +263,30 @@ test('explicit replay policy overrides builtin and MCP metadata defaults', async
   }
 });
 
-test('explicit replay safety configuration also governs records created under an older policy', async () => {
-  const store = new Ledger();
-  await store.begin({ scopeId: 'root', toolCallId: 'call-1', toolName: 'external_write', inputHash: stableToolInputHash({}), input: {}, replayPolicy: 'unsafe' });
-  const middleware = createToolExecutionMiddleware({ store, scopeId: 'root', policies: { external_write: { replaySafe: true } } });
-  let effects = 0;
-  await middleware.wrapToolCall!(request('external_write'), async () => { effects++; return new ToolMessage({ content: 'saved', tool_call_id: 'call-1' }); });
-  assert.equal(effects, 1);
-  assert.equal(store.records.get('root:call-1')?.status, 'succeeded');
-});
+for (const [stored, current, automatic] of [
+  ['unsafe', true, false], ['safe', false, false], ['safe', undefined, false], ['safe', true, true],
+] as const) {
+  test(`automatic replay requires stored and current trusted safety (${stored}/${current})`, async () => {
+    const store = new Ledger();
+    await store.begin({ scopeId: 'root', toolCallId: 'call-1', toolName: 'external_write', inputHash: stableToolInputHash({}), input: {}, replayPolicy: stored });
+    let effects = 0;
+    const externalTool = tool(async () => { effects++; return 'saved'; }, {
+      name: 'external_write', description: 'External write', schema: z.object({ key: z.string().optional() }),
+      metadata: { annotations: { readOnlyHint: true, idempotentHint: true } },
+    });
+    const agent = createAgent({
+      model: new FakeToolCallingModel({ toolCalls: [[{ name: 'external_write', id: 'call-1', args: {} }], []] }),
+      tools: [externalTool], checkpointer: new MemorySaver(),
+      middleware: [createToolExecutionMiddleware({ store, scopeId: 'root', autoApproveTools: true,
+        policies: { external_write: { idempotencyKeyArgument: 'key', ...(current === undefined ? {} : { replaySafe: current }) } },
+      })],
+    });
+    const result = await agent.invoke({ messages: [new HumanMessage('write')] }, { configurable: { thread_id: `policy-${stored}-${current}` } });
+    assert.equal(effects, automatic ? 1 : 0);
+    assert.equal(result.__interrupt__?.length ?? 0, automatic ? 0 : 1);
+    assert.equal(store.records.get('root:call-1')?.status, automatic ? 'succeeded' : 'started');
+  });
+}
 
 test('a cached write_todos Command still applies its state update in a real agent', async () => {
   const store = new Ledger();
@@ -306,7 +322,7 @@ test('an unsafe tool error leaves its graph checkpoint resumable and requires ap
   assert.equal(store.records.get('root:call-1')?.status, 'succeeded');
 });
 
-test('session approval applies to a paused unsafe retry and survives another lost response', async () => {
+test('session approval cannot authorize another unsafe retry after an approved response is lost', async () => {
   const store = new Ledger();
   await store.begin({ scopeId: 'root', toolCallId: 'call-1', toolName: 'external_write', inputHash: stableToolInputHash({}), input: {}, replayPolicy: 'unsafe' });
   await store.uncertain('root:call-1');
@@ -332,14 +348,21 @@ test('session approval applies to a paused unsafe retry and survives another los
   } }), config), isDurableExecutionError);
   assert.equal(writes, 1);
   const recovered = await build(true).invoke(null, config);
-  assert.equal(recovered.__interrupt__?.length ?? 0, 0);
-  assert.equal(writes, 2);
-  assert.equal(store.records.get('root:call-1')?.retryCount, 2);
+  assert.equal(recovered.__interrupt__?.length, 1);
+  assert.equal(writes, 1);
+  assert.equal(store.records.get('root:call-1')?.retryCount, 1);
   assert.equal(store.records.get('root:call-1')?.replayPolicy, 'unsafe');
+  assert.equal(store.records.get('root:call-1')?.status, 'uncertain');
+  const nextApproval = recovered.__interrupt__![0]!.value as { durableApprovalId: string };
+  assert.equal(nextApproval.durableApprovalId, 'tool-root:call-1-1');
+  await build(true).invoke(new Command({ resume: {
+    decisions: [{ type: 'approve' }], durableApprovalId: nextApproval.durableApprovalId,
+  } }), config);
+  assert.equal(writes, 2);
   assert.equal(store.records.get('root:call-1')?.status, 'succeeded');
 });
 
-test('session authorization does not carry into another manual execution scope', async () => {
+test('every execution scope requires explicit approval for unknown unsafe effects', async () => {
   const store = new Ledger();
   for (const scopeId of ['authorized', 'manual']) {
     await store.begin({ scopeId, toolCallId: 'call-1', toolName: 'external_write', inputHash: stableToolInputHash({}), input: {}, replayPolicy: 'unsafe' });
@@ -354,9 +377,9 @@ test('session authorization does not carry into another manual execution scope',
       checkpointer: new MemorySaver(),
     });
     const result = await agent.invoke({ messages: [new HumanMessage('write')] }, { configurable: { thread_id: scopeId } });
-    assert.equal(result.__interrupt__?.length ?? 0, scopeId === 'authorized' ? 0 : 1);
+    assert.equal(result.__interrupt__?.length, 1);
   }
-  assert.equal(writes, 1);
+  assert.equal(writes, 0);
   assert.equal(store.records.get('manual:call-1')?.status, 'uncertain');
 });
 

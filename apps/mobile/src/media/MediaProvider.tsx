@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   BackHandler,
   Image,
@@ -249,15 +250,31 @@ export function MediaProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const web = useRef<WebView>(null);
+  const requestGeneration = useRef(0);
   useEffect(() => {
+    requestGeneration.current += 1;
     setBrowser(null);
     setImage(null);
+    return () => { requestGeneration.current += 1; };
   }, [user?.id]);
   const openLink = useCallback((url: string, sessionId: string) => {
     const resolved = resolveLink(url, api.baseUrl, sessionId);
     if (!resolved) return;
-    setBrowser({ url: resolved, visible: true });
-    setError(null);
+    const target = new URL(resolved);
+    const isPreview = target.origin === new URL(api.baseUrl).origin && /^\/api\/agent\/sessions\/[^/]+\/preview\/?$/.test(target.pathname);
+    const generation = ++requestGeneration.current;
+    if (isPreview) {
+      void api.previewUrl(sessionId).then((previewUrl) => {
+        if (generation !== requestGeneration.current) return;
+        setBrowser({url: previewUrl, visible: true});
+        setError(null);
+      }).catch(() => {
+        if (generation === requestGeneration.current) Alert.alert('页面预览', '无法打开预览，请确认会话仍可访问。');
+      });
+    } else {
+      setBrowser({ url: resolved, visible: true });
+      setError(null);
+    }
   }, []);
   const actions = useMemo(
     () => ({ openLink, openImage: setImage }),

@@ -39,6 +39,7 @@ export interface ChatState {
   active: ActiveRun | null;
   loadingHistory: boolean;
   error: string | null;
+  historyPage: { sessionId: string; cursor: string | null; beforeMessageId: string | null } | null;
 }
 
 export type ChatAction =
@@ -47,7 +48,9 @@ export type ChatAction =
       items: ChatItem[];
       activeRunId: string | null;
       snapshot?: HistoryResponse;
+      preserveOlder?: boolean;
     }
+  | { type: 'history-page'; items: ChatItem[]; nextCursor?: string | null }
   | {
       type: 'run-started';
       runId: string;
@@ -279,7 +282,15 @@ export function reducer(state: ChatState, action: ChatAction): ChatState {
     case 'reset':
       return initialState;
     case 'history':
-      if (action.snapshot) return restoreHistory(action.snapshot);
+      if (action.snapshot) {
+        const restored = restoreHistory(action.snapshot);
+        if (!action.preserveOlder) return restored;
+        const ids = new Set(restored.items.map((item) => item.id));
+        const refreshedRuns = new Set(action.snapshot.messages.map((message) => message.runId));
+        if (action.snapshot.latestRun) refreshedRuns.add(action.snapshot.latestRun.id);
+        return { ...restored, items: [...state.items.filter((item) => !ids.has(item.id) &&
+          !refreshedRuns.has(item.run?.runId ?? item.id.replace(/^(user|message)-/, ''))), ...restored.items] };
+      }
       return {
         ...state,
         error: null,
@@ -288,6 +299,24 @@ export function reducer(state: ChatState, action: ChatAction): ChatState {
         // 有活跃 run 时：历史里的用户消息保留，正文交给事件流按 seq 全量重放重建。
         active: action.activeRunId ? emptyActive(action.activeRunId) : null,
       };
+    case 'history-page': {
+      const current = new Map(state.items.map((item) => [item.id, item]));
+      const ids = new Set(action.items.map((item) => item.id));
+      // Refreshed pages can leave a gap after already cached older messages.
+      // Insert before the page boundary, retaining server order and live values.
+      const found = state.items.findIndex((item) => item.id === state.historyPage?.beforeMessageId);
+      const boundary = found >= 0 ? found : state.historyPage ? state.items.length : 0;
+      return { ...state, items: [
+        ...state.items.slice(0, boundary).filter((item) => !ids.has(item.id)),
+        ...action.items.map((item) => {
+          const live = state.active && !state.active.finished &&
+            (item.id === `user-${state.active.runId}` || item.id === `message-${state.active.runId}`);
+          return live ? current.get(item.id) ?? item : item;
+        }),
+        ...state.items.slice(boundary).filter((item) => !ids.has(item.id)),
+      ], historyPage: state.historyPage ? { ...state.historyPage, cursor: action.nextCursor ?? null,
+        beforeMessageId: action.items[0]?.id ?? state.historyPage.beforeMessageId } : null };
+    }
     case 'run-started':
       if (state.active?.runId === action.runId) return state;
       return {
@@ -367,6 +396,7 @@ export const initialState: ChatState = {
   active: null,
   loadingHistory: true,
   error: null,
+  historyPage: null,
 };
 
 /** One stable assistant row owns both the live response and its completed process. */
@@ -396,6 +426,8 @@ export function restoreHistory(history: HistoryResponse): ChatState {
   const latest = history.latestRun;
   const replay = latest && history.latestRunEvents !== undefined;
   let state: ChatState = {
+    historyPage: { sessionId: history.session.id, cursor: history.hasMore ? history.nextCursor ?? null : null,
+      beforeMessageId: history.messages[0]?.id ?? null },
     items: history.messages
       .filter(
         (message) =>
@@ -421,8 +453,17 @@ export function restoreHistory(history: HistoryResponse): ChatState {
     error: null,
   };
   if (!latest || !replay) return state;
-  for (const event of history.latestRunEvents!)
+  const projection = history.latestRunProjection;
+  if (projection && state.active) {
+    state = { ...state, active: { ...state.active, assistantText: projection.text, reasoning: projection.reasoning } };
+  }
+  for (const event of history.latestRunEvents!) {
+    // Text at/before the projection cursor is already materialized; replay control cards.
+    if (projection && event.seq <= projection.lastSeq &&
+      ['assistant.delta', 'assistant.snapshot', 'assistant.reasoning'].includes(event.type)) continue;
     state = applyEvent(state, event);
+  }
+  if (projection && state.active) state = { ...state, active: { ...state.active, lastSeq: Math.max(state.active.lastSeq, projection.lastSeq) } };
   if (!isRunActive(latest.status)) {
     state = finalize(
       state,

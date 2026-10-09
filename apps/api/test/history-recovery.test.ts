@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import Fastify from 'fastify';
 import { registerRoutes } from '../src/routes.js';
+import { applyMessageEvent, emptyMessageProjection, type AgentEvent } from '@repo/contracts';
 
 test('history folds snapshots as replacements including empty recovered text', async (t) => {
   const app = Fastify();
@@ -13,8 +14,11 @@ test('history folds snapshots as replacements including empty recovered text', a
   ];
   await registerRoutes(app, { config: {}, repository: {
     getSession: async () => ({ id: 'session' }),
-    listSessionRuns: async () => [{ id: 'run', userMessage: 'hello', createdAt: 'now', updatedAt: 'now' }],
-    listEvents: async () => events,
+    history: {
+      pageRuns: async () => ({ runs: [{ id: 'run', userMessage: 'hello', createdAt: 'now', updatedAt: 'now',
+        projection: events.reduce((projection, event) => applyMessageEvent(projection, event as AgentEvent), emptyMessageProjection()) }], hasMore: false, nextCursor: null }),
+      latestRun: async () => null,
+    },
     listChatAttachmentsByRuns: async () => new Map(),
   } } as never);
   const response = await app.inject('/api/agent/sessions/session/history');

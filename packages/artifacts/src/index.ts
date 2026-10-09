@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -307,6 +308,23 @@ export class S3ArtifactStore {
       new GetObjectCommand({ Bucket: this.config.bucket, Key: objectKey }),
       { expiresIn: expiresInSeconds },
     );
+  }
+
+  /** 服务端读取私有对象；用于鉴权 API 流式响应，不签发可转发的下载链接。 */
+  async getObjectStream(objectKey: string): Promise<{
+    body: Readable;
+    contentLength?: number;
+    contentEncoding?: string;
+  }> {
+    const object = await this.internalClient.send(
+      new GetObjectCommand({ Bucket: this.config.bucket, Key: objectKey }),
+    );
+    if (!(object.Body instanceof Readable)) throw new Error('Object body is not a Node stream');
+    return {
+      body: object.Body,
+      ...(object.ContentLength !== undefined ? { contentLength: object.ContentLength } : {}),
+      ...(object.ContentEncoding ? { contentEncoding: object.ContentEncoding } : {}),
+    };
   }
 
   /** 删除单个对象存储文件；对象不存在时静默成功（幂等）。 */

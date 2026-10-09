@@ -62,10 +62,11 @@ test('mobile history optionally restores the latest run persisted events', async
     config: {},
     repository: {
       getSession: async () => ({ id: 'session' }),
-      listSessionRuns: async () => [
-        { id: 'run', status: 'waiting_question', userMessage: 'hello' },
-      ],
-      listEvents: async () => events,
+      history: {
+        pageRuns: async () => ({ runs: [{ id: 'run', status: 'waiting_question', userMessage: 'hello', projection: { text: '', reasoning: '', citations: [], lastSeq: 1 } }], hasMore: false, nextCursor: null }),
+        latestRun: async () => ({ id: 'run', status: 'waiting_question', lastEventSeq: 1, projection: { text: '', reasoning: '', citations: [], lastSeq: 1 } }),
+        latestEvents: async () => events,
+      },
       listChatAttachmentsByRuns: async () => new Map(),
     },
   } as never);
@@ -86,9 +87,11 @@ test('opening legacy untitled history repairs the title from the first user run'
     config: {},
     repository: {
       getSession: async () => ({ id: 's', title }),
-      listSessionRuns: async () => [
-        { id: 'r', userMessage: '原始问题\n详细描述' },
-      ],
+      history: {
+        firstUserRun: async () => ({ id: 'r', userMessage: '原始问题\n详细描述' }),
+        pageRuns: async () => ({ runs: [], hasMore: false, nextCursor: null }),
+        latestRun: async () => null,
+      },
       setInitialSessionTitle: async (
         _: unknown,
         _id: string,

@@ -1,0 +1,69 @@
+--- a/apps/api/src/routes.ts
++++ b/apps/api/src/routes.ts
+@@ -968,7 +968,7 @@
+     return reply.code(204).send();
+   });
+ 
+-  /** 附件内容统一入口：校验归属后 302 到新鲜的预签名下载地址，不向前端暴露长期 URL。 */
++  /** 附件内容每次校验身份及归属，直接返回私有对象，不暴露预签名下载地址。 */
+   app.get('/api/agent/chat-attachments/:id/content', async (request, reply) => {
+     const { id } = request.params as { id: string };
+     const attachment = await services.repository.getChatAttachment(request.auth, id);
+@@ -976,11 +976,19 @@
+     if (attachment.status !== 'ready') {
+       return reply.code(409).send({ error: 'attachment_not_ready' });
+     }
+-    const downloadUrl = await services.artifacts.createDownloadUrl(
+-      attachment.objectKey,
+-      120,
+-    );
+-    return reply.redirect(downloadUrl, 302);
++    const object = await services.artifacts.getObjectStream(attachment.objectKey);
++    reply.header('cache-control', 'private, no-store');
++    reply.header('x-content-type-options', 'nosniff');
++    reply.type(attachment.contentType);
++    if (object.contentLength !== undefined) reply.header('content-length', object.contentLength);
++    if (object.contentEncoding) reply.header('content-encoding', object.contentEncoding);
++    // 文本／HTML／SVG 等文件不能在带登录 Cookie 的 API 同源下执行。
++    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(attachment.contentType)) {
++      const filename = encodeURIComponent(attachment.filename).replace(/['()*]/g,
++        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
++      reply.header('content-disposition', `attachment; filename*=UTF-8''${filename}`);
++    }
++    return reply.send(object.body);
+   });
+ 
+   const chatRequestSchema = z.object({
+diff --git a/packages/artifacts/src/index.ts b/packages/artifacts/src/index.ts
+index 5564862..4221b35 100644
+--- a/packages/artifacts/src/index.ts
++++ b/packages/artifacts/src/index.ts
+@@ -1,3 +1,4 @@
++import { Readable } from 'node:stream';
+ import {
+   AbortMultipartUploadCommand,
+   CompleteMultipartUploadCommand,
+@@ -309,6 +310,23 @@ export class S3ArtifactStore {
+     );
+   }
+ 
++  /** 服务端读取私有对象；用于鉴权 API 流式响应，不签发可转发的下载链接。 */
++  async getObjectStream(objectKey: string): Promise<{
++    body: Readable;
++    contentLength?: number;
++    contentEncoding?: string;
++  }> {
++    const object = await this.internalClient.send(
++      new GetObjectCommand({ Bucket: this.config.bucket, Key: objectKey }),
++    );
++    if (!(object.Body instanceof Readable)) throw new Error('Object body is not a Node stream');
++    return {
++      body: object.Body,
++      ...(object.ContentLength !== undefined ? { contentLength: object.ContentLength } : {}),
++      ...(object.ContentEncoding ? { contentEncoding: object.ContentEncoding } : {}),
++    };
++  }
++
+   /** 删除单个对象存储文件；对象不存在时静默成功（幂等）。 */
+   async deleteObject(objectKey: string): Promise<void> {
+     await this.internalClient

@@ -201,6 +201,59 @@ test('rehydration runs unfinished background children and returns completed summ
   ]);
 });
 
+test('cancelled children cannot execute again, accept approvals, or rehydrate', async () => {
+  const store = memoryStore();
+  const cancelled = await store.ensure('cancelled', { ...input, background: true }, true);
+  await store.save(cancelled.id, { status: 'cancelled' as DurableChildRecord['status'], summary: null,
+    review: { kind: 'interrupt', request: {}, interruptId: 'cancelled-approval', checkpointId: 'checkpoint-1' } });
+  let executions = 0;
+  const loopDeps = deps(async () => { executions++; return { status: 'completed', summary: 'Incorrect restart', toolCalls: 0 }; });
+  const summary = await runSpawnLoop(options(store), { ...input, background: true }, { toolCall: { id: 'cancelled' } }, loopDeps);
+  assert.match(summary, /取消|cancel/i);
+  assert.equal(await subagent.resumeBackgroundChild(options(store), { decisions: [{ type: 'approve' }] }, 'cancelled-approval'), false);
+  const context = createBackgroundRunContext();
+  const spawn = createSpawnSubagentTool(options(store), { run: loopDeps.run });
+  const cancelledResult = await spawn.invoke({ name: 'spawn_subagent', type: 'tool_call', id: 'cancelled', args: { ...input, background: true } },
+    { configurable: { backgroundCtx: context } });
+  assert.match(String(cancelledResult.content), /随主任务取消/);
+  await subagent.rehydrateBackgroundChildren(options(store), context, loopDeps);
+  assert.deepEqual(await context.settled(), []);
+  assert.equal(executions, 0);
+  assert.equal(store.records.get(cancelled.id)?.status, 'cancelled');
+  const record = await store.get(cancelled.id);
+  assert.ok(record);
+  await assert.rejects(() => subagent.invokeDurableChildGraph({
+    getState: async () => ({}), invoke: async () => { executions++; return {}; },
+  }, input, { ...options(store), childExecution: { record, config: {}, background: true } }), /cancel/i);
+  assert.equal(executions, 0);
+});
+
+test('local background abort preserves unfinished intent for recovery instead of completing it', async () => {
+  const store = memoryStore();
+  const pending = await store.ensure('recoverable-stop', { ...input, background: true }, true);
+  const context = createBackgroundRunContext();
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => { started = resolve; });
+  await subagent.rehydrateBackgroundChildren(options(store), context, {
+    run: async (opts) => {
+      started();
+      await new Promise<void>((resolve) => opts.signal!.addEventListener('abort', () => resolve(), { once: true }));
+      return { status: 'completed', summary: 'Incomplete after abort', toolCalls: 0 };
+    },
+  });
+  await ready;
+  await context.abortAll();
+  await assert.rejects(() => context.settled(), subagent.isDurableChildError);
+  assert.equal(store.records.get(pending.id)?.status, 'running');
+  assert.equal(store.records.get(pending.id)?.attemptResult, null);
+  const recovered = createBackgroundRunContext();
+  await subagent.rehydrateBackgroundChildren(options(store), recovered, {
+    run: async () => ({ status: 'completed', summary: 'Recovered', toolCalls: 0 }),
+    review: async () => ({ skipped: true }),
+  });
+  assert.equal((await recovered.settled())[0]?.summary, 'Recovered');
+});
+
 test('background child approval is persisted and resumed into the same independent graph', async () => {
   const store = memoryStore();
   const record = await store.ensure('approval', { ...input, background: true }, true);

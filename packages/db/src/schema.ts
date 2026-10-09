@@ -135,6 +135,7 @@ export const agentRuns = pgTable(
     leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
     workerId: text('worker_id'),
     executionInput: jsonb('execution_input'),
+    executionDescriptor: jsonb('execution_descriptor'),
     checkpointId: text('checkpoint_id'),
     recoveryAttempts: integer('recovery_attempts').notNull().default(0),
     legacyExecution: boolean('legacy_execution').notNull().default(false),
@@ -142,6 +143,7 @@ export const agentRuns = pgTable(
     continuation: boolean('continuation').notNull().default(false),
     knowledgeBaseIds: uuid('knowledge_base_ids').array().notNull().default([]),
     idempotencyKey: text('idempotency_key'),
+    requestFingerprint: text('request_fingerprint'),
     lastEventSeq: integer('last_event_seq').notNull().default(0),
     cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true }),
     errorCode: text('error_code'),
@@ -152,8 +154,10 @@ export const agentRuns = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex('agent_runs_tenant_idempotency_idx').on(
+    uniqueIndex('agent_runs_scoped_idempotency_idx').on(
       table.tenantId,
+      table.userId,
+      table.sessionId,
       table.idempotencyKey,
     ),
     index('agent_runs_tenant_created_idx').on(table.tenantId, table.createdAt),

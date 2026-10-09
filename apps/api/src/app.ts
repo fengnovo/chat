@@ -16,6 +16,7 @@ import type { ApiConfig } from './config.js';
 import { registerOAuthRoutes } from './oauth-routes.js';
 import { RunOutboxDispatcher } from './outbox.js';
 import { resolveRateLimit } from './rate-limit.js';
+import { previewCapabilityPath, verifyPreviewAccess } from './preview-access.js';
 import { registerRoutes } from './routes.js';
 import { registerKnowledgeRoutes } from './knowledge-routes.js';
 import { registerRagRoutes } from './rag-routes.js';
@@ -128,16 +129,16 @@ export async function buildApp(options: BuildAppOptions) {
     '/api/clipboard',
     // OAuth 社交登录入口与回调均为匿名。
     '/api/auth/oauth/providers',
-    // Preview routes serve static files from sandbox; iframe resources don't carry cookies.
-    '/api/agent/sessions/:sessionId/preview',
-    '/api/agent/sessions/:sessionId/preview/*',
   ]);
   app.decorateRequest('auth');
   app.addHook('preHandler', async (request, reply) => {
     const pathname = request.url.split('?')[0] ?? request.url;
     if (request.url.startsWith('/health/')) return;
-    // Preview routes are public but origin-restricted; skip auth to allow iframe resource loading.
-    if (pathname.startsWith('/api/agent/sessions/') && pathname.includes('/preview')) {
+    const capability = request.method === 'GET' ? previewCapabilityPath(pathname) : null;
+    if (capability) {
+      const auth = verifyPreviewAccess(options.config, capability.token, capability.sessionId);
+      if (!auth) throw new AuthenticationError('Invalid or expired preview access');
+      request.auth = auth;
       return;
     }
     // OAuth 发起与回调路径无需鉴权。

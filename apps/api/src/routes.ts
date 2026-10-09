@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, stat, readdir } from 'node:fs/promises';
 import { rm } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 import {
@@ -33,6 +31,7 @@ import { redactTelemetryValue } from '@repo/observability';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { registerPreviewRoutes } from './preview-routes.js';
 import { streamWorkflowRun } from './chat-stream.js';
 import { startRunEnqueue } from './observability.js';
 import { streamAgentEvents } from './sse.js';
@@ -442,32 +441,31 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     let session = await services.repository.getSession(request.auth, sessionId);
     if (!session) return reply.code(404).send({ error: 'session_not_found' });
 
-    const runs = await services.repository.listSessionRuns(request.auth, sessionId);
+    const parsed = z.object({
+      limit: z.coerce.number().int().min(1).max(50).default(20),
+      cursor: z.string().max(512).optional(),
+      includeLatestEvents: z.enum(['0', '1']).optional(),
+    }).safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_history_page' });
+    let page;
+    try {
+      page = await services.repository.history.pageRuns(request.auth, sessionId, { limit: parsed.data.limit, ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}) });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'invalid_history_cursor') return reply.code(400).send({ error: 'invalid_history_cursor' });
+      throw error;
+    }
+    const runs = page.runs;
     if (session.title === '新会话') {
-      const first = runs.find(run => !run.continuation);
+      const first = await services.repository.history.firstUserRun(request.auth, sessionId);
       const title = first?.userMessage.trim().split('\n')[0]?.slice(0, 120);
       if (title) session = await services.repository.setInitialSessionTitle(request.auth, sessionId, title) ?? session;
     }
-    const eventGroups = await Promise.all(
-      runs.map((run) => services.repository.listEvents(request.auth, run.id, 0, 100_000)),
-    );
     const attachmentsByRun = await services.repository.listChatAttachmentsByRuns(
       request.auth,
       runs.map((run) => run.id),
     );
-    const messages = runs.flatMap((run, index) => {
-      const events = eventGroups[index] ?? [];
-      const assistantText = events.reduce((text, event) => {
-        if (event.type === 'assistant.snapshot') return event.text;
-        return event.type === 'assistant.delta' ? text + event.text : text;
-      }, '');
-      const reasoning = events
-        .filter((event) => event.type === 'assistant.reasoning')
-        .map((event) => event.text)
-        .join('');
-      const citations = events
-        .filter((event) => event.type === 'retrieval.completed')
-        .flatMap((event) => event.citations);
+    const messages = runs.flatMap((run) => {
+      const { text: assistantText, reasoning, citations } = run.projection;
       const attachments = (attachmentsByRun.get(run.id) ?? []).map(attachmentHistoryView);
       return [
         // 续跑 run 的 user_message 是服务端合成的内部指令，不来自用户，
@@ -500,12 +498,19 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
       ];
     });
 
+    const latest = await services.repository.history.latestRun(request.auth, sessionId);
+    const { projection: latestRunProjection, ...latestRun } = latest ?? { projection: null };
+    const latestRunEvents = parsed.data.includeLatestEvents === '1' && latest
+      ? await services.repository.history.latestEvents(request.auth, latest.id, 500)
+      : [];
     return {
       session,
       messages,
-      latestRun: runs.at(-1) ?? null,
-      ...((request.query as {includeLatestEvents?: string}).includeLatestEvents === '1'
-        ? { latestRunEvents: eventGroups.at(-1) ?? [] }
+      latestRun: latest ? latestRun : null,
+      nextCursor: page.nextCursor,
+      hasMore: page.hasMore,
+      ...(parsed.data.includeLatestEvents === '1'
+        ? { latestRunEvents, latestRunProjection, latestRunEventsTruncated: Boolean(latest && latest.lastEventSeq > latestRunEvents.length) }
         : {}),
     };
   });
@@ -515,43 +520,14 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     const session = await services.repository.getSession(request.auth, sessionId);
     if (!session) return reply.code(404).send({ error: 'session_not_found' });
 
-    const runs = await services.repository.listSessionRuns(request.auth, sessionId);
-    const eventGroups = await Promise.all(
-      runs.map((run) => services.repository.listEvents(request.auth, run.id, 0, 100_000)),
-    );
-
-    const fileOps = new Map<string, { path: string; content: string | null; operation: string }>();
-    for (const events of eventGroups) {
-      for (const event of events) {
-        if (event.type !== 'tool.started') continue;
-        const tool = event.tool;
-        if (
-          tool !== 'write_file' &&
-          tool !== 'edit_file' &&
-          tool !== 'read_file' &&
-          tool !== 'delete'
-        ) {
-          continue;
-        }
-        const args =
-          event.input && typeof event.input === 'object'
-            ? (event.input as Record<string, unknown>)
-            : {};
-        const filePath = String(args.file_path ?? args.path ?? '').trim();
-        if (!filePath) continue;
-
-        let content: string | null = fileOps.get(filePath)?.content ?? null;
-        if (tool === 'write_file' || tool === 'edit_file') {
-          const raw = args.content;
-          if (typeof raw === 'string') content = raw;
-        }
-        fileOps.set(filePath, { path: filePath, content, operation: tool });
-      }
+    const parsed = z.object({ limit: z.coerce.number().int().min(1).max(200).default(100), cursor: z.string().max(2048).optional() }).safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_files_page' });
+    try {
+      return await services.repository.history.listFiles(request.auth, sessionId, { limit: parsed.data.limit, ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}) });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'invalid_files_cursor') return reply.code(400).send({ error: 'invalid_files_cursor' });
+      throw error;
     }
-
-    return {
-      files: [...fileOps.values()].sort((a, b) => a.path.localeCompare(b.path)),
-    };
   });
 
   app.post('/api/agent/sessions/:sessionId/runs', async (request, reply) => {
@@ -610,6 +586,12 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   app.get('/api/agent/runs/:runId/events', async (request, reply) => {
     const { runId } = request.params as { runId: string };
     return streamAgentEvents(request, reply, services, runId);
+  });
+
+  app.get('/api/agent/runs/:runId/tasks', async (request, reply) => {
+    const { runId } = z.object({runId:z.uuid()}).parse(request.params);
+    const tasks = await services.repository.listRunTasks(request.auth, runId);
+    return tasks ?? reply.code(404).send({error:'run_not_found'});
   });
 
   app.post('/api/agent/runs/:runId/approvals/:interruptId', async (request, reply) => {
@@ -968,7 +950,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     return reply.code(204).send();
   });
 
-  /** 附件内容统一入口：校验归属后 302 到新鲜的预签名下载地址，不向前端暴露长期 URL。 */
+  /** 附件内容每次校验身份及归属，直接返回私有对象，不暴露预签名下载地址。 */
   app.get('/api/agent/chat-attachments/:id/content', async (request, reply) => {
     const { id } = request.params as { id: string };
     const attachment = await services.repository.getChatAttachment(request.auth, id);
@@ -976,11 +958,19 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     if (attachment.status !== 'ready') {
       return reply.code(409).send({ error: 'attachment_not_ready' });
     }
-    const downloadUrl = await services.artifacts.createDownloadUrl(
-      attachment.objectKey,
-      120,
-    );
-    return reply.redirect(downloadUrl, 302);
+    const object = await services.artifacts.getObjectStream(attachment.objectKey);
+    reply.header('cache-control', 'private, no-store');
+    reply.header('x-content-type-options', 'nosniff');
+    reply.type(attachment.contentType);
+    if (object.contentLength !== undefined) reply.header('content-length', object.contentLength);
+    if (object.contentEncoding) reply.header('content-encoding', object.contentEncoding);
+    // 文本／HTML／SVG 等文件不能在带登录 Cookie 的 API 同源下执行。
+    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(attachment.contentType)) {
+      const filename = encodeURIComponent(attachment.filename).replace(/['()*]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+      reply.header('content-disposition', `attachment; filename*=UTF-8''${filename}`);
+    }
+    return reply.send(object.body);
   });
 
   const chatRequestSchema = z.object({
@@ -997,7 +987,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
    * 前端不显示气泡，历史接口也会跳过该 run 的用户消息。
    */
   const CONTINUATION_INSTRUCTION =
-    '上一轮任务因执行错误中断了。请基于上方对话和已完成的工作，继续完成上一条用户消息所要求的任务；先检查当前进度，不要重复已经完成的步骤。';
+    '上一次响应因执行错误中断。请回应下方的用户原始请求，结合已有对话和已完成的结果继续；不要重复已经完成的操作，也不要猜测或改换用户的意图。普通问候或问答直接回复，不需要检查工作区或让用户选择开发任务。';
 
   app.post('/api/chat', async (request, reply) => {
     const input = chatRequestSchema.parse(request.body);
@@ -1130,218 +1120,5 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
     return streamWorkflowRun(request, reply, services, runId);
   });
 
-  // ── 构建预览（静态文件服务 + 重新构建） ──────────────────────────────
-
-  const SANDBOX_IMAGE = process.env.DOCKER_SANDBOX_IMAGE?.trim() || 'chat-agent-sandbox:latest';
-  const DOCKER_WORKSPACE = '/mnt/user-data/workspace';
-
-  /** 按 session → workspace_id 反推宿主侧沙箱工作区绝对路径。 */
-  async function resolveSandboxWorkspacePath(tenantId: string, sessionId: string): Promise<string | null> {
-    if (services.config.SANDBOX_RUNTIME !== 'docker') return null;
-    const workspace = await services.repository
-      .getWorkspaceSandboxForWorker(tenantId, sessionId)
-      .catch(() => null);
-    if (!workspace?.workspaceId) return null;
-    return path.join(services.config.SANDBOX_SESSIONS_ROOT, workspace.workspaceId, 'user-data', 'workspace');
-  }
-
-  /** 仅通过 session ID 查找沙箱路径（用于公开预览路由，无需认证）。 */
-  async function resolveSandboxWorkspacePathBySession(sessionId: string): Promise<string | null> {
-    if (services.config.SANDBOX_RUNTIME !== 'docker') return null;
-    
-    // Web 传 external_key，原生客户端传内部会话 ID。
-    const workspaceId = await services.repository.getWorkspaceIdByExternalKey(sessionId);
-    if (!workspaceId) return null;
-    
-    // 使用 workspace_id 作为沙箱目录名
-    const sandboxPath = path.join(services.config.SANDBOX_SESSIONS_ROOT, workspaceId, 'user-data', 'workspace');
-    try {
-      const info = await stat(sandboxPath);
-      if (info.isDirectory()) return sandboxPath;
-    } catch {
-      /* 目录不存在 */
-    }
-    return null;
-  }
-
-  /** 在宿主工作区内查找包含 index.html 的预览根目录。 */
-  async function findPreviewRoot(workspacePath: string): Promise<string | null> {
-    // 优先 workspace/dist/，其次 workspace 根目录本身
-    const candidates = [
-      path.join(workspacePath, 'dist'),
-      workspacePath,
-    ];
-    for (const dir of candidates) {
-      const indexFile = path.join(dir, 'index.html');
-      try {
-        const info = await stat(indexFile);
-        if (info.isFile()) return dir;
-      } catch { /* 不存在 */ }
-    }
-    // 扫描一级子目录（AI 可能写到子目录的 dist/ 下）
-    try {
-      const entries = await readdir(workspacePath, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const distDir = path.join(workspacePath, entry.name, 'dist');
-        try {
-          const info = await stat(path.join(distDir, 'index.html'));
-          if (info.isFile()) return distDir;
-        } catch { /* 不存在 */ }
-      }
-    } catch { /* 工作区不存在 */ }
-    return null;
-  }
-
-  const MIME_TYPES: Record<string, string> = {
-    '.html': 'text/html; charset=utf-8',
-    '.htm': 'text/html; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.js': 'application/javascript; charset=utf-8',
-    '.mjs': 'application/javascript; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.svg': 'image/svg+xml',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.woff': 'font/woff',
-    '.woff2': 'font/woff2',
-    '.ttf': 'font/ttf',
-    '.ico': 'image/x-icon',
-    '.map': 'application/json',
-  };
-
-  /** 提供会话沙箱内的构建产物预览（只读静态文件服务）。 */
-  const servePreview = async (request: any, reply: any) => {
-    const { sessionId } = request.params as { sessionId: string };
-    const wildcard = (request.params as Record<string, string>)['*'] ?? '';
-    const requestPath = wildcard || 'index.html';
-
-    // 安全检查：验证请求来自本站（iframe 内嵌时浏览器会自动携带 Origin/Referer）
-    const origin = request.headers.origin ?? request.headers.referer ?? '';
-    const allowedOrigins = [
-      services.config.WEB_ORIGIN,
-      `${request.protocol}://${request.headers.host}`,
-      `http://localhost:${services.config.API_PORT}`,
-      `http://127.0.0.1:${services.config.API_PORT}`,
-    ];
-    if (!allowedOrigins.some((o) => origin.startsWith(o))) {
-      console.log('[preview] blocked_by_origin:', { origin, allowedOrigins });
-      return reply.code(403).send({ error: 'forbidden' });
-    }
-
-    // 公开预览路由：不依赖认证，直接通过 session ID 查找沙箱
-    const sandboxPath = await resolveSandboxWorkspacePathBySession(sessionId);
-    if (!sandboxPath) {
-      console.log('[preview] sandbox_not_found:', { sessionId });
-      return reply.code(404).send({ error: 'sandbox_not_found' });
-    }
-
-    const previewRoot = await findPreviewRoot(sandboxPath);
-    if (!previewRoot) {
-      console.log('[preview] no_preview_built:', { sandboxPath });
-      return reply.code(404).send({ error: 'no_preview_built' });
-    }
-
-    const safePath = path.normalize(requestPath).replace(/^(\.\.[/\\])+/, '');
-    const filePath = path.resolve(previewRoot, safePath);
-    console.log('[preview] serving:', { previewRoot, requestPath, filePath });
-    // 路径遍历保护
-    if (!filePath.startsWith(previewRoot)) return reply.code(403).send({ error: 'forbidden' });
-
-    try {
-      const info = await stat(filePath);
-      if (!info.isFile()) return reply.code(404).send({ error: 'not_found' });
-      const ext = path.extname(filePath).toLowerCase();
-      const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
-      const content = await readFile(filePath);
-      return reply.code(200).header('content-type', contentType).header('cache-control', 'no-cache').send(content);
-    } catch (err) {
-      console.log('[preview] read_error:', { filePath, err });
-      return reply.code(404).send({ error: 'not_found' });
-    }
-  };
-  app.get('/api/agent/sessions/:sessionId/preview', servePreview);
-  app.get('/api/agent/sessions/:sessionId/preview/*', servePreview);
-
-  /** 在沙箱容器内重新构建项目（vite build），产物输出到 workspace/dist/。 */
-  app.post('/api/agent/sessions/:sessionId/rebuild', async (request, reply) => {
-    const { sessionId } = request.params as { sessionId: string };
-
-    // sessionId 可能是 external_key（前端统一传 externalKey），需解析为内部 id
-    const session = await services.repository.getSessionByExternalKey(request.auth, sessionId).catch(() => null);
-    const resolvedSessionId = session?.id ?? sessionId;
-
-    const sandboxPath = await resolveSandboxWorkspacePath(request.auth.tenantId, resolvedSessionId);
-    if (!sandboxPath) return reply.code(404).send({ error: 'sandbox_not_found' });
-
-    if (services.config.SANDBOX_RUNTIME !== 'docker') {
-      return reply.code(400).send({ error: 'rebuild_requires_docker' });
-    }
-
-    const containerName = `rebuild-${sessionId.slice(0, 8)}-${Date.now().toString(36)}`;
-    const buildScript = [
-      'set -e',
-      `cd ${DOCKER_WORKSPACE}`,
-      // 查找包含 package.json 的项目目录
-      'PROJECT_DIR="."',
-      'if [ ! -f package.json ]; then',
-      '  for d in */; do',
-      '    if [ -f "${d}package.json" ]; then PROJECT_DIR="${d}"; break; fi',
-      '  done',
-      'fi',
-      'cd "$PROJECT_DIR"',
-      `npx vite build --base ./ --outDir ${DOCKER_WORKSPACE}/dist 2>&1`,
-    ].join(' && ');
-
-    const args = [
-      'run', '--rm',
-      '--name', containerName,
-      '--network', 'none',
-      '--read-only',
-      '--cap-drop', 'ALL',
-      '--security-opt', 'no-new-privileges',
-      '--pids-limit', '128',
-      '--memory', '768m',
-      '--cpus', '1.5',
-      '--tmpfs', '/tmp:rw,nosuid,nodev,size=128m',
-      '--user', '65532:65532',
-      '--env', 'HOME=/tmp',
-      '--workdir', DOCKER_WORKSPACE,
-      '--mount', `type=bind,src=${sandboxPath},dst=/mnt/user-data`,
-      SANDBOX_IMAGE,
-      '/bin/bash', '-lc', buildScript,
-    ];
-
-    const output = await new Promise<{ stdout: string; exitCode: number }>((resolveExec) => {
-      const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      const maxBytes = 100_000;
-      child.stdout.on('data', (chunk: Buffer) => {
-        if (totalBytes < maxBytes) {
-          chunks.push(chunk.subarray(0, maxBytes - totalBytes));
-          totalBytes += chunk.length;
-        }
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        if (totalBytes < maxBytes) {
-          chunks.push(chunk.subarray(0, maxBytes - totalBytes));
-          totalBytes += chunk.length;
-        }
-      });
-      child.once('error', () => resolveExec({ stdout: 'Docker 执行出错', exitCode: 1 }));
-      child.once('close', (code) => resolveExec({
-        stdout: Buffer.concat(chunks).toString('utf8'),
-        exitCode: code ?? 1,
-      }));
-    });
-
-    if (output.exitCode === 0) {
-      return { status: 'ok', previewUrl: `/api/agent/sessions/${sessionId}/preview/` };
-    }
-    return reply.code(500).send({ error: 'build_failed', output: output.stdout.slice(0, 5000) });
-  });
+  registerPreviewRoutes(app, services);
 }

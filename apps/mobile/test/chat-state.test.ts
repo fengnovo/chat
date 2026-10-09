@@ -7,6 +7,74 @@ import {
   type ChatState,
 } from '../src/chat/state';
 import type { StreamAgentEvent } from '../src/api/types';
+import { restoreHistory } from '../src/chat/state';
+
+test('foreground refresh reopens pagination and fills a gap without moving cached older messages', () => {
+  const message = (run: number) => ({
+    id: `message-r${run}`, runId: `r${run}`, role: 'assistant' as const, text: `answer ${run}`,
+    createdAt: `2026-10-${String(run).padStart(2, '0')}T00:00:00.000Z`,
+  });
+  const initial = { session: { id: 's', title: 'history', createdAt: 'now', updatedAt: 'now' },
+    messages: [message(1)], latestRun: null, hasMore: false, nextCursor: null };
+  const previous = restoreHistory(initial);
+  const refreshed = reducer(previous, { type: 'history', items: [], activeRunId: null, preserveOlder: true,
+    snapshot: { ...initial, messages: Array.from({ length: 20 }, (_, i) => message(i + 7)), hasMore: true, nextCursor: 'before-7' } });
+  assert.deepEqual(refreshed.historyPage, { sessionId: 's', cursor: 'before-7', beforeMessageId: 'message-r7' });
+  const filled = reducer(refreshed, { type: 'history-page', items: Array.from({ length: 6 }, (_, i) => message(i + 1)), nextCursor: null });
+  assert.deepEqual(filled.items.map(({ id }) => id), Array.from({ length: 26 }, (_, i) => `message-r${i + 1}`));
+  assert.equal(filled.historyPage?.cursor, null);
+});
+
+test('revisited older pages refresh cached text while preserving the live run', () => {
+  const current = event(start(), 'assistant.delta', 1, { text: 'live answer' });
+  current.items.unshift({ id: 'message-old', role: 'assistant', text: 'stale cached answer' });
+  const result = reducer(current, { type: 'history-page', items: [
+    { id: 'message-old', role: 'assistant', text: 'completed server answer' },
+  ] });
+  assert.equal(result.items[0]?.text, 'completed server answer');
+  assert.equal(result.active, current.active);
+});
+
+test('bounded latest events restore projected text without replaying older deltas twice', () => {
+  const restored = restoreHistory({
+    session: { id: 's', title: 'history', createdAt: 'now', updatedAt: 'now' },
+    messages: [{ id: 'message-r1', runId: 'r1', role: 'assistant', text: 'complete answer', createdAt: 'now' }],
+    latestRun: { id: 'r1', sessionId: 's', status: 'running', createdAt: 'now', updatedAt: 'now' },
+    latestRunProjection: { text: 'complete answer', reasoning: 'complete reasoning', citations: [], lastSeq: 1000 },
+    latestRunEvents: [
+      { runId: 'r1', timestamp: 'now', type: 'assistant.delta', text: 'answer', seq: 999 },
+      { runId: 'r1', timestamp: 'now', type: 'todo.updated', todos: [{ content: 'continue', status: 'in_progress' }], seq: 1000 },
+      { runId: 'r1', timestamp: 'now', type: 'assistant.delta', text: '!', seq: 1001 },
+    ],
+  } as never);
+  assert.equal(restored.active?.assistantText, 'complete answer!');
+  assert.equal(restored.active?.reasoning, 'complete reasoning');
+  assert.equal(restored.active?.lastSeq, 1001);
+  assert.equal(restored.active?.todos[0]?.content, 'continue');
+});
+
+test('loading older mobile history preserves the active stream and current messages', () => {
+  const current = event(start(), 'assistant.delta', 1, { text: 'live answer' });
+  const result = reducer(current, { type: 'history-page', items: [{ id: 'old', role: 'assistant', text: 'earlier answer' }, current.items[0]!] } as never);
+  assert.deepEqual(result.items.map((item) => item.id), ['old', 'user-r1']);
+  assert.equal(result.active, current.active);
+});
+
+test('foreground refresh preserves older pages while replacing the entire latest turn', () => {
+  const previous: ChatState = { ...initialState, loadingHistory: false, items: [
+    { id: 'message-old', role: 'assistant', text: 'loaded older page' },
+    { id: 'user-r1', role: 'user', text: 'question' },
+    { id: 'message-r1', role: 'assistant', text: 'stale answer' },
+  ] };
+  const refreshed = reducer(previous, { type: 'history', preserveOlder: true, items: [], activeRunId: null, snapshot: {
+    session: { id: 's', title: 'history', createdAt: 'now', updatedAt: 'now' },
+    messages: [{ id: 'user-r1', runId: 'r1', role: 'user', text: 'question', createdAt: 'now' }],
+    latestRun: { id: 'r1', sessionId: 's', status: 'running', createdAt: 'now', updatedAt: 'now' },
+    latestRunProjection: { text: '', reasoning: '', citations: [], lastSeq: 1000 }, latestRunEvents: [],
+  } });
+  assert.deepEqual(selectChatItems(refreshed).map(({ id }) => id), ['message-old', 'user-r1', 'message-r1']);
+  assert.equal(selectChatItems(refreshed).at(-1)?.text, '');
+});
 
 function start(runId = 'r1') {
   return reducer(

@@ -16,7 +16,7 @@ import { loadWorkerConfig } from './config.js';
 import { createWorkerObservability } from './observability.js';
 import { createWorkerLangfuse } from './langfuse.js';
 import { createRunProcessor } from './processor.js';
-import { createMemoryQueueProcessor } from './memory-consumer.js';
+import { startMemoryRuntime } from './memory-runtime.js';
 import { createMemoryIndexer } from './memory-index.js';
 
 const runtime = await registeredObservability;
@@ -136,7 +136,11 @@ const memoryProcessorOptions = {
   ...(memoryIndexer ? { index: memoryIndexer } : {}),
   metrics: observability.metrics,
 };
-const memoryWorker = new Worker(MEMORY_QUEUE_NAME, createMemoryQueueProcessor(memoryProcessorOptions), {
+const memoryRuntime = startMemoryRuntime({
+  ...memoryProcessorOptions,
+  logger: { error: (message: string, error?: unknown) => logger.error({ error: redactTelemetryValue(error), operation: 'memory.poll' }, message) },
+});
+const memoryWorker = new Worker(MEMORY_QUEUE_NAME, memoryRuntime.processQueueJob, {
   connection,
   concurrency: 1,
 });
@@ -269,6 +273,7 @@ const shutdown = async () => {
     }
     // 3. 等待在途任务退出（abort 后很快结束）。
     await worker.close();
+    await memoryRuntime.stop();
     await memoryWorker.close();
     await memoryIndexWorker.close();
     await memoryQueue.close();

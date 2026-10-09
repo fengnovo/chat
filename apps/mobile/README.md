@@ -97,5 +97,24 @@ pnpm --filter mobile test
 pnpm mobile:typecheck
 ```
 
+### Android 模拟器 UI E2E
+
+先启动本地 API、Worker 和 Debug App，再运行真实原生界面测试：
+
+```bash
+pnpm mobile:run android
+pnpm mobile:e2e:android
+# 只检查登录页键盘，无需账号、Worker 或模型回复
+pnpm mobile:e2e:android --keyboard-only
+```
+
+脚本使用 Python 3 标准库与 Android SDK 的 ADB，不依赖 Sky 界面控制服务。通过原生点击、输入、UI Automator 控件树和截图验证三个登录输入框、键盘打开时切换字段、登录、新建会话、聊天输入框避让、真实模型回复、返回列表重开、前后台切换与冷启动恢复。同时读取真实 API，确认界面创建的任务已完成且回答已持久化。
+
+默认使用根 README 的 `admin` 开发账号；可通过 `MOBILE_E2E_USERNAME` / `MOBILE_E2E_PASSWORD` 覆盖，`MOBILE_E2E_API` 指定电脑端 API 地址（默认 `http://127.0.0.1:8002`）。多台设备时指定 `ANDROID_SERIAL`；SDK 不在默认路径时指定 `ANDROID_HOME` 或 `ADB`。
+
+必须使用停靠在屏幕底部的软键盘，关闭 AVD 的硬件键盘（Android Studio → Device Manager → 编辑 AVD → Enable keyboard input），并冷启动。Gboard 的实体键盘工具栏和浮动键盘不会缩小底部可用区域，脚本会拒绝将零高度 IME 判为通过。完整测试输入英文账号和提示词前，将键盘切到 English，避免拼音候选在收起键盘时被取消；键盘专项测试可使用中文输入法。
+
+测试会退出当前 App 登录，并创建一个带 `ANDROID-E2E` 标记的本地测试会话；保留 App 数据及已有会话，结束后停留在测试会话。截图、控件树、窗口状态及 `results.json` 默认保存到 `node_modules/.cache/mobile/ui-e2e-*`；可用 `--output <目录>` 指定。
+
 回归测试覆盖单次回答渲染、SSE 重放/重连续传、旧订阅隔离、终态处理、审批范围和多选请求。
 另覆盖标题持久化、冷启动事件恢复、已回答交互去除、预览链接、图片鉴权、附件直传 / 分片 / 秒传及原生 AbortSignal 兼容。最新一轮的详细执行状态随历史一起恢复。

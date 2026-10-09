@@ -6,6 +6,7 @@ export function createDurableRuntimePorts(
   repository: AgentRepository,
   lease: RunExecutionLease,
   toolPolicies: Record<string, { replaySafe?: boolean | undefined; idempotencyKeyArgument?: string | undefined }>,
+  runtimeResources: Record<string, string> = {},
 ): NonNullable<HeadlessAgentOptions['durable']> {
   const guarded = async <T>(operation: () => Promise<T>): Promise<T> => {
     try { return await operation(); }
@@ -13,6 +14,8 @@ export function createDurableRuntimePorts(
   };
   return {
     legacyExecution: lease.legacyExecution === true,
+    runtimeResources,
+    bindRuntimeDescriptor: (descriptor) => guarded(() => repository.durable.bindExecutionDescriptor(lease, descriptor, 'agent')),
     assertOwnership: () => guarded(() => repository.durable.assertLease(lease)),
     ...(toolPolicies ? { toolPolicies: Object.fromEntries(Object.entries(toolPolicies).map(([name, policy]) => [name, {
       ...(policy.replaySafe !== undefined ? { replaySafe: policy.replaySafe } : {}),

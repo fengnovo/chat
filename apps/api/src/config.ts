@@ -67,6 +67,7 @@ const schema = z
     OUTBOX_STALE_AFTER_MS: z.coerce.number().int().min(5_000).default(30_000),
     AUTH_MODE: z.enum(['dev', 'password', 'oidc']).default('dev'),
     AUTH_JWT_SECRET: z.string().min(32).optional(),
+    PREVIEW_TOKEN_SECRET: z.string().min(32).optional(),
     DEV_TENANT_ID: z.uuid().default('00000000-0000-4000-8000-000000000001'),
     DEV_USER_ID: z.uuid().default('00000000-0000-4000-8000-000000000001'),
     // 自助注册加入的租户；缺省时加入 DEV_TENANT_ID 指向的默认（seed）租户。

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -9,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import type { FocusEvent } from 'react-native';
 
 import { useAuth } from '../store/auth';
 import { colors, inputStyle, primaryButton, primaryButtonText, spacing } from '../theme';
@@ -19,11 +21,50 @@ const defaultServerUrl = __DEV__
 
 export default function LoginScreen() {
   const { login } = useAuth();
+  const scrollViewRef = useRef<ScrollView>(null);
+  const focusedInputRef = useRef<number | null>(null);
+  const keyboardVisibleRef = useRef(false);
   const [serverUrl, setServerUrl] = useState(defaultServerUrl);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const revealFocusedInput = useCallback(() => {
+    const target = focusedInputRef.current;
+    if (Platform.OS === 'android' && target !== null) {
+      scrollViewRef.current?.scrollResponderScrollNativeHandleToKeyboard(
+        target,
+        spacing.md,
+        true,
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      keyboardVisibleRef.current = true;
+      revealFocusedInput();
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardVisibleRef.current = false;
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [revealFocusedInput]);
+
+  const handleInputFocus = useCallback(
+    (event: FocusEvent) => {
+      focusedInputRef.current = event.nativeEvent.target;
+      if (keyboardVisibleRef.current) revealFocusedInput();
+    },
+    [revealFocusedInput],
+  );
 
   const submit = async () => {
     if (!serverUrl.trim() || !username.trim() || !password) {
@@ -49,9 +90,10 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: colors.background }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView
+        ref={scrollViewRef}
         contentContainerStyle={{
           flexGrow: 1,
           justifyContent: 'center',
@@ -79,6 +121,7 @@ export default function LoginScreen() {
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
+            onFocus={handleInputFocus}
           />
           <Text style={{ color: colors.textMuted, fontSize: 12 }}>
             {__DEV__
@@ -95,6 +138,7 @@ export default function LoginScreen() {
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
             autoCorrect={false}
+            onFocus={handleInputFocus}
           />
 
           <Text style={{ color: colors.textSecondary, fontSize: 13 }}>密码</Text>
@@ -105,6 +149,7 @@ export default function LoginScreen() {
             placeholder="••••••••"
             placeholderTextColor={colors.textMuted}
             secureTextEntry
+            onFocus={handleInputFocus}
           />
 
           {error ? (

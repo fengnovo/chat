@@ -500,3 +500,5 @@ export const MEMORY_QUEUE_NAME = 'agent-memory';
 export const MEMORY_INDEX_QUEUE_NAME = 'agent-memory-index';
 export const runEventsChannel = (runId: string) => `agent:run:${runId}:events`;
 export const runCancellationChannel = (runId: string) => `agent:run:${runId}:cancel`;
+
+export * from './message-projection.js';

@@ -10,6 +10,64 @@ import { streamAgentEvents } from '../src/sse.js';
 
 const runId = '00000000-0000-4000-8000-000000000001';
 
+for (const [name, stream] of [['workflow', streamWorkflowRun], ['raw events', streamAgentEvents]] as const) {
+  test(`${name} waits for socket drain before sending the next event`, async () => {
+    const events: PersistedAgentEvent[] = [
+      { runId, seq: 1, timestamp: new Date().toISOString(), type: 'assistant.delta', text: 'hello' },
+      { runId, seq: 2, timestamp: new Date().toISOString(), type: 'run.completed' },
+    ];
+    const written: string[] = [];
+    let ended = false;
+    const raw = Object.assign(new EventEmitter(), {
+      setHeader() {}, writeHead() {}, flushHeaders() {}, writableLength: 0,
+      write(value: string) { written.push(value); return written.length !== 1; }, end() { ended = true; },
+    });
+    const services = {
+      repository: {
+        getRun: async () => ({ id: runId, status: 'completed' }),
+        listEvents: async (_auth: unknown, _id: string, cursor: number, limit = 500) => events.filter((event) => event.seq > cursor).slice(0, limit),
+      },
+      streamSubscriptions: { subscribe: async () => () => {} },
+    };
+    const running = stream({ auth: {}, headers: {}, query: {}, log: { warn() {} } } as never,
+      { raw, hijack() {}, getHeaders: () => ({}) } as never, services as never, runId);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(written.length, 1, 'a blocked connection must not accumulate more frames');
+    assert.equal(ended, false);
+    raw.emit('drain');
+    await running;
+    assert.match(written.join(''), /hello/);
+    assert.equal(ended, true);
+    assert.equal(raw.listenerCount('drain'), 0);
+  });
+  test(`${name} replays long runs in bounded database pages`, async () => {
+    const timestamp = new Date().toISOString();
+    const events: PersistedAgentEvent[] = Array.from({ length: 1200 }, (_, i) => ({ runId, seq: i + 1, timestamp, type: 'assistant.delta', text: 'x' }));
+    events.push({ runId, seq: 1201, timestamp, type: 'run.completed' });
+    const requestedLimits: number[] = [];
+    let output = '';
+    const raw = Object.assign(new EventEmitter(), {
+      setHeader() {}, writeHead() {}, flushHeaders() {},
+      write(value: string) { output += value; return true; }, end() {},
+    });
+    const services = {
+      repository: {
+        getRun: async () => ({ id: runId, status: 'completed' }),
+        listEvents: async (_auth: unknown, _id: string, cursor: number, limit = 500) => {
+          requestedLimits.push(limit);
+          return events.filter((event) => event.seq > cursor).slice(0, limit);
+        },
+      }, streamSubscriptions: { subscribe: async () => () => {} },
+    };
+    await stream({ auth: {}, headers: {}, query: {}, log: { warn() {} } } as never,
+      { raw, hijack() {}, getHeaders: () => ({}) } as never, services as never, runId);
+    assert.ok(requestedLimits.length >= 3);
+    assert.ok(requestedLimits.every((limit) => limit <= 500));
+    assert.match(output, /run.completed/);
+    if (name === 'workflow') assert.equal((output.match(/text-delta/g) ?? []).length, 1200);
+  });
+}
+
 test('snapshots replace stale text and keep subsequent deltas in a new text part', () => {
   const timestamp = new Date().toISOString();
   const events: PersistedAgentEvent[] = [

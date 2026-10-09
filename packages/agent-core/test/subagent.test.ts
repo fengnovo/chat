@@ -429,8 +429,29 @@ test('background context propagates parent run signal and swallows task throws',
   parent.abort();
   await new Promise((resolve) => setTimeout(resolve, 10));
   const results = await ctx.settled();
-  assert.equal(sawSignal, true, '主 run 信号必须组合进任务信号');
+  assert.equal(sawSignal, false, 'already aborted tasks must not start');
   assert.match(results[1]?.summary ?? '', /异常中止/, '任务抛错被收敛为中止摘要，不打断 settled');
+});
+
+test('background concurrency is bounded and abort prevents queued effects from starting', async () => {
+  const ctx = createBackgroundRunContext(undefined, { maxConcurrency: 2 });
+  const started: string[] = [];
+  let ready!: () => void;
+  const twoStarted = new Promise<void>((resolve) => { ready = resolve; });
+  for (const id of ['one', 'two', 'three', 'four']) {
+    ctx.register({ subagentId: id, role: id, description: id, run: async (_emit, signal) => {
+      started.push(id);
+      if (started.length === 2) ready();
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      return 'Stopped';
+    } });
+  }
+  await twoStarted;
+  assert.deepEqual(started, ['one', 'two']);
+  assert.equal(ctx.size(), 4);
+  await ctx.abortAll();
+  await ctx.settled();
+  assert.deepEqual(started, ['one', 'two']);
 });
 
 test('spawn tool background=true returns ack immediately and registers a detached run', async () => {

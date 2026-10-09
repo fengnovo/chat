@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { DurableExecutionRepository } from './durable-execution.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { DurableExecutionRepository, type ChildExecutionRecord } from './durable-execution.js';
+import { HistoryRepository } from './history-repository.js';
 
 import type {
   AgentEvent,
@@ -65,6 +66,31 @@ export interface RunRecord {
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RunTasksRecord {
+  runId: string;
+  status: RunStatus;
+  executionState: string;
+  failure: {code: string; message: string | null} | null;
+  owner: { workerId: string | null; leaseEpoch: number; leaseExpiresAt: string | null; recoveryAttempts: number };
+  waitingReason: { interruptId: string; kind: 'approval' | 'question'; request: unknown } | null;
+  children: Array<ChildExecutionRecord & { leaseEpoch: number; waitingReason: string | null; createdAt: string; updatedAt: string }>;
+}
+
+// Object keys do not affect the request identity. Array order does (in particular attachments).
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+}
+
+function requestFingerprint(input: { sessionId: string; message: string; continuation?: boolean; knowledgeBaseIds?: string[]; attachments?: RunAttachmentRef[] }): string {
+  return createHash('sha256').update(canonicalJson({
+    sessionId: input.sessionId, message: input.message, continuation: input.continuation ?? false,
+    knowledgeBaseIds: [...new Set(input.knowledgeBaseIds ?? [])].sort(), attachments: input.attachments ?? [],
+  })).digest('hex');
 }
 
 export interface InterruptRecord {
@@ -346,9 +372,11 @@ async function insertDispatch(client: PoolClient, job: RunJob): Promise<string> 
 
 export class AgentRepository {
   readonly durable: DurableExecutionRepository;
+  readonly history: HistoryRepository;
 
   constructor(private readonly pool: Pool) {
     this.durable = new DurableExecutionRepository(pool);
+    this.history = new HistoryRepository(pool);
   }
 
   async ping(): Promise<void> {
@@ -655,8 +683,11 @@ export class AgentRepository {
         `SELECT s.*, w.path AS workspace_path
          FROM agent_sessions s
          JOIN workspaces w ON w.id = s.workspace_id
-         WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.external_key = $3
-           AND s.deleted_at IS NULL`,
+         WHERE s.tenant_id = $1 AND s.user_id = $2
+           AND (s.external_key = $3 OR (s.external_key IS NULL AND s.id::text = $3))
+           AND s.deleted_at IS NULL
+         ORDER BY (s.external_key = $3) DESC NULLS LAST
+         LIMIT 1`,
         [context.tenantId, context.userId, input.externalKey],
       );
       if (existing.rows[0]) {
@@ -753,7 +784,8 @@ export class AgentRepository {
   }
 
   /**
-   * 按外部会话键（前端 chat_id）查询**已存在**的会话；不存在时返回 null，
+   * 按前端 chat_id 查询已存在的会话；无外部键的原生会话兼容内部 ID。
+   * 显式外部键优先。不存在时返回 null，
    * 绝不隐式创建。供「继续对话」等必须依附于既有会话的入口使用。
    */
   async getSessionByExternalKey(
@@ -764,8 +796,11 @@ export class AgentRepository {
       `SELECT s.*, w.path AS workspace_path
        FROM agent_sessions s
        JOIN workspaces w ON w.id = s.workspace_id
-       WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.external_key = $3
-         AND s.deleted_at IS NULL`,
+       WHERE s.tenant_id = $1 AND s.user_id = $2
+         AND (s.external_key = $3 OR (s.external_key IS NULL AND s.id::text = $3))
+         AND s.deleted_at IS NULL
+       ORDER BY (s.external_key = $3) DESC NULLS LAST
+       LIMIT 1`,
       [context.tenantId, context.userId, externalKey],
     );
     return result.rows[0] ? sessionOf(result.rows[0]) : null;
@@ -844,6 +879,37 @@ export class AgentRepository {
     return result.rows.map(runOf);
   }
 
+  async listRunTasks(context: AuthContext, runId: string): Promise<RunTasksRecord | null> {
+    // A single read transaction keeps the parent ownership and child states consistent.
+    return inTransaction(this.pool, async (client) => {
+      const run = await client.query(
+        `SELECT r.* FROM agent_runs r JOIN agent_sessions s ON s.id=r.session_id AND s.tenant_id=r.tenant_id
+         WHERE r.tenant_id=$1 AND r.user_id=$2 AND r.id=$3 AND s.user_id=$2 AND s.deleted_at IS NULL FOR SHARE OF r`,
+        [context.tenantId, context.userId, runId],
+      );
+      const row = run.rows[0];
+      if (!row) return null;
+      const children = await client.query('SELECT * FROM child_executions WHERE tenant_id=$1 AND root_run_id=$2 ORDER BY created_at,id', [context.tenantId, runId]);
+      const interrupt = await client.query(
+        `SELECT id,kind,request FROM interrupts WHERE tenant_id=$1 AND run_id=$2 AND status='pending' ORDER BY created_at DESC,id DESC LIMIT 1`,
+        [context.tenantId, runId],
+      );
+      return {
+        runId, status: row.status, executionState: row.execution_state,
+        failure: row.error_code ? {code: row.error_code, message: row.error_message ?? null} : null,
+        owner: { workerId: row.worker_id, leaseEpoch: Number(row.lease_epoch), leaseExpiresAt: row.lease_expires_at ? iso(row.lease_expires_at) : null, recoveryAttempts: row.recovery_attempts },
+        waitingReason: interrupt.rows[0] ? { interruptId: interrupt.rows[0].id, kind: interrupt.rows[0].kind, request: interrupt.rows[0].request } : null,
+        children: children.rows.map((child) => ({
+          id: child.id, parentToolCallId: child.parent_tool_call_id, threadId: child.thread_id,
+          input: child.input, background: child.background, status: child.status, attempt: child.attempt,
+          feedback: child.feedback, attemptResult: child.attempt_result, summary: child.summary, review: child.review,
+          leaseEpoch: Number(child.lease_epoch), waitingReason: child.status === 'waiting' ? child.feedback ?? 'Awaiting child completion or review' : null,
+          createdAt: iso(child.created_at), updatedAt: iso(child.updated_at),
+        })),
+      };
+    });
+  }
+
   async createRun(
     context: AuthContext,
     input: {
@@ -857,14 +923,6 @@ export class AgentRepository {
     },
   ): Promise<{ run: RunRecord; created: boolean; outboxId?: string }> {
     return inTransaction(this.pool, async (client) => {
-      if (input.idempotencyKey) {
-        const existing = await client.query(
-          `SELECT * FROM agent_runs WHERE tenant_id = $1 AND idempotency_key = $2`,
-          [context.tenantId, input.idempotencyKey],
-        );
-        if (existing.rows[0]) return { run: runOf(existing.rows[0]), created: false };
-      }
-
       const session = await client.query(
         `SELECT s.id, s.approval_mode, w.path AS workspace_path,
                 p.source_type, p.source_ref, p.source_revision
@@ -878,6 +936,61 @@ export class AgentRepository {
       );
       if (!session.rows[0]) throw new RepositoryNotFoundError('session');
 
+      // Session locking serializes submissions before looking up the scoped identity.
+      const fingerprint = requestFingerprint(input);
+      if (input.idempotencyKey) {
+        const existing = await client.query(
+          `SELECT * FROM agent_runs WHERE tenant_id = $1 AND user_id = $2 AND session_id = $3 AND idempotency_key = $4`,
+          [context.tenantId, context.userId, input.sessionId, input.idempotencyKey],
+        );
+        const row = existing.rows[0];
+        if (row) {
+          let stored = row.request_fingerprint as string | null;
+          if (!stored) {
+            // Older runs can be compared only when the original complete input is still durable.
+            const dispatch = await client.query(
+              `SELECT payload FROM run_dispatch_outbox WHERE tenant_id=$1 AND run_id=$2 AND job_kind='start' ORDER BY created_at,id LIMIT 1`,
+              [context.tenantId, row.id],
+            );
+            const original = dispatch.rows[0]?.payload;
+            if (original) {
+              stored = requestFingerprint({ ...original, continuation: row.continuation });
+              await client.query('UPDATE agent_runs SET request_fingerprint=$3 WHERE tenant_id=$1 AND id=$2', [context.tenantId, row.id, stored]);
+            }
+          }
+          if (stored !== fingerprint) throw new RepositoryConflictError('idempotency_conflict');
+          return { run: runOf(row), created: false };
+        }
+      }
+
+      let message = input.message;
+      let executionAttachments = input.attachments ?? [];
+      if (input.continuation) {
+        // A failed preparation may never have reached the graph checkpoint.
+        // Anchor the durable invocation to the last real request, including its
+        // attachments, rather than relying on an implicit "previous task".
+        const source = await client.query(
+          `SELECT id, user_message FROM agent_runs
+           WHERE tenant_id=$1 AND user_id=$2 AND session_id=$3 AND NOT continuation
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [context.tenantId, context.userId, input.sessionId],
+        );
+        if (!source.rows[0]) throw new RepositoryNotFoundError('continuation_source');
+        message = `${input.message}\n\n用户原始请求：\n${String(source.rows[0].user_message)}`;
+        const attachments = await client.query(
+          `SELECT * FROM chat_attachments
+           WHERE tenant_id=$1 AND user_id=$2 AND run_id=$3 AND status='ready'
+           ORDER BY created_at, id`,
+          [context.tenantId, context.userId, source.rows[0].id],
+        );
+        executionAttachments = attachments.rows.map((row) => {
+          const attachment = chatAttachmentOf(row);
+          return { id: attachment.id, kind: attachment.kind, filename: attachment.filename,
+            objectKey: attachment.objectKey, contentType: attachment.contentType,
+            sizeBytes: attachment.sizeBytes,
+            ...(attachment.contentEncoding === 'gzip' ? { contentEncoding: 'gzip' as const } : {}) };
+        });
+      }
       const knowledgeBaseIds = [...new Set(input.knowledgeBaseIds ?? [])];
       if (knowledgeBaseIds.length > 0) {
         const visible = await client.query(
@@ -897,18 +1010,19 @@ export class AgentRepository {
       const id = randomUUID();
       const result = await client.query(
         `INSERT INTO agent_runs
-           (id, tenant_id, user_id, session_id, status, user_message, continuation, knowledge_base_ids, idempotency_key)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7::uuid[], $8)
+           (id, tenant_id, user_id, session_id, status, user_message, continuation, knowledge_base_ids, idempotency_key, request_fingerprint, execution_descriptor)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7::uuid[], $8, $9, '{"contractVersion":1}'::jsonb)
          RETURNING *`,
         [
           id,
           context.tenantId,
           context.userId,
           input.sessionId,
-          input.message,
+          message,
           input.continuation ?? false,
           knowledgeBaseIds,
           input.idempotencyKey ?? null,
+          fingerprint,
         ],
       );
       // Keep the title and first run in the same transaction; custom titles are preserved.
@@ -920,7 +1034,7 @@ export class AgentRepository {
          WHERE id = $1`,
         [input.sessionId, firstTitle || null],
       );
-      if (input.attachments && input.attachments.length > 0) {
+      if (!input.continuation && input.attachments && input.attachments.length > 0) {
         // 原子关联：只有「本人、本租户、已上传就绪、尚未关联其他 run」的附件才能被占用，
         // 行数不匹配说明附件不存在/未就绪/被复用，直接让整个创建事务失败。
         const attachmentIds = input.attachments.map((attachment) => attachment.id);
@@ -943,11 +1057,11 @@ export class AgentRepository {
         userId: context.userId,
         sessionId: input.sessionId,
         runId: run.id,
-        message: input.message,
+        message,
         workspacePath: String(session.rows[0].workspace_path),
         approvalMode: session.rows[0].approval_mode as 'manual' | 'session',
         knowledgeBaseIds,
-        attachments: input.attachments ?? [],
+        attachments: executionAttachments,
         ...(workspaceSource ? { workspaceSource } : {}),
         ...(input.observabilityContext
           ? { observability: input.observabilityContext }

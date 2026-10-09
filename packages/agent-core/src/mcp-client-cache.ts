@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
+import { filterReservedMcpTools } from './capabilities/mcp-tools.js';
 
 /**
  * base MCP（配置文件驱动、无 per-run 凭证）的 client 进程级缓存。
@@ -114,7 +115,7 @@ function buildEntry(
   return Promise.race([client.getTools(), deadline]).then(
     (tools) => {
       clearTimeout(timer);
-      return { client, tools, createdAt: now() };
+      return { client, tools: filterReservedMcpTools(tools), createdAt: now() };
     },
     async (error: unknown) => {
       clearTimeout(timer);

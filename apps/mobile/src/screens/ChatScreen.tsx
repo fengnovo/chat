@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import type { ListRenderItemInfo } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { RootStackParamList } from '../App';
 import { api } from '../api/client';
@@ -46,6 +47,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
 export default function ChatScreen({ route }: Props) {
   const { sessionId } = route.params;
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [state, dispatch] = useReducer(reducer, initialState);
   const [draft, setDraft] = useState('');
   const attachments = useAttachments();
@@ -56,6 +59,12 @@ export default function ChatScreen({ route }: Props) {
   const [sending, setSending] = useState(false);
   const streamRef = useRef<RunStreamHandle | null>(null);
   const listRef = useRef<FlatList<ChatItem> | null>(null);
+  const historyPage = state.historyPage;
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const historyPageGeneration = useRef(0);
+  const historySession = useRef(sessionId);
+  historySession.current = sessionId;
+  const olderRequest = useRef<AbortController | null>(null);
 
   const stickToBottom = useRef(true);
   const userScrolling = useRef(false);
@@ -106,6 +115,9 @@ export default function ChatScreen({ route }: Props) {
     useCallback(() => {
       let disposed = false;
       let generation = 0;
+      let initiallyLoaded = false;
+      historyPageGeneration.current++;
+      setLoadingOlder(false);
       dispatch({ type: 'reset' });
       stickToBottom.current = true;
       const load = async () => {
@@ -114,13 +126,18 @@ export default function ChatScreen({ route }: Props) {
         try {
           const history = await api.history(sessionId);
           if (disposed || request !== generation) return;
+          historyPageGeneration.current++;
+          olderRequest.current?.abort(); olderRequest.current = null;
+          setLoadingOlder(false);
           const restored = restoreHistory(history);
           dispatch({
             type: 'history',
             items: [],
             activeRunId: null,
             snapshot: history,
+            preserveOlder: initiallyLoaded,
           });
+          initiallyLoaded = true;
           setSessionTitle(history.session.title);
           navigation.setOptions({ title: history.session.title });
           void api
@@ -150,12 +167,34 @@ export default function ChatScreen({ route }: Props) {
       return () => {
         disposed = true;
         generation++;
+        historyPageGeneration.current++;
+        olderRequest.current?.abort(); olderRequest.current = null;
         listener.remove();
         streamRef.current?.close();
         streamRef.current = null;
       };
     }, [sessionId, subscribe, navigation]),
   );
+
+  const loadOlderHistory = async () => {
+    if (!historyPage?.cursor || historyPage.sessionId !== sessionId || olderRequest.current) return;
+    const page = historyPage;
+    const request = ++historyPageGeneration.current;
+    const controller = new AbortController(); olderRequest.current = controller;
+    setLoadingOlder(true);
+    try {
+      const history = await api.history(sessionId, { cursor: page.cursor!, includeLatestEvents: false, signal: controller.signal });
+      if (controller.signal.aborted || request !== historyPageGeneration.current || historySession.current !== sessionId) return;
+      stickToBottom.current = false;
+      dispatch({ type: 'history-page', items: history.messages.map((message) => ({
+        id: message.id, role: message.role, text: message.text, reasoning: message.reasoning, attachments: message.attachments,
+      })), nextCursor: history.hasMore ? history.nextCursor ?? null : null });
+    } catch (error) {
+      if (!controller.signal.aborted && historySession.current === sessionId) dispatch({ type: 'send-failed', message: `加载历史失败：${error instanceof Error ? error.message : '未知错误'}` });
+    } finally {
+      if (olderRequest.current === controller) { olderRequest.current = null; setLoadingOlder(false); }
+    }
+  };
 
   const pickAttachment = async () => {
     if (picking || runInProgress || sending) return;
@@ -295,7 +334,14 @@ export default function ChatScreen({ route }: Props) {
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: colors.background }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      keyboardVerticalOffset={keyboardOffset}
+      onLayout={(event) => {
+        // Android window measurements exclude the status bar; iOS includes it.
+        // Measure the actual header origin instead of assuming a fixed header height.
+        event.target.measureInWindow((_x, y) =>
+          setKeyboardOffset(y + (Platform.OS === 'android' ? insets.top : 0)),
+        );
+      }}
     >
       {state.loadingHistory ? (
         <View
@@ -310,6 +356,13 @@ export default function ChatScreen({ route }: Props) {
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           keyboardShouldPersistTaps="handled"
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          ListHeaderComponent={historyPage?.sessionId === sessionId && historyPage.cursor ? (
+            <Pressable accessibilityRole="button" disabled={loadingOlder} onPress={() => void loadOlderHistory()}
+              style={{ alignItems: 'center', padding: spacing.md }}>
+              <Text style={{ color: colors.accent }}>{loadingOlder ? '正在加载…' : '加载更早消息'}</Text>
+            </Pressable>
+          ) : null}
           onScrollBeginDrag={() => {
             userScrolling.current = true;
           }}

@@ -27,13 +27,15 @@ import { scheduleMicrotask } from '@/app/lib/schedule-microtask';
 import { AgentStatusPanel } from './agent-status';
 import {
   fetchKnowledgeBases,
-  fetchSessionFiles,
+  fetchSessionFilePage,
+  fetchSessionHistoryPage,
   fetchSessionPage,
   responseError,
 } from './api';
 import { Composer } from './composer';
 import { Lightbox, type LightboxImage } from './lightbox';
 import { initialTrace } from './constants';
+import { prependHistoryMessages, reconcileRecoveredHistory } from './history-pages';
 import { agentEventToTrace, createTrackedFetch, localEvent } from './events';
 import { TaskFailureNotice, friendlyError } from './failure-notice';
 import { DEFAULT_FILES_WIDTH, FilePanel } from './file-panel';
@@ -150,6 +152,18 @@ function ChatRuntime() {
   );
   const [activity, setActivity] = useState<AgentActivityState>(emptyActivity);
   const [historyFiles, setHistoryFiles] = useState<TouchedFile[]>([]);
+  const [historyPage, setHistoryPage] = useState<{ sessionId: string; chatId: string; cursor: string | null } | null>(null);
+  const [filesPage, setFilesPage] = useState<{ sessionId: string; chatId: string; cursor: string | null } | null>(null);
+  const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
+  const [loadingMoreFiles, setLoadingMoreFiles] = useState(false);
+  const olderHistoryRequest = useRef<AbortController | null>(null);
+  const moreFilesRequest = useRef<AbortController | null>(null);
+  const historyFilesScope = useRef<string | null>(null);
+  const sentUserRuns = useRef(new Map<string, string>());
+  useEffect(() => () => {
+    olderHistoryRequest.current?.abort();
+    moreFilesRequest.current?.abort();
+  }, []);
   const [generatedTokens, setGeneratedTokens] = useState(0);
   /** 本次运行累计输入 tokens（近似当前上下文占用），随 usage.updated 累加。 */
   const [contextInputTokens, setContextInputTokens] = useState(0);
@@ -349,14 +363,26 @@ function ChatRuntime() {
     );
     if (!match) return;
     try {
-      const files = await fetchSessionFiles(match.id);
-      setHistoryFiles(
-        files.map((file) => ({
+      const page = await fetchSessionFilePage(match.id);
+      if (activeChatIdRef.current !== conversation.chatId) return;
+      moreFilesRequest.current?.abort();
+      moreFilesRequest.current = null;
+      setLoadingMoreFiles(false);
+      // A first-page refresh may reveal newly created files beyond its boundary.
+      // Reopen pagination even when a previous traversal had reached its end.
+      setFilesPage({
+        sessionId: match.id, chatId: conversation.chatId, cursor: page.hasMore ? page.nextCursor ?? null : null,
+      });
+      const preserve = historyFilesScope.current === conversation.chatId;
+      historyFilesScope.current = conversation.chatId;
+      setHistoryFiles((current) => [...new Map([
+        ...(preserve ? current : []),
+        ...page.files.map((file) => ({
           path: file.path,
           content: file.content,
           operation: file.operation as TouchedFile['operation'],
         })),
-      );
+      ].map((file) => [file.path, file])).values()]);
     } catch {
       // 历史文件拉取失败不影响聊天主流程
     }
@@ -447,6 +473,10 @@ function ChatRuntime() {
           void refreshSessions();
           return;
         }
+        // The HTTP response identifies the user turn even if no assistant frame
+        // arrives. Keep this association for later authoritative history recovery.
+        const sentUser = options.messages.findLast((message) => message.role === 'user');
+        if (sentUser) sentUserRuns.current.set(sentUser.id, runId);
         // 新 run 开始时，清除旧的 persistedRun，避免重连时读到过期数据导致 404。
         // 即使 chatId 相同，也要清除——因为旧 run 可能已经 abort，pending=true
         // 但后端已清理，重连会返回 404。
@@ -763,10 +793,11 @@ function ChatRuntime() {
       if (!historyResponse.ok) throw new Error(`HTTP ${historyResponse.status}`);
       const history = (await historyResponse.json()) as SessionHistory;
       if (!stillCurrent()) return;
+      setHistoryPage((previous) => previous?.chatId === chatId ? previous : { sessionId: run.sessionId, chatId, cursor: history.hasMore ? history.nextCursor ?? null : null });
       const recovered = history.messages.find((item) =>
         item.runId === runId && item.role === 'assistant' && item.text.trim());
       if (recovered) {
-        const restoredMessages = messagesFromHistory(history.messages);
+        const restoredMessages = reconcileRecoveredHistory(messages, messagesFromHistory(history.messages), runId, sentUserRuns.current);
         const current = readPersistedRun(userId);
         if (current) writePersistedRun({ ...current, messages: restoredMessages, pending: false }, userId);
         setMessages(restoredMessages);
@@ -1033,7 +1064,6 @@ function ChatRuntime() {
     const chatId = activeChatIdRef.current;
     const match = sessions.find((s) => s.externalKey === chatId);
     if (!match) return;
-    historyLoadedRef.current = true;
     const initialRun = readPersistedRun(userId);
     const controller = new AbortController();
     apiFetch(`/api/agent/sessions/${encodeURIComponent(match.id)}/history`, {
@@ -1044,6 +1074,10 @@ function ChatRuntime() {
         const history = (await response.json()) as SessionHistory;
         if (controller.signal.aborted || activeChatIdRef.current !== chatId)
           return;
+        // Only completed reads count. Strict Mode and a refreshed sessions
+        // list can abort the first request before it replaces the local cache.
+        historyLoadedRef.current = true;
+        setHistoryPage({ sessionId: match.id, chatId, cursor: history.hasMore ? history.nextCursor ?? null : null });
         const restoredMessages = messagesFromHistory(history.messages);
         setReasoningByRunId(() => {
           const map = new Map<string, string>();
@@ -1083,6 +1117,7 @@ function ChatRuntime() {
         // pending：不覆盖——让流重放恢复当前 run 的流式输出，避免历史快照（不含
         // 当前 run 的流式增量）覆盖掉 localStorage 里已有的部分内容。
         if (!pending) {
+          setMessages(restoredMessages);
           setConversation((current) =>
             current.chatId === chatId
               ? { ...current, messages: restoredMessages, resumeRun: null }
@@ -1093,6 +1128,7 @@ function ChatRuntime() {
           reconciledRun &&
           reconciledRun.runId !== currentPersisted?.runId
         ) {
+          setMessages(restoredMessages);
           setConversation((current) =>
             current.chatId === chatId
               ? {
@@ -1106,7 +1142,7 @@ function ChatRuntime() {
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [sessions, sessionsLoaded, userId]);
+  }, [sessions, sessionsLoaded, userId, setMessages]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1320,6 +1356,9 @@ function ChatRuntime() {
     try {
       // 切换只断开当前页面的流，Worker 继续运行；切回时从历史与 SSE 恢复。
       await disconnectCurrentConversation();
+      olderHistoryRequest.current?.abort(); olderHistoryRequest.current = null;
+      moreFilesRequest.current?.abort(); moreFilesRequest.current = null;
+      setLoadingOlderHistory(false); setLoadingMoreFiles(false);
       const response = await apiFetch(
         `/api/agent/sessions/${encodeURIComponent(session.id)}/history`,
       );
@@ -1347,9 +1386,10 @@ function ChatRuntime() {
         : null;
 
       // 并行加载该会话历史里 AI 操作过的文件，供文件面板展示。
-      const files = await fetchSessionFiles(session.id).catch(() => []);
+      const filePage = await fetchSessionFilePage(session.id).catch(() => ({ files: [], nextCursor: null, hasMore: false }));
+      historyFilesScope.current = session.externalKey;
       setHistoryFiles(
-        files.map((file) => ({
+        filePage.files.map((file) => ({
           path: file.path,
           content: file.content,
           operation: file.operation as TouchedFile['operation'],
@@ -1361,6 +1401,8 @@ function ChatRuntime() {
       if (persistedRun) writePersistedRun(persistedRun, userId);
       else clearPersistedRun(userId);
       activeChatIdRef.current = session.externalKey;
+      setHistoryPage({ sessionId: session.id, chatId: session.externalKey, cursor: history.hasMore ? history.nextCursor ?? null : null });
+      setFilesPage({ sessionId: session.id, chatId: session.externalKey, cursor: filePage.hasMore ? filePage.nextCursor ?? null : null });
       setConversation({
         chatId: session.externalKey,
         messages: restoredMessages,
@@ -1384,6 +1426,59 @@ function ChatRuntime() {
       setSessionsError('无法打开这条历史记录');
     } finally {
       setSwitchingSessionId(null);
+    }
+  }
+
+  async function loadOlderHistory() {
+    const page = historyPage;
+    if (!page?.cursor || page.chatId !== activeChatIdRef.current || olderHistoryRequest.current) return;
+    const controller = new AbortController(); olderHistoryRequest.current = controller;
+    setLoadingOlderHistory(true);
+    try {
+      const older = await fetchSessionHistoryPage(page.sessionId, { cursor: page.cursor, signal: controller.signal });
+      if (controller.signal.aborted || activeChatIdRef.current !== page.chatId) return;
+      const viewport = conversationRef.current;
+      const height = viewport?.scrollHeight ?? 0;
+      const top = viewport?.scrollTop ?? 0;
+      stickToBottomRef.current = false;
+      const restored = messagesFromHistory(older.messages);
+      setMessages((current) => prependHistoryMessages(current, restored));
+      setConversation((current) => current.chatId === page.chatId ? { ...current, messages: prependHistoryMessages(current.messages, restored) } : current);
+      setReasoningByRunId((current) => {
+        const next = new Map(current);
+        for (const message of older.messages) if (message.reasoning && !next.has(message.runId)) next.set(message.runId, message.reasoning);
+        return next;
+      });
+      setHistoryPage({ ...page, cursor: older.hasMore ? older.nextCursor ?? null : null });
+      requestAnimationFrame(() => {
+        if (viewport && activeChatIdRef.current === page.chatId) viewport.scrollTop = top + viewport.scrollHeight - height;
+      });
+    } catch {
+      if (!controller.signal.aborted && activeChatIdRef.current === page.chatId) setSessionsError('无法加载更早的消息，请重试');
+    } finally {
+      if (olderHistoryRequest.current === controller) { olderHistoryRequest.current = null; setLoadingOlderHistory(false); }
+    }
+  }
+
+  async function loadMoreHistoryFiles() {
+    const page = filesPage;
+    if (!page?.cursor || page.chatId !== activeChatIdRef.current || moreFilesRequest.current) return;
+    const controller = new AbortController(); moreFilesRequest.current = controller;
+    setLoadingMoreFiles(true);
+    try {
+      const older = await fetchSessionFilePage(page.sessionId, { cursor: page.cursor, signal: controller.signal });
+      if (controller.signal.aborted || activeChatIdRef.current !== page.chatId) return;
+      setHistoryFiles((current) => {
+        // Pagination may revisit a cached page after refresh; use its fresh contents.
+        return [...new Map([...current, ...older.files.map((file) => ({
+          ...file, operation: file.operation as TouchedFile['operation'],
+        }))].map((file) => [file.path, file])).values()];
+      });
+      setFilesPage({ ...page, cursor: older.hasMore ? older.nextCursor ?? null : null });
+    } catch {
+      if (!controller.signal.aborted && activeChatIdRef.current === page.chatId) setSessionsError('无法加载更多文件，请重试');
+    } finally {
+      if (moreFilesRequest.current === controller) { moreFilesRequest.current = null; setLoadingMoreFiles(false); }
     }
   }
 
@@ -1963,6 +2058,12 @@ function ChatRuntime() {
         >
           {hasConversation && (
             <div className='message-list' ref={messageListRef}>
+              {historyPage?.chatId === conversation.chatId && historyPage.cursor && (
+                <button type='button' disabled={loadingOlderHistory} onClick={() => void loadOlderHistory()}
+                  style={{ alignSelf: 'center', padding: '8px 16px', borderRadius: 8, border: '1px solid var(--line)', background: 'transparent', color: 'var(--ink-muted)' }}>
+                  {loadingOlderHistory ? '正在加载…' : '加载更早消息'}
+                </button>
+              )}
               {messages.map((message, index) => {
                 if (hiddenContinuationIds.has(message.id)) return null;
                 const isStreaming =
@@ -2084,9 +2185,9 @@ function ChatRuntime() {
                         ? '思考中'
                         : null
           }
-          disabled={Boolean(error) || Boolean(pendingInterrupt)}
+          disabled={creatingSession || Boolean(error) || Boolean(pendingInterrupt)}
           disabledPlaceholder={
-            pendingInterrupt ? '请先处理上方待办' : '请先恢复与 Agent 的连接'
+            creatingSession ? '正在创建对话…' : pendingInterrupt ? '请先处理上方待办' : '请先恢复与 Agent 的连接'
           }
           input={input}
           isBusy={isBusy}
@@ -2120,6 +2221,9 @@ function ChatRuntime() {
       {filesOpen && (
         <FilePanel
           files={touchedFiles}
+          hasMoreFiles={filesPage?.chatId === conversation.chatId && Boolean(filesPage.cursor)}
+          loadingMoreFiles={loadingMoreFiles}
+          onLoadMoreFiles={() => void loadMoreHistoryFiles()}
           onClose={() => {
             setFilesOpen(false);
             setSidebarHidden(false);

@@ -184,6 +184,8 @@ type SessionHistory = {
   session: SessionSummary;
   messages: HistoryMessage[];
   latestRun: RunSummary | null;
+  nextCursor?: string | null;
+  hasMore?: boolean;
 };
 
 type RunSummary = {
