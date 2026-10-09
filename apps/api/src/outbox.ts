@@ -95,8 +95,8 @@ export class RunOutboxDispatcher {
       span = undefined;
     }
     const active = span ? trace.setSpan(parent, span) : parent;
-    // Re-inject the producer span context so the Worker consumer can link directly
-    // to this dispatch span, while request_id stays associated end to end.
+    // 重新注入生产者 span 上下文，使 Worker 消费者可以直接关联到此派发 span，
+    // 同时让 request_id 在整个调用链中保持关联。
     let payload: RunJob = job;
     try {
       const carrier = injectObservabilityContext(active, job.observability?.requestId);
@@ -106,8 +106,8 @@ export class RunOutboxDispatcher {
     }
     try {
       await context.with(active, async () => {
-        // add() deduplicates retained failed jobs. Explicitly revive an unconsumed
-        // dispatch so a short session-lock outage cannot strand a recovery forever.
+        // add() 会对保留的失败任务去重。显式重新激活尚未消费的派发，
+        // 避免短暂的会话锁故障让恢复任务永久搁置。
         const existing = await this.options.queue.getJob(dispatch.id);
         if (existing && await existing.getState() === 'failed') {
           await existing.retry('failed', { resetAttemptsMade: true, resetAttemptsStarted: true });

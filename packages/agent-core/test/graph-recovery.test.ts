@@ -5,7 +5,7 @@ import { MemorySaver, MessagesAnnotation, StateGraph } from '@langchain/langgrap
 import { chooseRecoveryInput, canonicalAssistantText, createRecoveryResumeCommand } from '../src/graph-recovery.js';
 
 test('crash recovery resumes the pending node without reappending the initial message', async () => {
-  // Same metadata contract as the production fenced Postgres saver.
+  // 与生产环境栅栏 Postgres saver 使用相同的元数据约定。
   class ExecutionSaver extends MemorySaver {
     override put(...args: Parameters<MemorySaver['put']>) {
       args[2] = { ...args[0].metadata, ...args[2] };

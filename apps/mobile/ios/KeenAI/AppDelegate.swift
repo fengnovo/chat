@@ -32,7 +32,7 @@ public class AppDelegate: ExpoAppDelegate {
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  // Linking API
+  // Linking API 深层链接
   public override func application(
     _ app: UIApplication,
     open url: URL,
@@ -41,7 +41,7 @@ public class AppDelegate: ExpoAppDelegate {
     return super.application(app, open: url, options: options) || RCTLinkingManager.application(app, open: url, options: options)
   }
 
-  // Universal Links
+  // Universal Links 通用链接
   public override func application(
     _ application: UIApplication,
     continue userActivity: NSUserActivity,
@@ -53,10 +53,10 @@ public class AppDelegate: ExpoAppDelegate {
 }
 
 class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
-  // Extension point for config-plugins
+  // config-plugin 扩展点
 
   override func sourceURL(for bridge: RCTBridge) -> URL? {
-    // needed to return the correct URL for expo-dev-client.
+    // 需要返回正确的 URL，供 expo-dev-client 使用。
     bridge.bundleURL ?? bundleURL()
   }
 

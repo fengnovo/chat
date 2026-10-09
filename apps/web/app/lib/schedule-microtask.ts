@@ -1,6 +1,6 @@
 /**
- * Schedule work after the current call stack without requiring the native
- * queueMicrotask API. Older browsers fall back to a Promise or a timer.
+ * 在当前调用栈结束后安排任务，不依赖原生 queueMicrotask API。
+ * 较旧的浏览器会回退到 Promise 或定时器。
  */
 export function scheduleMicrotask(callback: () => void): void {
   if (typeof globalThis !== 'undefined' && typeof globalThis.queueMicrotask === 'function') {

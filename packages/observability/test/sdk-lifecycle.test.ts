@@ -44,7 +44,7 @@ test('flush exports spans and metrics with async parent context; shutdown flushe
     assert.equal(spans.length, 2);
     assert.equal(spans[0]?.parentSpanContext?.spanId, spans[1]?.spanContext().spanId);
     assert.equal(metricExporter.getMetrics()[0]?.scopeMetrics[0]?.metrics[0]?.dataPoints[0]?.value, 3);
-    // Capture the export before the real in-memory exporter's shutdown clears it.
+    // 在真实的内存导出器关闭并清空数据前，先保存导出结果。
     let shutdownSpans: string[] = [];
     const originalShutdown = exporter.shutdown.bind(exporter);
     exporter.shutdown = async () => { shutdownSpans = exporter.getFinishedSpans().map(span => span.name); await originalShutdown(); };
@@ -120,8 +120,8 @@ for (const operation of ['forceFlush', 'shutdown'] as const) {
       let elapsed = 0;
       t.mock.method(performance, 'now', () => elapsed);
       t.mock.method(console, 'warn', () => {});
-      // Isolate the outer lifecycle budget from the independent 1s exporter timeout.
-      // A stalled provider can otherwise be hidden by the bounded exporter adapter.
+      // 将外层生命周期预算与独立的 1 秒导出器超时隔离。
+      // 否则，有时限的导出器适配器可能会掩盖停滞的 Provider。
       t.mock.method(BasicTracerProvider.prototype, 'forceFlush', () => new Promise<void>(() => {}));
       const runtime = await startObservability({ ...config, shutdownTimeoutMs: 60000 }, {
         spanExporter: { export() {}, shutdown: () => new Promise<void>(() => {}) },
@@ -141,7 +141,7 @@ for (const operation of ['forceFlush', 'shutdown'] as const) {
         assert.equal(completed, true, 'the public lifecycle must settle by 5000ms');
         await pending;
       } finally {
-        // Complete cleanup under the virtual clock, including on regression failure.
+        // 在虚拟时钟下完成清理，即使回归测试失败也不例外。
         const cleanup = runtime.shutdown(1);
         for (let step = 0; step < 3; step++) {
           elapsed += 60000;

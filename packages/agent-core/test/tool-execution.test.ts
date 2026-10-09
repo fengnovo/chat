@@ -96,7 +96,7 @@ test('MCP transport failures and malformed responses keep their execution outcom
     const [search] = await loadMcpTools('firecrawl', {
       listTools: async () => ({ tools: [{ name: 'firecrawl_search', inputSchema: { type: 'object', properties: {} } }] }),
       callTool: async () => {
-        // Even error-like remote text is not proof of a completed call when the transport throws.
+        // 传输层抛错时，即使远端文本看起来像错误，也不能证明调用已经完成。
         if (failure === 'transport') throw new Error("MCP tool 'firecrawl_search' on server 'firecrawl' returned an error: connection lost");
         return { content: 'invalid result' };
       },
@@ -292,7 +292,7 @@ test('a cached write_todos Command still applies its state update in a real agen
   const store = new Ledger();
   const todos = [{ content: 'Save the report', status: 'completed' as const }];
   for (const thread of ['original', 'replay']) {
-    // Installed todo middleware still declares a legacy Zod state schema.
+    // 已安装的 todo 中间件仍声明了旧版 Zod 状态模式。
     const agent = createAgent({ model: new FakeToolCallingModel({ toolCalls: [[{ name: 'write_todos', id: 'call-1', args: { todos } }], []] }), middleware: [createToolExecutionMiddleware({ store, scopeId: 'root' }), todoListMiddleware() as unknown as AnyAgentMiddleware], checkpointer: new MemorySaver() });
     const result = await agent.invoke({ messages: [new HumanMessage('save todos')] }, { configurable: { thread_id: thread } });
     assert.deepEqual((result as unknown as { todos: unknown }).todos, todos);
@@ -342,7 +342,7 @@ test('session approval cannot authorize another unsafe retry after an approved r
   assert.equal(paused.__interrupt__?.length, 1);
   assert.equal(writes, 0);
   const approval = paused.__interrupt__![0]!.value as { durableApprovalId: string };
-  // Worker rebuilds the runtime with the persisted session authorization on resume/recovery.
+  // Worker 在续跑或恢复时，会使用持久化的会话授权重新构建运行时。
   await assert.rejects(() => build(true).invoke(new Command({ resume: {
     decisions: [{ type: 'approve' }], durableApprovalId: approval.durableApprovalId,
   } }), config), isDurableExecutionError);

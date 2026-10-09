@@ -5,8 +5,8 @@ apply plugin: "com.facebook.react"
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 /**
- * This is the configuration block to customize your React Native Android app.
- * By default you don't need to apply any configuration, just uncomment the lines you need.
+ * 此配置块用于自定义 React Native Android 应用。
+ * 默认情况下无需添加配置，只需取消所需配置行的注释即可。
  */
 react {
     entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", projectRoot, "android", "absolute"].execute(null, rootDir).text.trim())
@@ -15,69 +15,66 @@ react {
     codegenDir = new File(["node", "--print", "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
 
     enableBundleCompression = (findProperty('android.enableBundleCompression') ?: false).toBoolean()
-    // Use Expo CLI to bundle the app, this ensures the Metro config
-    // works correctly with Expo projects.
+    // 使用 Expo CLI 打包应用，确保 Metro 配置能在 Expo 项目中正常工作。
     cliFile = new File(["node", "--print", "require.resolve('@expo/cli', { paths: [require.resolve('expo/package.json')] })"].execute(null, rootDir).text.trim())
     bundleCommand = "export:embed"
 
-    /* Folders */
-     //   The root of your project, i.e. where "package.json" lives. Default is '../..'
+    /* 目录 */
+     //   项目根目录，即包含 "package.json" 的目录。默认值为 '../..'
     // root = file("../../")
-    //   The folder where the react-native NPM package is. Default is ../../node_modules/react-native
+    //   react-native NPM 包所在目录。默认值为 ../../node_modules/react-native
     // reactNativeDir = file("../../node_modules/react-native")
-    //   The folder where the react-native Codegen package is. Default is ../../node_modules/@react-native/codegen
+    //   react-native Codegen 包所在目录。默认值为 ../../node_modules/@react-native/codegen
     // codegenDir = file("../../node_modules/@react-native/codegen")
 
-    /* Variants */
-    //   The list of variants to that are debuggable. For those we're going to
-    //   skip the bundling of the JS bundle and the assets. By default is just 'debug'.
-    //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
+    /* 构建变体 */
+    //   可调试构建变体列表。对于这些变体，构建时会跳过 JS bundle 和资源打包。
+    //   默认只有 'debug'。如添加 lite、prod 等 flavor，也需要将它们列入 debuggableVariants。
     // debuggableVariants = ["liteDebug", "prodDebug"]
 
-    /* Bundling */
-    //   A list containing the node command and its flags. Default is just 'node'.
+    /* 打包 */
+    //   Node 命令及其参数列表。默认值为 'node'。
     // nodeExecutableAndArgs = ["node"]
 
     //
-    //   The path to the CLI configuration file. Default is empty.
+    //   CLI 配置文件路径。默认为空。
     // bundleConfig = file(../rn-cli.config.js)
     //
-    //   The name of the generated asset file containing your JS bundle
+    //   保存 JS bundle 的生成资源文件名称。
     // bundleAssetName = "MyApplication.android.bundle"
     //
-    //   The entry file for bundle generation. Default is 'index.android.js' or 'index.js'
+    //   生成 bundle 的入口文件。默认值为 'index.android.js' 或 'index.js'。
     // entryFile = file("../js/MyApplication.android.js")
     //
-    //   A list of extra flags to pass to the 'bundle' commands.
-    //   See https://github.com/react-native-community/cli/blob/main/docs/commands.md#bundle
+    //   传递给 'bundle' 命令的额外参数列表。
+    //   参见 https://github.com/react-native-community/cli/blob/main/docs/commands.md#bundle
     // extraPackagerArgs = []
 
-    /* Hermes Commands */
-    //   The hermes compiler command to run. By default it is 'hermesc'
+    /* Hermes 命令 */
+    //   要运行的 Hermes 编译器命令。默认值为 'hermesc'。
     // hermesCommand = "$rootDir/my-custom-hermesc/bin/hermesc"
     //
-    //   The list of flags to pass to the Hermes compiler. By default is "-O", "-output-source-map"
+    //   传递给 Hermes 编译器的参数列表。默认值为 "-O", "-output-source-map"。
     // hermesFlags = ["-O", "-output-source-map"]
 
-    /* Autolinking */
+    /* 自动链接 */
     autolinkLibrariesWithApp()
 }
 
 /**
- * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
+ * 在发布构建中将此值设为 true，以使用 [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization) 优化应用。
  */
 def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
 
 /**
- * The preferred build flavor of JavaScriptCore (JSC)
+ * JavaScriptCore (JSC) 的首选构建变体。
  *
- * For example, to use the international variant, you can use:
+ * 例如，要使用国际化变体，可以这样设置：
  * `def jscFlavor = 'org.webkit:android-jsc-intl:+'`
  *
- * The international variant includes ICU i18n library and necessary data
- * allowing to use e.g. `Date.toLocaleString` and `String.localeCompare` that
- * give correct results when using with locales other than en-US. Note that
- * this variant is about 6MiB larger per architecture than default.
+ * 国际化变体包含 ICU i18n 库及必要数据，
+ * 使 `Date.toLocaleString` 和 `String.localeCompare` 等 API 在 en-US 以外的地区设置下
+ * 也能返回正确结果。注意，每种架构使用此变体约比默认配置增加 6 MiB。
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
@@ -110,8 +107,8 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // 注意：生产环境需要自行生成密钥库文件。
+            // 参见 https://reactnative.dev/docs/signed-apk-android。
             signingConfig signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
@@ -132,20 +129,20 @@ android {
     }
 }
 
-// Apply static values from `gradle.properties` to the `android.packagingOptions`
-// Accepts values in comma delimited lists, example:
+// 将 `gradle.properties` 中的静态值应用到 `android.packagingOptions`。
+// 值可使用逗号分隔的列表，例如：
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
 ["pickFirsts", "excludes", "merges", "doNotStrip"].each { prop ->
-    // Split option: 'foo,bar' -> ['foo', 'bar']
+    // 拆分选项：'foo,bar' -> ['foo', 'bar']
     def options = (findProperty("android.packagingOptions.$prop") ?: "").split(",");
-    // Trim all elements in place.
+    // 原地去除所有元素两端的空白。
     for (i in 0..<options.size()) options[i] = options[i].trim();
-    // `[] - ""` is essentially `[""].filter(Boolean)` removing all empty strings.
+    // `[] - ""` 等价于 `[""].filter(Boolean)`，会移除所有空字符串。
     options -= ""
 
     if (options.length > 0) {
         println "android.packagingOptions.$prop += $options ($options.length)"
-        // Ex: android.packagingOptions.pickFirsts += '**/SCCS/**'
+        // 例如：android.packagingOptions.pickFirsts += '**/SCCS/**'
         options.each {
             android.packagingOptions[prop] += it
         }
@@ -153,7 +150,7 @@ android {
 }
 
 dependencies {
-    // The version of react-native is set by the React Native Gradle Plugin
+    // react-native 的版本由 React Native Gradle 插件设置。
     implementation("com.facebook.react:react-android")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
@@ -161,15 +158,15 @@ dependencies {
     def isWebpAnimatedEnabled = (findProperty('expo.webp.animated') ?: "") == "true";
 
     if (isGifEnabled) {
-        // For animated gif support
+        // 动态 GIF 支持。
         implementation("com.facebook.fresco:animated-gif:${expoLibs.versions.fresco.get()}")
     }
 
     if (isWebpEnabled) {
-        // For webp support
+        // WebP 支持。
         implementation("com.facebook.fresco:webpsupport:${expoLibs.versions.fresco.get()}")
         if (isWebpAnimatedEnabled) {
-            // Animated webp support
+            // 动态 WebP 支持。
             implementation("com.facebook.fresco:animated-webp:${expoLibs.versions.fresco.get()}")
         }
     }

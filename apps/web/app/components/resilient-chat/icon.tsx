@@ -122,8 +122,8 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 
 export { Icon, type IconName };
 
-// Next treats files named `icon.tsx` as metadata routes and requires a default
-// export. Keep the reusable named component API unchanged for the chat UI.
+// Next 会将名为 `icon.tsx` 的文件视为元数据路由，并要求提供默认导出。
+// 保持命名组件 API 不变，供聊天界面复用。
 export default function IconRoute() {
   return new Response(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"/></svg>',

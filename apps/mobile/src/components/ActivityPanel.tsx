@@ -82,7 +82,7 @@ function ToolRow({
   );
 }
 
-/** Execution details belong to their assistant turn, including after completion. */
+/** 执行详情属于对应的助手轮次，即使执行已完成也一样。 */
 export default function ActivityPanel({
   items,
   finished,

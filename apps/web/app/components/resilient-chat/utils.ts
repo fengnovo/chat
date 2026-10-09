@@ -146,7 +146,7 @@ function foldSubagentCard(cards: SubagentCard[], event: SubagentEvent): Subagent
         : card,
     );
   }
-  // subagent.reviewed
+  // subagent.reviewed 事件
   return cards.map((card) => {
     if (card.subagentId !== event.subagentId) return card;
     const review = {

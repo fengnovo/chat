@@ -31,10 +31,10 @@ function environment() {
     RUN_INTEGRATION_TESTS: '1',
     DATABASE_URL: process.env.DATABASE_URL,
     REDIS_URL: process.env.REDIS_URL,
-    // The SIGKILL fixture currently consumes this name rather than REDIS_URL.
+    // SIGKILL 测试夹具目前使用这个名称，而不是 REDIS_URL。
     DURABLE_E2E_REDIS_URL: process.env.REDIS_URL,
   };
-  // Prevent inherited preloads or test filters from altering the mandatory suites.
+  // 避免继承的预加载项或测试筛选器影响必跑测试套件。
   delete env.NODE_OPTIONS;
   return { env, name, database, redis };
 }
@@ -81,7 +81,7 @@ async function execute(label, args, directory, env, testFiles) {
     const match = /^# (tests|pass|fail|cancelled|skipped|todo) (\d+)\s*$/.exec(line);
     if (match) summary[match[1]] = Number(match[2]);
     const subtest = /^# Subtest: (.+)$/.exec(line);
-    // Node reports an empty file as one successful test named after its path.
+    // Node 会把空文件报告为一个成功用例，用文件路径作为用例名称。
     if (subtest && testFiles?.some((file) => subtest[1] === file || subtest[1] === path.relative(directory, file))) {
       emptyFiles.add(subtest[1]);
     }
@@ -131,7 +131,7 @@ async function main() {
     return;
   }
   await execute('Test database migrations', ['src/migrate.ts'], selected[0].directory, config.env);
-  // Serialize files/suites because migrations and recovery pollers share one isolated database.
+  // 文件和套件必须串行运行，因为迁移与恢复轮询器共用同一个隔离数据库。
   for (const suite of selected) {
     await execute(suite.name, ['--test', '--test-concurrency=1', '--test-reporter=tap', ...suite.files], suite.directory, config.env, suite.files);
   }

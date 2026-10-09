@@ -1,3 +1,3 @@
 //
-// Use this file to import your target's public headers that you would like to expose to Swift.
+// 在此文件中导入要向 Swift 暴露的目标公共头文件。
 //

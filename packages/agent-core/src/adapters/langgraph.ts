@@ -26,7 +26,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Validate framework values once, rather than scattering unchecked snapshot casts. */
+/** 集中校验框架值，避免在各处散落未检查的快照类型转换。 */
 export function readGraphSnapshot(value: unknown): GraphSnapshot {
   if (!isRecord(value) ||
     (value.config !== undefined && !isRecord(value.config)) ||
@@ -38,7 +38,7 @@ export function readGraphSnapshot(value: unknown): GraphSnapshot {
       (!Array.isArray(value.values.messages) || !value.values.messages.every(isBaseMessage)))))) {
     throw new DurableExecutionError('Invalid LangGraph recovery snapshot');
   }
-  // Properties above are validated; null metadata is an upstream empty snapshot.
+  // 上述属性均已校验；metadata 为 null 表示上游传入了空快照。
   const snapshot = { ...value };
   if (snapshot.metadata === null) delete snapshot.metadata;
   return snapshot as GraphSnapshot;
@@ -52,7 +52,7 @@ export function firstGraphInterrupt(value: unknown): GraphInterruptValue | undef
 
 function graphMethod(graph: unknown, name: 'getState' | 'invoke' | 'stream'): (...args: unknown[]) => unknown {
   if (!isRecord(graph) || typeof graph[name] !== 'function') throw new DurableExecutionError(`LangGraph runtime is missing ${name}`);
-  // Dynamic generic graphs enter through this single checked, bound boundary.
+  // 动态泛型图统一从这个经过校验且已绑定的边界进入。
   return (graph[name] as (...args: unknown[]) => unknown).bind(graph);
 }
 

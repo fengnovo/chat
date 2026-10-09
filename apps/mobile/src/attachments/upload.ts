@@ -77,7 +77,7 @@ interface Init {
   parts?: { number: number; uploadUrl: string }[];
 }
 
-/** Uses Web's init → presigned PUT → complete protocol, with raw byte hashes. */
+/** 使用 Web 端的 init → 预签名 PUT → complete 协议，并计算原始字节哈希。 */
 export async function uploadAttachment(
   api: ApiClient,
   file: SelectedFile,

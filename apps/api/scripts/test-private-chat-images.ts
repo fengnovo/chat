@@ -1,4 +1,4 @@
-/** Local HTTP + JWT + PostgreSQL + MinIO integration; not a native UI E2E. */
+/** 本地 HTTP、JWT、PostgreSQL 和 MinIO 集成测试；不是原生 UI E2E。 */
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -11,7 +11,7 @@ import { loadConfig } from '../src/config.js';
 
 const config = loadConfig({ ...process.env, NODE_ENV: 'test', AUTH_MODE: 'password',
   CAPTION_ENABLED: 'false', AUTH_JWT_SECRET: randomBytes(32).toString('hex') });
-// This script creates and deletes its own identities and objects. Never target production.
+// 此脚本会创建并删除自己的身份和对象；绝不能对生产环境运行。
 for (const endpoint of [config.DATABASE_URL, config.S3_ENDPOINT]) {
   assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(new URL(endpoint).hostname), 'Only loopback test services are allowed');
 }
@@ -33,7 +33,7 @@ let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 try {
   for (const identity of identities) await repository.ensureIdentity(identity);
   const queue = { close: async () => {} };
-  // Leave pre-existing local runs alone; only the upload/read path uses the real repository.
+  // 保留原有的本地 run；只有上传和读取流程会使用真实仓库。
   const apiRepository = new Proxy(repository, {
     get(target, key) {
       if (key === 'claimDispatches') return async () => [];

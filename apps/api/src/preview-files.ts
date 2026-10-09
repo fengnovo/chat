@@ -10,8 +10,8 @@ export async function validatePreviewMount(sessionsRoot: string, workspaceId: st
   parts(workspaceId);
   if (!workspaceId || workspaceId.includes('/')) throw new PreviewFileError(403, 'forbidden');
   const base = await realpath(sessionsRoot);
-  // Mount the provisioner-owned user-data root, never an agent-writable child
-  // path that Docker could resolve through a symlink into the host filesystem.
+  // 挂载由配置器持有的用户数据根目录；不要挂载 Agent 可写的子路径，
+  // 否则 Docker 可能通过符号链接访问宿主机文件系统。
   const relative = `${workspaceId}/user-data`;
   const directory = await secureOpen(base, relative, true);
   await directory.close();
@@ -36,7 +36,7 @@ async function secureOpen(base: string, relative: string, directory = false): Pr
       const anchored = process.platform === 'linux' ? `/proc/self/fd/${held.at(-1)!.fd}/${segments[i]}` : filename;
       const handle = await open(anchored, constants.O_RDONLY | constants.O_NOFOLLOW | (isDirectory ? constants.O_DIRECTORY : constants.O_NONBLOCK));
       held.push(handle);
-      // On development macOS, reject symlink ancestors and verify the opened inode.
+      // 在 macOS 开发环境中，拒绝符号链接祖先目录，并验证已打开的 inode。
       if (process.platform !== 'linux') {
         const info = await lstat(filename);
         const opened = await handle.stat();
@@ -84,7 +84,7 @@ export async function readPreviewFile(sessionsRoot: string, workspaceId: string,
       if (!(error instanceof PreviewFileError) || error.status !== 404) throw error;
       continue;
     }
-    // Once an entry point selects the root, missing assets must stay 404.
+    // 一旦入口文件选定了根目录，缺失的资源就必须返回 404。
     if (isFile) return readBounded(base, `${candidate}/${requested || 'index.html'}`);
   }
   const directory = await secureOpen(base, workspace, true);

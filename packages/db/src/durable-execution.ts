@@ -104,7 +104,7 @@ export class DurableExecutionRepository {
   }
 
   private async lockLease(client: PoolClient, lease: RunExecutionLease): Promise<QueryResultRow> {
-    // Evaluate TTL after acquiring the lock: another owner may have committed while we waited.
+    // 获取锁后再检查 TTL，因为等待期间其他所有者可能已完成提交。
     const selected = await client.query('SELECT * FROM agent_runs WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [lease.tenantId, lease.runId]);
     const row = selected.rows[0];
     if (!row || row.lease_token !== lease.token || Number(row.lease_epoch) !== lease.epoch) throw new LeaseLostError();
@@ -117,7 +117,7 @@ export class DurableExecutionRepository {
     return this.transaction(async (client) => {
       await this.lockLease(client, lease);
       const result = await action(client);
-      // A slow write must not commit after its ownership TTL has elapsed.
+      // 所有权 TTL 到期后，耗时较长的写入不得提交。
       await this.lockLease(client, lease);
       return result;
     });
@@ -142,14 +142,13 @@ export class DurableExecutionRepository {
         [lease.tenantId, lease.runId, component, encoded],
       );
       const row = selected.rows[0]!;
-      // New Runs are marked at creation. Their agent component is committed
-      // before graph construction, so its absence proves preparation has not
-      // reached graph/tool execution. A crash in that phase can safely finish
-      // preparation; unmarked legacy Runs have no such proof.
+      // 新 run 会在创建时标记。图构造前会先提交其 Agent 组件，
+      // 因此缺少该组件就能证明准备过程尚未进入图或工具执行阶段。
+      // 该阶段发生崩溃后可以安全地完成准备；未标记的旧 run 没有此类依据。
       const preparing = row.current_contract === true && row.no_execution === true && !row.agent_descriptor && lease.input.kind === 'start';
       if (row.descriptor) {
         if (!row.compatible) throw new ExecutionCompatibilityError('RECOVERY_INCOMPATIBLE', component);
-        // Before any host preparation, refuse checkpoints without a complete prior runtime identity.
+        // 在宿主开始任何准备工作之前，拒绝缺少完整先前运行时身份的检查点。
         if (component === 'host' && (lease.recovery || lease.input.kind !== 'start') && !row.agent_descriptor && !preparing) {
           throw new ExecutionCompatibilityError('RECOVERY_DESCRIPTOR_MISSING', 'agent');
         }
@@ -199,7 +198,7 @@ export class DurableExecutionRepository {
         if (latest && (latest.status !== 'resolved' || !latest.same_response || (job.interruptId && latest.id !== job.interruptId))) return null;
         if (job.interruptId && !latest) return null;
         if (!job.interruptId) {
-          // Old payloads are accepted only while the latest durable dispatch is also legacy.
+          // 只有最近一次持久化派发也是旧格式时，才接受旧载荷。
           const dispatch = await client.query(
             `SELECT payload FROM run_dispatch_outbox WHERE tenant_id=$1 AND run_id=$2 AND job_kind <> 'recover'
              ORDER BY created_at DESC,id DESC LIMIT 1`, [job.tenantId, job.runId],
@@ -243,7 +242,7 @@ export class DurableExecutionRepository {
   }
 
   async releaseLease(lease: RunExecutionLease, interrupted = false): Promise<void> {
-    // Releasing an expired owner is harmless; a successor's token is never cleared.
+    // 释放已过期所有者不会造成影响；绝不清除后继所有者的令牌。
     await this.pool.query(
       `UPDATE agent_runs SET lease_token=NULL,lease_expires_at=NULL,worker_id=NULL,
        execution_state=CASE WHEN status IN ('completed','failed','cancelled') THEN 'terminal'
@@ -299,7 +298,7 @@ export class DurableExecutionRepository {
   private async insertEvent(client: PoolClient, tenantId: string, event: AgentEvent): Promise<PersistedAgentEvent> {
     const current = await client.query('SELECT status,cancel_requested_at FROM agent_runs WHERE tenant_id=$1 AND id=$2', [tenantId, event.runId]);
     if (!current.rows[0]) throw new ExecutionIdentityError('Cannot append an event to a missing run.');
-    // A persisted cancellation cannot be overwritten by completion or a new pause.
+    // 已持久化的取消状态不能被完成状态或新的暂停覆盖。
     if (current.rows[0].cancel_requested_at &&
       ['run.completed', 'approval.required', 'question.required'].includes(event.type)) {
       event = { runId: event.runId, timestamp: event.timestamp, type: 'run.cancelled' };

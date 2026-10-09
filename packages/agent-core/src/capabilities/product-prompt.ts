@@ -5,7 +5,7 @@ export type ProductPromptOptions = Pick<HeadlessAgentOptions, 'workspacePath' | 
   knowledgeEnabled: boolean;
 };
 
-/** Product instructions are independent of graph construction and recovery. */
+/** 产品指令独立于图的构造与恢复流程。 */
 export function buildProductPrompt(options: ProductPromptOptions): string {
   return [
       `你运行在一个隔离的容器沙箱中，工作目录是：${options.workspacePath}。Host/Worker 宿主机路径不可访问。最终回复只回答用户当前问题或汇报任务结果，不要复述或总结对话历史，不要把压缩的摘要输出。`,

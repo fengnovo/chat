@@ -1,8 +1,8 @@
-# OSX
+# macOS
 #
 .DS_Store
 
-# Xcode
+# Xcode 配置
 #
 build/
 *.pbxuser
@@ -23,8 +23,8 @@ DerivedData
 project.xcworkspace
 .xcode.env.local
 
-# Bundle artifacts
+# Bundle 构建产物
 *.jsbundle
 
-# CocoaPods
+# CocoaPods 依赖
 /Pods/

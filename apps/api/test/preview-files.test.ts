@@ -62,7 +62,7 @@ test('production preview stays contained during directory replacement', async ()
       for (let i = 0; i < 100; i++) {
         let content: Buffer;
         try { content = await readPreviewFile(root, 'id', 'index.html', true); }
-        catch { continue; } // Missing/replaced paths must fail closed.
+        catch { continue; } // 路径不存在或已被替换时必须拒绝访问。
         assert.equal(content.toString(), 'SAFE');
       }
     } finally { stopped = true; await mutate; }

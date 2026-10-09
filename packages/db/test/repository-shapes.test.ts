@@ -169,7 +169,7 @@ test('createRun rejects a cross-tenant knowledge base id', async () => {
             };
           }
           if (text.includes('FROM knowledge_bases')) {
-            // The scoped visibility query must not return another tenant's row.
+            // 带作用域的可见性查询不得返回其他租户的数据行。
             return { rows: [], rowCount: 0 };
           }
           return { rows: [], rowCount: 0 };

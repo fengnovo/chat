@@ -36,7 +36,7 @@ function interruptState(value: unknown): ChildInterruptState | null {
   return value as ChildInterruptState;
 }
 
-/** Detached graphs cannot invoke the parent's interrupt() scratchpad. The root surfaces this request. */
+/** 分离的图无法调用父级的 interrupt() 暂存区，因此由根图传递此请求。 */
 export class DurableChildInterruptError extends DurableExecutionError {
   readonly code = 'DURABLE_EXECUTION_INTERRUPTED';
   readonly interruptId: string;
@@ -47,7 +47,7 @@ export class DurableChildInterruptError extends DurableExecutionError {
   }
 }
 
-/** Persist a background approval before the root starts another execution pass. */
+/** 在根图开始下一轮执行前，先持久化后台审批。 */
 export async function resumeBackgroundChild(
   options: SpawnSubagentOptions,
   response: unknown,
@@ -56,7 +56,7 @@ export async function resumeBackgroundChild(
   if (!options.durable) return false;
   const records = await childStoreOperation(() => options.durable!.store.listBackground());
   const waiting = records.filter((record) => record.status === 'waiting' && interruptState(record.review));
-  // An unaddressed response is safe only when exactly one child is waiting.
+  // 只有恰好一个子任务在等待时，未指明对象的响应才安全。
   const record = interruptId
     ? waiting.find((item) => interruptState(item.review)?.interruptId === interruptId)
     : waiting.length === 1 ? waiting[0] : undefined;
@@ -68,7 +68,7 @@ export async function resumeBackgroundChild(
   return true;
 }
 
-/** Invoke an independently checkpointed attempt, outside the parent graph's inherited config. */
+/** 在父图继承的配置之外，调用拥有独立检查点的尝试。 */
 export async function invokeDurableChildGraph(
   graphValue: unknown,
   input: SpawnSubagentInput,
@@ -92,8 +92,8 @@ export async function invokeDurableChildGraph(
     },
     durability: 'sync' as const,
   };
-  // LangGraph merges the ambient runnable config even when explicit configurable is given.
-  // Replacing that ambient context also prevents nested graph read/checkpointer/namespace inheritance.
+  // 即使传入了显式 configurable，LangGraph 仍会合并当前 runnable 配置。
+  // 替换当前上下文还能避免嵌套图继承读取器、检查点保存器和命名空间。
   const isolated = <T>(operation: () => Promise<T>) =>
     AsyncLocalStorageProviderSingleton.runWithConfig(config, operation);
   const save = async (patch: Partial<DurableChildRecord>) => {
@@ -105,8 +105,8 @@ export async function invokeDurableChildGraph(
       throw new Error('Interrupted child checkpoint has no stable identity');
     }
     const candidate = interruptState(record.review);
-    // A crash can occur after the next interrupt was checkpointed but before its request was saved.
-    // Never reuse an approval for a different committed checkpoint.
+    // 可能在下一个 interrupt 已写入检查点、请求尚未保存时发生崩溃。
+    // 绝不能将某个审批复用于其他已提交的检查点。
     const saved = candidate?.checkpointId === checkpointId &&
       stableToolInputHash(candidate.request) === stableToolInputHash(request) ? candidate : null;
     const marker = (request as { durableApprovalId?: unknown } | null)?.durableApprovalId;
@@ -119,11 +119,11 @@ export async function invokeDurableChildGraph(
     } else if (execution.background) {
       throw new DurableChildInterruptError(record, state.request);
     } else {
-      // This call deliberately uses the restored parent graph context, outside isolated().
+      // 此调用有意使用恢复后的父图上下文，不放在 isolated() 中执行。
       response = interrupt(state.request);
       if (typeof marker === 'string') {
-        // A failed parent task can retain an old unscoped response in addition to
-        // its positional history. Only a response naming the current retry is fresh.
+        // 父任务失败后，除按位置保存的历史外，还可能留有旧的未限定响应。
+        // 只有明确对应当前重试的响应才是最新的。
         while ((history.length > 0 || (response as { durableApprovalId?: unknown } | null)?.durableApprovalId !== undefined) &&
           (response as { durableApprovalId?: unknown } | null)?.durableApprovalId !== marker) {
           response = interrupt(state.request);
@@ -132,15 +132,15 @@ export async function invokeDurableChildGraph(
       history.push({ request: state.request, response });
       await save({ review: { ...state, response, history } });
     }
-    // The tool guard can identify a later retry even when native interrupt IDs reuse a task ID.
+    // 即使原生 interrupt ID 复用了任务 ID，工具保护逻辑仍能识别后续重试。
     const childResponse = typeof marker === 'string' && typeof response === 'object' && response !== null
       ? { ...response, durableApprovalId: marker } : response;
     return new Command({ resume: childResponse });
   };
   try {
     if (!execution.background) {
-      // Parent interrupt responses are positional. Consume the slots already used by this
-      // spawn invocation before transferring a newer child request into the same parent task.
+      // 父级 interrupt 响应按位置对应。将新的子任务请求转交给同一父任务前，
+      // 先跳过本次 spawn 已用过的响应位置。
       for (const previous of history) interrupt(previous.request);
     }
     let snapshot: GraphSnapshot = await isolated(() => graph.getState(config));

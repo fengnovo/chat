@@ -26,7 +26,7 @@ function cursorOf(value?: string): { createdAt: string; id: string } | null {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString());
     if (typeof parsed.createdAt === 'string' && parsed.createdAt.length < 64 && Number.isFinite(Date.parse(parsed.createdAt)) &&
       typeof parsed.id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(parsed.id)) return parsed;
-  } catch { /* Invalid cursor is reported before executing SQL. */ }
+  } catch { /* 执行 SQL 前会报告无效游标。 */ }
   throw new Error('invalid_history_cursor');
 }
 

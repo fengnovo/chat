@@ -68,7 +68,7 @@ function installNavigationPolicy(window: BrowserWindow, gate: LoadErrorGate): vo
     try {
       openExternal(new URL(url));
     } catch {
-      // Ignore malformed window.open URLs and keep them out of Electron.
+      // 忽略格式错误的 window.open URL，避免在 Electron 中打开。
     }
     return { action: 'deny' };
   });

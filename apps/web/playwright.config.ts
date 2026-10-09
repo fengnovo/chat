@@ -11,8 +11,8 @@ export default defineConfig({
   reporter: process.env.CI ? [['html', { open: 'never' }], ['line']] : 'list',
   use: {
     baseURL: 'http://127.0.0.1:3100',
-    // Use the full Chromium binary so CI does not depend on a separate
-    // headless-shell download.
+    // 使用完整的 Chromium 二进制，避免 CI 依赖单独安装的
+    // headless-shell 浏览器文件。
     channel: 'chromium',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

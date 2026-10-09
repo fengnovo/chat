@@ -28,7 +28,7 @@ function publicUrl(value: string): string {
   } catch { return value; }
 }
 
-// Compare effective routing/tool configuration while keeping credential-only rotation compatible.
+// 比较实际生效的路由和工具配置，同时允许仅轮换凭据。
 function nonSecretConfig(value: unknown, key = ''): unknown {
   if (credentialKey.test(key)) return '[credential]';
   if (Array.isArray(value)) {
@@ -75,8 +75,8 @@ async function snapshotResources(config: WorkerConfig): Promise<ResourceSnapshot
 
 export async function prepareHostExecution(config: WorkerConfig, job: RunJob): Promise<{ descriptor: Record<string, unknown>; resources: ResourceSnapshot }> {
   const resources = await snapshotResources(config);
-  // Optional MCP loading must retain the agent's fail-open behavior. Discovery
-  // still checks actual tools before accepting an established runtime.
+  // 可选 MCP 加载必须保留 Agent 的 fail-open 行为；接纳已有运行时前，
+  // 仍需通过发现流程检查实际可用的工具。
   let mcpConfigHash: string | null = null;
   if (config.MCP_CONFIG_PATH) {
     try {
@@ -91,8 +91,8 @@ export async function prepareHostExecution(config: WorkerConfig, job: RunJob): P
       workerRuntimeVersion: 'chat-worker-execution-v1',
       agent: buildRuntimeStaticDescriptor(),
       models: config.models.map(({ id, model, provider, baseUrl, maxTokens }) => ({ id, model, provider, baseUrl: baseUrl ? publicUrl(baseUrl) : null, maxTokens: maxTokens ?? null })),
-      // Approval is mutable user input on a durable continuation, not deployment
-      // identity. Replay safety still has its own immutable trusted policy.
+      // 审批是持久化续跑中的可变用户输入，不属于部署身份。
+      // 重放安全性仍由独立且不可变的可信策略决定。
       policies: { toolReplayPolicies: config.toolReplayPolicies },
       limits: { recursion: config.AGENT_RECURSION_LIMIT, modelCalls: config.AGENT_MODEL_CALL_LIMIT, summarizationTrigger: config.AGENT_SUMMARIZATION_TRIGGER_TOKENS, summarizationKeep: config.AGENT_SUMMARIZATION_KEEP_TOKENS, truncateArgsTokens: 40_000 },
       sandbox: config.SANDBOX_RUNTIME === 'docker'
@@ -109,7 +109,7 @@ export async function buildHostExecutionDescriptor(config: WorkerConfig, job: Ru
   return (await prepareHostExecution(config, job)).descriptor;
 }
 
-/** Upload the exact bytes already fingerprinted before sandbox acquisition. */
+/** 上传获取沙箱前已计算指纹的原始字节。 */
 export async function uploadPreparedAgentResources(sandbox: RemoteWorkspaceSandbox, workspace: string, resources: ResourceSnapshot): Promise<AgentResources> {
   const files: Array<[string, Uint8Array]> = resources.files.map(([name, content]) => [path.posix.join(workspace, name), content]);
   if (files.length > 0) {

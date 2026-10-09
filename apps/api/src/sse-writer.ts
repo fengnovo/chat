@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 
-/** One awaited frame at a time: a slow client never builds an unbounded send queue. */
+/** 每次只等待发送一帧，避免慢客户端积累无界发送队列。 */
 export function createSseWriter(raw: ServerResponse, options: { drainTimeoutMs?: number; maxBufferedBytes?: number } = {}) {
   const timeoutMs = options.drainTimeoutMs ?? 10_000;
   const maxBytes = options.maxBufferedBytes ?? 2 * 1024 * 1024;

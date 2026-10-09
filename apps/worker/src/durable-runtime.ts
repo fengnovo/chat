@@ -1,7 +1,7 @@
 import { DurableExecutionError, type HeadlessAgentOptions } from '@repo/agent-core';
 import type { AgentRepository, RunExecutionLease } from '@repo/db';
 
-/** All graph side effects use the same fenced business execution lease. */
+/** 图中的所有副作用都使用同一个带栅栏的业务执行租约。 */
 export function createDurableRuntimePorts(
   repository: AgentRepository,
   lease: RunExecutionLease,

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { startMemoryRuntime } from '../src/memory-runtime.js';
 
-// Production startup must drain the durable queue even if Redis never publishes a hint.
+// 即使 Redis 从未发布提示，生产启动流程也必须清空持久化队列。
 test('memory runtime polls durable work without receiving a Redis job and drains before shutdown', async () => {
   const completed: string[] = [];
   let pending = false;
@@ -16,7 +16,7 @@ test('memory runtime polls durable work without receiving a Redis job and drains
         pending = false;
         return { id: 'memory-job', tenantId: 'tenant', userId: 'user', sessionId: 'session', runId: 'run', attempts: 1 };
       },
-      getRunForWorker: async () => null, // Superseded/deleted run: no provider request is needed.
+      getRunForWorker: async () => null, // 运行已被替代或删除：无需请求供应商。
       completeMemoryJob: async (id: string) => { completed.push(id); resolveCompleted(); },
     } as never,
     models: [{ id: 'test', model: 'offline', provider: 'openai', apiKey: 'test-only' }],
@@ -25,7 +25,7 @@ test('memory runtime polls durable work without receiving a Redis job and drains
   let deadline: NodeJS.Timeout | undefined;
   try {
     await nextTurn();
-    pending = true; // Work becomes durable after startup; no Redis job is delivered.
+    pending = true; // 启动后任务才持久化；此时不会投递 Redis 作业。
     await Promise.race([done, new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('durable memory job was not polled')), 500); })]);
     await runtime.stop();
     assert.deepEqual(completed, ['memory-job']);

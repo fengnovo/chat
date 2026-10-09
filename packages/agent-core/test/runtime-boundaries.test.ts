@@ -58,7 +58,7 @@ for (const source of ['base', 'knowledge'] as const) {
           throw accepted;
         } },
     };
-    // A fresh run may start without optional MCP tools.
+    // 新 run 可以在缺少可选 MCP 工具时启动。
     unavailable = true;
     await assert.rejects(() => createDeepAgentRuntime(options), (error) => error === accepted);
     assert.ok(!(descriptors[0]!.tools as Array<{ name: string }>).some((tool) => tool.name === 'external_read'));

@@ -15,7 +15,7 @@ export function resolveLink(
   }
 }
 
-/** Credentials are only sent to our API, never to article/image hosts. */
+/** 凭据只会发送给我们的 API，绝不会发送给文章或图片所在的主机。 */
 export function imageSource(
   url: string,
   baseUrl: string,

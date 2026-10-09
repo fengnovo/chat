@@ -302,8 +302,8 @@ export function reducer(state: ChatState, action: ChatAction): ChatState {
     case 'history-page': {
       const current = new Map(state.items.map((item) => [item.id, item]));
       const ids = new Set(action.items.map((item) => item.id));
-      // Refreshed pages can leave a gap after already cached older messages.
-      // Insert before the page boundary, retaining server order and live values.
+      // 刷新页面后，已缓存的旧消息之后可能出现空档。
+      // 应插入到分页边界之前，同时保留服务端顺序和最新值。
       const found = state.items.findIndex((item) => item.id === state.historyPage?.beforeMessageId);
       const boundary = found >= 0 ? found : state.historyPage ? state.items.length : 0;
       return { ...state, items: [
@@ -399,7 +399,7 @@ export const initialState: ChatState = {
   historyPage: null,
 };
 
-/** One stable assistant row owns both the live response and its completed process. */
+/** 同一条稳定的助手消息同时承载实时回复及其已完成的执行过程。 */
 export function selectChatItems(state: ChatState): ChatItem[] {
   const active = state.active;
   return active && !active.finished
@@ -421,7 +421,7 @@ export function isRunActive(status: string): boolean {
   );
 }
 
-/** Rebuild the latest turn from persisted events, then reconcile with authoritative run status. */
+/** 根据持久化事件重建最近一轮，再与权威 run 状态进行协调。 */
 export function restoreHistory(history: HistoryResponse): ChatState {
   const latest = history.latestRun;
   const replay = latest && history.latestRunEvents !== undefined;
@@ -458,7 +458,7 @@ export function restoreHistory(history: HistoryResponse): ChatState {
     state = { ...state, active: { ...state.active, assistantText: projection.text, reasoning: projection.reasoning } };
   }
   for (const event of history.latestRunEvents!) {
-    // Text at/before the projection cursor is already materialized; replay control cards.
+    // 投影游标及其之前的文本已完成物化；此处重放控制卡片。
     if (projection && event.seq <= projection.lastSeq &&
       ['assistant.delta', 'assistant.snapshot', 'assistant.reasoning'].includes(event.type)) continue;
     state = applyEvent(state, event);

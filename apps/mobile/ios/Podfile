@@ -5,10 +5,10 @@ require 'json'
 podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
 
 def ccache_enabled?(podfile_properties)
-  # Environment variable takes precedence
+  # 优先使用环境变量。
   return ENV['USE_CCACHE'] == '1' if ENV['USE_CCACHE']
   
-  # Fall back to Podfile properties
+  # 回退到 Podfile 属性。
   podfile_properties['apple.ccacheEnabled'] == 'true'
 end
 
@@ -47,7 +47,7 @@ target 'KeenAI' do
   use_react_native!(
     :path => config[:reactNativePath],
     :hermes_enabled => podfile_properties['expo.jsEngine'] == nil || podfile_properties['expo.jsEngine'] == 'hermes',
-    # An absolute path to your application root.
+    # 应用根目录的绝对路径。
     :app_path => "#{Pod::Config.instance.installation_root}/..",
     :privacy_file_aggregation_enabled => podfile_properties['apple.privacyManifestAggregationEnabled'] != 'false',
   )

@@ -35,8 +35,8 @@ export function getRegisteredObservability(): Promise<ObservabilityRuntime> | un
 }
 
 /**
- * Importing this module with Node --import initializes telemetry before app code.
- * The promise itself is exported so getRegisteredObservability() and this binding
- * are the same reusable value; consumers await it.
+ * 通过 Node --import 导入此模块，可在应用代码之前初始化遥测。
+ * 直接导出该 Promise，确保 getRegisteredObservability() 与此绑定是同一个可复用值；
+ * 调用方需要等待该 Promise 完成。
  */
 export const registeredObservability: Promise<ObservabilityRuntime> = registerObservability();

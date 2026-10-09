@@ -2,7 +2,7 @@
 #
 .DS_Store
 
-# Android/IntelliJ
+# Android/IntelliJ 配置
 #
 build/
 .idea
@@ -12,5 +12,5 @@ local.properties
 *.hprof
 .cxx/
 
-# Bundle artifacts
+# Bundle 构建产物
 *.jsbundle

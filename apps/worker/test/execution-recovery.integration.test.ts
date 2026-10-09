@@ -9,7 +9,7 @@ import { loadWorkerConfig } from '../src/config.js';
 import { buildHostExecutionDescriptor } from '../src/execution-compatibility.js';
 import { createRunProcessor } from '../src/processor.js';
 
-// Real repository ownership + Redis session lock; external runtime effects stop at the sandbox boundary.
+// 使用真实仓库所有权和 Redis 会话锁；外部运行时副作用止于沙箱边界。
 test('changed runtime recovery writes one terminal failure and never starts a sandbox', { skip: process.env.RUN_INTEGRATION_TESTS !== '1' }, async (t) => {
   const url = process.env.DATABASE_URL ?? 'postgresql://agent:agent@127.0.0.1:55433/agent_test';
   assert.match(new URL(url).pathname, /test/i);

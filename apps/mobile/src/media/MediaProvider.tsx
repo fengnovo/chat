@@ -203,8 +203,8 @@ function ImageViewer({ url, onClose }: { url: string; onClose: () => void }) {
   );
 }
 
-/** A single mounted WebView survives closing and reopening its overlay. */
-// Visibility changes must not update the native WebView's source/props.
+/** 同一个已挂载的 WebView 在关闭和重新打开浮层后仍会保留。 */
+// 可见性变化不得更新原生 WebView 的 source/props。
 const RetainedWebView = React.memo(function RetainedWebView({
   source,
   web,
@@ -319,7 +319,7 @@ export function MediaProvider({ children }: { children: React.ReactNode }) {
               backgroundColor: colors.background,
               paddingTop: insets.top,
               paddingBottom: insets.bottom,
-              // Keep WKWebView attached and laid out: display:none reloads it on iOS.
+              // 保持 WKWebView 挂载并参与布局：在 iOS 上，display:none 会导致它重新加载。
               opacity: browser.visible ? 1 : 0,
             }}
           >

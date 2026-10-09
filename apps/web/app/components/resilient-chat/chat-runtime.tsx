@@ -359,8 +359,8 @@ function ChatRuntime() {
       moreFilesRequest.current?.abort();
       moreFilesRequest.current = null;
       setLoadingMoreFiles(false);
-      // A first-page refresh may reveal newly created files beyond its boundary.
-      // Reopen pagination even when a previous traversal had reached its end.
+      // 刷新第一页时，可能会发现边界之外新创建的文件。
+      // 即使上次遍历已经到达末尾，也要重新启用分页。
       setFilesPage({
         sessionId: match.id, chatId: conversation.chatId, cursor: page.hasMore ? page.nextCursor ?? null : null,
       });
@@ -464,8 +464,8 @@ function ChatRuntime() {
           void refreshSessions();
           return;
         }
-        // The HTTP response identifies the user turn even if no assistant frame
-        // arrives. Keep this association for later authoritative history recovery.
+        // 即使没有助手帧到达，HTTP 响应也能识别用户轮次。
+        // 保留此关联，供后续从权威历史记录恢复时使用。
         const sentUser = options.messages.findLast((message) => message.role === 'user');
         if (sentUser) sentUserRuns.current.set(sentUser.id, runId);
         // 新 run 开始时，清除旧的 persistedRun，避免重连时读到过期数据导致 404。
@@ -1065,8 +1065,8 @@ function ChatRuntime() {
         const history = (await response.json()) as SessionHistory;
         if (controller.signal.aborted || activeChatIdRef.current !== chatId)
           return;
-        // Only completed reads count. Strict Mode and a refreshed sessions
-        // list can abort the first request before it replaces the local cache.
+        // 只有已完成的读取才计入。Strict Mode 或刷新会话列表时，
+        // 首个请求可能会在替换本地缓存前被中止。
         historyLoadedRef.current = true;
         setHistoryPage({ sessionId: match.id, chatId, cursor: history.hasMore ? history.nextCursor ?? null : null });
         const restoredMessages = messagesFromHistory(history.messages);
@@ -1460,7 +1460,7 @@ function ChatRuntime() {
       const older = await fetchSessionFilePage(page.sessionId, { cursor: page.cursor, signal: controller.signal });
       if (controller.signal.aborted || activeChatIdRef.current !== page.chatId) return;
       setHistoryFiles((current) => {
-        // Pagination may revisit a cached page after refresh; use its fresh contents.
+        // 刷新后分页可能重新访问缓存页；应使用该页的最新内容。
         return [...new Map([...current, ...older.files.map((file) => ({
           ...file, operation: file.operation as TouchedFile['operation'],
         }))].map((file) => [file.path, file])).values()];

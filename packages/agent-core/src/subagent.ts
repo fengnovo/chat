@@ -26,9 +26,8 @@ export { DurableChildInterruptError, invokeDurableChildGraph, resumeBackgroundCh
  * - 评审闭环（P2）：每轮成功产出由独立的结构化 LLM 评审器按 task 里的验收标准打分，
  *   不达标则把 feedback 作为 prior_feedback 重派（最多 SUBAGENT_MAX_ATTEMPTS 轮）。
  *
- * Background children remain attached to this run. Local pause/shutdown aborts
- * execution without cancelling durable intent; parent terminal transitions cancel
- * unfinished children in the repository. Recovery resumes the saved attempt.
+ * 后台子任务会持续关联到当前 run。本地暂停或关停会中止执行，但不取消持久化意图；
+ * 父任务进入终态时，会在仓库中取消尚未完成的子任务。恢复时继续已保存的尝试。
  */
 
 /** 子 Agent 单次运行的模型调用轮次上限。 */
@@ -63,7 +62,7 @@ const PLATFORM_BASELINE = [
   '输出要求：最终回复只写一段摘要——结论、关键依据/产物路径、未完成事项与原因；不要逐条罗列执行过程，不要出现工具名或内部环境细节。',
 ].join('\n');
 
-/** Foreground and parent-attached background dispatch share the same durable identity. */
+/** 前台派发与关联到父任务的后台派发共用同一持久化身份。 */
 export const spawnSubagentSchema = z.object({
   role_prompt: z
     .string()
@@ -115,7 +114,7 @@ export interface DurableChildRecord {
   review: unknown | null;
 }
 
-/** Implementations must fence every mutation with the owning root run lease. */
+/** 实现必须使用所属根 run 的租约为每次变更加栅栏。 */
 export interface DurableChildStore {
   ensure(parentToolCallId: string, input: SpawnSubagentInput, background: boolean): Promise<DurableChildRecord>;
   get(id: string): Promise<DurableChildRecord | null>;
@@ -139,7 +138,7 @@ export interface SpawnSubagentOptions {
     checkpointer: unknown;
     toolMiddleware?: (scopeId: string) => unknown;
   };
-  /** Internal attempt context; set by the orchestration loop, never by the model. */
+  /** 内部尝试上下文；由编排循环设置，绝不由模型设置。 */
   childExecution?: { record: DurableChildRecord; config: unknown; background: boolean };
 }
 
@@ -275,7 +274,7 @@ function subagentSystemPrompt(input: SpawnSubagentInput): string {
   ].join('\n\n');
 }
 
-/** Execute a child; durable infrastructure failures escape to the owning root for recovery. */
+/** 执行子任务；持久化基础设施故障会交给所属根任务处理恢复。 */
 async function runSubagent(
   options: SpawnSubagentOptions,
   input: SpawnSubagentInput,
@@ -591,7 +590,7 @@ async function ensureDurableChild(options: SpawnSubagentOptions, input: SpawnSub
   return childStoreOperation(() => options.durable!.store.ensure(parentToolCallId(config), input, input.background));
 }
 
-/** An aborted local pass is recoverable, never a successful durable child result. */
+/** 本地执行轮次中止后可以恢复，绝不能视为持久化子任务成功。 */
 function assertChildRunning(options: SpawnSubagentOptions): void {
   if (!options.signal?.aborted) return;
   const error = options.signal.reason ?? new Error('Child execution was stopped with its parent');
@@ -663,7 +662,7 @@ export async function runSpawnLoop(
     });
     let result = record?.attemptResult;
     if (!result) {
-      // Preserve a waiting request until its Command response has reached the child graph.
+      // 保留等待中的请求，直到 Command 响应送达子图。
       if (record?.status !== 'waiting') await save({ status: 'running' });
       try {
         result = await deps.run(record ? {
@@ -756,7 +755,7 @@ export interface BackgroundRunContext {
   drainEvents(): AgentEvent[];
   /** 等待全部后台任务结束并取回摘要（事件应先/再 drainEvents 取净）。 */
   settled(): Promise<BackgroundTaskResult[]>;
-  /** Stop local tasks within 3s; this does not mutate durable child status. */
+  /** 在 3 秒内停止本地任务；此操作不会修改持久化子任务状态。 */
   abortAll(): Promise<void>;
 }
 
@@ -765,7 +764,7 @@ const BACKGROUND_EVENT_QUEUE_MAX = 500;
 /** abortAll 的收尾宽限：不能让 interrupt/error 路径被卡住。 */
 const BACKGROUND_ABORT_GRACE_MS = 3_000;
 
-/** Compatibility includes child prompts and effective resource limits, without task text. */
+/** 兼容性校验会纳入子任务提示和实际资源限制，但不包含任务文本。 */
 export function subagentRuntimeDescriptor(): Record<string, unknown> {
   return {
     promptHash: stableToolInputHash(subagentSystemPrompt({ role_prompt: '<role>', task: '<task>',
@@ -811,7 +810,7 @@ export function createBackgroundRunContext(
   };
   const release = () => {
     const next = waiting.shift();
-    if (next) next.resolve(); // Transfer the occupied slot to this queued task.
+    if (next) next.resolve(); // 将已占用的执行槽交给这个排队任务。
     else active--;
   };
   interface Entry {
@@ -881,7 +880,7 @@ export function createBackgroundRunContext(
         .finally(() => {
           entry.done = true;
         });
-      // Detached failure is observed by settled(); keep it handled until the root reaches that await.
+      // settled() 会观察分离任务的失败；在根任务执行到该 await 前，持续处理此失败。
       void entry.promise.catch(() => {});
       entries.push(entry);
     },
@@ -910,7 +909,7 @@ export function createBackgroundRunContext(
   };
 }
 
-/** Rebuild durable background intent after the owning worker restarts. */
+/** 所属 Worker 重启后，重建持久化的后台任务意图。 */
 export async function rehydrateBackgroundChildren(
   options: SpawnSubagentOptions,
   backgroundCtx: BackgroundRunContext,

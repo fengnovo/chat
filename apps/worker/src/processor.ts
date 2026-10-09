@@ -126,9 +126,9 @@ async function persistEvent(
 ) {
   const validated = agentEventSchema.parse(event);
   const persisted = await services.repository.durable.appendEvent(lease, validated);
-  // The event is already durable; SSE heartbeats also replay DB if pub/sub is down.
+  // 事件已经持久化；即使 pub/sub 不可用，SSE 心跳也会从数据库重放事件。
   await services.publisher.publish(runEventsChannel(job.runId), String(persisted.seq)).catch(() => undefined);
-  // PostgreSQL already committed the memory intent with completion. Redis only wakes it sooner.
+  // PostgreSQL 已将记忆意图与完成状态一并提交；Redis 只负责尽早唤醒处理流程。
   if (persisted.type === 'run.completed') {
     await services.memoryQueue.add('extract', { runId: job.runId }, {
       jobId: `memory-${job.runId}`,
@@ -647,11 +647,11 @@ export function createRunProcessor(
         services.config.MAX_RECOVERY_ATTEMPTS,
       );
       if (!lease) {
-        // A waiting run can still hold the previous owner's lease during cleanup.
-        // Keep its addressed response pending until ownership can actually be acquired.
+        // 清理期间，等待中的 run 仍可能持有前一位所有者的租约。
+        // 在确实取得所有权前，保留发给它的响应。
         throw new Error('Execution is not claimable yet; its dispatch remains pending');
       }
-      // Scheduling identity is disposable; the persisted invocation is authoritative.
+      // 调度身份可以丢弃；持久化的调用记录才是权威来源。
       job = lease.input;
       const controller = new AbortController();
       services.controllers.set(job.runId, controller);
@@ -799,7 +799,7 @@ export function createRunProcessor(
           );
         }
         await observed('agent.execute', async () => {
-          // A reclaimed start dispatch resumes its checkpoint; it never adds input twice.
+          // 重新领取的启动派发会从检查点续跑，不会重复添加输入。
           const invocation = lease.input;
           const input = invocation.kind === 'start'
             ? { kind: 'start' as const, message: `${invocation.message}${preparedAttachments.appendedMessage}`, images: preparedAttachments.images }
@@ -845,7 +845,7 @@ export function createRunProcessor(
         if (incompatible && !terminalEventWritten) {
           await persistEvent(services, job, { runId: job.runId, timestamp: new Date().toISOString(), type: 'run.failed', ...incompatible }, lease);
           terminalEventWritten = true;
-          // Keep its workspace/checkpoint for inspection; incompatible runs never retry.
+          // 保留工作区和检查点供检查；不兼容的 run 永不重试。
           controller.abort(error);
         }
         if (!terminalEventWritten) {

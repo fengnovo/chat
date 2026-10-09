@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS session_file_projections (
   PRIMARY KEY (tenant_id, session_id, path)
 );
 
--- Rebuild in PostgreSQL: the application never materializes the event ledger.
+-- 在 PostgreSQL 中重建；应用不会将事件流水表完整载入内存。
 CREATE OR REPLACE FUNCTION rebuild_run_message_projection(target_run uuid, target_tenant uuid)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE snapshot_seq integer; snapshot_text text;
@@ -93,7 +93,7 @@ DO $$ DECLARE item record; BEGIN
   END LOOP;
 END $$;
 
--- Preserve the last operation and the last write/edit content independently.
+-- 分别保留最近一次操作，以及最近一次写入或编辑的内容。
 WITH operations AS (
   SELECT e.tenant_id,r.session_id,btrim(COALESCE(e.payload->'input'->>'file_path',e.payload->'input'->>'path','')) AS path,
     e.payload->>'tool' AS operation,r.created_at AS run_created_at,r.id AS run_id,e.seq,

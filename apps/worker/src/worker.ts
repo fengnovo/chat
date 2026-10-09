@@ -75,7 +75,7 @@ await memoryStore.setup();
 
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
-// Every worker can reconcile expired ownership. SKIP LOCKED prevents duplicate recovery.
+// 每个 Worker 都可以协调已过期的所有权；SKIP LOCKED 可避免重复恢复。
 let reconciling = false;
 async function recoverInterruptedRuns(): Promise<void> {
   if (reconciling) return;

@@ -40,7 +40,7 @@ class AndroidUI:
         try:
             result = subprocess.run(prefix + list(args), capture_output=True, timeout=30, check=True)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-            # Input commands may carry credentials; never put their argv in logs or artifacts.
+            # 输入命令可能包含凭据；不要把命令参数写入日志或测试产物。
             raise RuntimeError(f"ADB operation failed ({type(error).__name__})") from None
         return result.stdout if binary else result.stdout.decode()
 
@@ -94,7 +94,7 @@ class AndroidUI:
             while "mInputShown=true" in self.shell("dumpsys", "input_method"):
                 assert time.monotonic() < deadline, "Keyboard did not close"
                 time.sleep(0.2)
-            self.nodes()  # Wait for the UI to settle before using its bounds.
+            self.nodes()  # 等待界面稳定后再读取元素边界。
 
     def evidence(self, name):
         self.nodes()
@@ -154,7 +154,7 @@ class AndroidUI:
             assert len(fields) == 3, "Expected three login fields"
             self.focus(fields[index])
             self.check_focus(name, fields[index]["hint"])
-        # Switch fields with the keyboard still open, as users do while filling the form.
+        # 按用户填写表单时的操作方式，在键盘仍打开时切换输入框。
         username = next(n for n in self.nodes() if n.get("hint") == "admin")
         self.focus(username)
         self.check_focus("switch-to-username", "admin")
@@ -198,7 +198,7 @@ class AndroidUI:
         self.assert_answer(marker)
         self.passed("real-model-answer", marker=marker)
 
-        # Read the real API only to corroborate the UI-created session and completed run.
+        # 只读取真实 API，以核对由界面创建的会话和已完成的运行。
         base = os.environ.get("MOBILE_E2E_API", "http://127.0.0.1:8002").rstrip("/")
         request = urllib.request.Request(base + "/api/auth/login", data=json.dumps({"username": username, "password": password}).encode(), headers={"Content-Type": "application/json"})
         token = json.load(urllib.request.urlopen(request, timeout=15))["token"]

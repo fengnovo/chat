@@ -142,7 +142,7 @@ test('durable background intent is saved before ack and registered once per cont
 });
 
 
-// The production fenced saver preserves invocation metadata in its atomic put transaction.
+// 生产环境的栅栏 saver 会在原子 put 事务中保留调用元数据。
 class MetadataMemorySaver extends MemorySaver {
   override async put(...args: Parameters<MemorySaver['put']>): ReturnType<MemorySaver['put']> {
     const [config, checkpoint, metadata] = args;
@@ -150,7 +150,7 @@ class MetadataMemorySaver extends MemorySaver {
   }
 }
 
-// This exercises our recovery decisions against real LangGraph checkpoints, without a model service.
+// 使用真实 LangGraph 检查点验证恢复决策，不依赖模型服务。
 test('durable child graph resumes its own checkpoint with no duplicated task input or inherited parent namespace', async () => {
   const store = memoryStore();
   const record = await store.ensure('checkpoint', input, false);

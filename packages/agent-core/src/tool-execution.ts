@@ -18,7 +18,7 @@ export interface ToolExecutionRecord {
   status: 'started' | 'succeeded' | 'uncertain';
   result: unknown | null;
   replayPolicy: 'safe' | 'unsafe';
-  /** Number of retries committed before entering the external handler. */
+  /** 进入外部处理器前已提交的重试次数。 */
   retryCount: number;
 }
 
@@ -37,11 +37,11 @@ export interface ToolExecutionMiddlewareOptions {
   scopeId: string;
   policies?: Record<string, ToolReplayPolicy>;
   assertOwnership?: () => Promise<void>;
-  /** Ordinary tool authorization never authorizes an unsafe unknown-outcome retry. */
+  /** 普通工具授权绝不代表可以安全重试结果未知的调用。 */
   autoApproveTools?: boolean;
 }
 
-/** Infrastructure or unknown execution outcomes must escape tool error handlers. */
+/** 基础设施故障或结果未知的执行必须绕过工具错误处理器并向外抛出。 */
 export class DurableExecutionError extends Error {
   readonly durableExecution = true;
   constructor(message: string, options?: ErrorOptions) {
@@ -53,7 +53,7 @@ export class DurableExecutionError extends Error {
 export function isDurableExecutionError(error: unknown): error is DurableExecutionError {
   if (!error || typeof error !== 'object') return false;
   if (error instanceof DurableExecutionError || ('durableExecution' in error && error.durableExecution === true)) return true;
-  // LangGraph may attach a NodeError wrapper to errors crossing graph boundaries.
+  // LangGraph 可能会为跨越图边界的错误附加 NodeError 包装对象。
   return 'cause' in error && error.cause !== error && isDurableExecutionError(error.cause);
 }
 
@@ -77,7 +77,7 @@ export function stableToolInputHash(input: unknown): string {
 
 type Encoded = null | string | boolean | number | { type: string; value?: unknown };
 
-/** Every object is tagged so user artifacts cannot collide with codec markers. */
+/** 为每个对象加标签，避免用户产物与编解码标记冲突。 */
 function encode(value: unknown, ancestors = new Set<object>()): Encoded {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
   if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0) ? value : { type: 'number', value: String(value) === '0' ? '-0' : String(value) };
@@ -143,7 +143,7 @@ export function deserializeToolResult(result: unknown): ToolMessage | Command {
 
 const SAFE_BUILTINS = new Set(['ls', 'read_file', 'glob', 'grep', 'write_todos', 'spawn_subagent']);
 
-/** Trusted platform defaults, shared with the durable runtime descriptor. */
+/** 可信的平台默认策略，由持久化运行时描述符共同使用。 */
 export function trustedBuiltinReplayPolicies(): Record<string, 'safe'> {
   return Object.fromEntries([...SAFE_BUILTINS].sort().map((name) => [name, 'safe' as const]));
 }
@@ -160,14 +160,14 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
   return createMiddleware({
     name: 'DurableToolExecution',
     wrapToolCall: async (request, handler) => {
-      // Interrupt tools have their own resumable protocol and must run on node replay.
+      // Interrupt 工具有独立的可恢复协议，节点重放时也必须执行。
       if (request.toolCall.name === 'ask_user') return handler(request);
       const { id: toolCallId, name: toolName, args: input } = request.toolCall;
       if (!toolCallId || !toolCallId.trim()) throw new DurableExecutionError('Durable tools require a stable tool_call_id');
       if (!options.scopeId) throw new DurableExecutionError('Durable tools require an execution scope');
       const policy = options.policies?.[toolName];
-      // Third-party MCP hints describe intent, not a trusted guarantee that repeating
-      // an unknown outcome is safe. Only platform policy can establish safety.
+      // 第三方 MCP 提示描述的是意图，并不能可信地保证重复执行结果未知的调用是安全的。
+      // 只有平台策略可以确定安全性。
       const replayPolicy = (policy?.replaySafe ?? SAFE_BUILTINS.has(toolName)) ? 'safe' : 'unsafe';
       const inputHash = stableToolInputHash(input);
       await ownership();
@@ -177,8 +177,8 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
       if (!Number.isSafeInteger(record.retryCount) || record.retryCount < 0) throw new DurableExecutionError('Durable tool record has an invalid retry count');
       if (record.status === 'succeeded') return deserializeToolResult(record.result);
       if (record.status !== 'started' && record.status !== 'uncertain') throw new DurableExecutionError('Invalid durable tool execution status');
-      // A policy change cannot retroactively bless an uncertain earlier effect, nor
-      // can a stored safe flag override a current policy that no longer trusts it.
+      // 策略变更不能追溯性地认定先前的不确定副作用安全；
+      // 已存储的安全标记也不能覆盖当前不再信任它的策略。
       if (!fresh && !(record.replayPolicy === 'safe' && replayPolicy === 'safe')) {
         const approval: HITLRequest & { durableApprovalId: string } = {
           durableApprovalId: `tool-${record.executionId}-${record.retryCount}`,
@@ -186,11 +186,10 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
           reviewConfigs: [{ actionName: toolName, allowedDecisions: ['approve', 'reject'] }],
         };
         let response = interrupt<HITLRequest, HITLResponse & { durableApprovalId?: string }>(approval);
-        // interrupt() restores responses by position. Failed tasks may also
-        // retain an old unscoped resume write. Advance past all stale responses
-        // until a response names this retry, then require a new explicit decision.
-        // Use response identity because safe retries do not have approval history.
-        // A first approval can still accept the legacy unmarked HITL payload.
+        // interrupt() 会按位置恢复响应。失败任务也可能保留旧的未限定续跑写入。
+        // 跳过所有过期响应，直到响应明确对应本次重试；随后要求新的明确决定。
+        // 安全重试没有审批历史，因此应使用响应身份进行匹配。
+        // 首次审批仍可接受不带标记的旧版 HITL 载荷。
         while ((record.retryCount > 0 || response?.durableApprovalId !== undefined) && response?.durableApprovalId !== approval.durableApprovalId) {
           response = interrupt<HITLRequest, HITLResponse & { durableApprovalId?: string }>(approval);
         }
@@ -226,9 +225,9 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
       try { result = await handler(handlerRequest); }
       catch (cause) {
         if (isGraphInterrupt(cause)) throw cause;
-        // The MCP adapter throws ToolException for both transport failures and
-        // explicit isError responses. Only the latter is a known tool result:
-        // persist it so the model can respond and checkpoint replay won't call it again.
+        // MCP 适配器会为传输故障和明确的 isError 响应都抛出 ToolException。
+        // 只有后者代表已知工具结果：应持久化该结果，让模型可以回复，
+        // 并避免检查点重放时再次调用工具。
         if (!request.runtime.signal?.aborted && !isDurableExecutionError(cause) &&
           cause instanceof Error && cause.name === 'ToolException' &&
           /^MCP tool '[^']+' on server '[^']+' returned an error: /.test(cause.message)) {
@@ -239,7 +238,7 @@ export function createToolExecutionMiddleware(options: ToolExecutionMiddlewareOp
           throw new DurableExecutionError(`Tool ${toolName} execution outcome is uncertain`, { cause });
         }
       }
-      // A failure to persist success leaves started/uncertain; replay must reconcile it.
+      // 如果成功状态持久化失败，记录会停留在 started/uncertain；重放时必须协调处理。
       await ownership();
       await storage(() => options.store.complete(record.executionId, serializeToolResult(result)));
       return result;

@@ -19,7 +19,7 @@ function errorMessage(body: string): string {
     const message = parsed.error?.message ?? parsed.message;
     if (typeof message === 'string' && message.trim()) return message;
   } catch {
-    // A non-JSON response is still useful diagnostic context.
+    // 非 JSON 响应仍能提供有用的诊断信息。
   }
   return body.trim() || 'unknown provider error';
 }

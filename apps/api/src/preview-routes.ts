@@ -8,7 +8,7 @@ import { readPreviewFile, validatePreviewMount, PreviewFileError } from './previ
 
 async function authorizedSession(services: ApiServices, auth: AuthContext | undefined, id: string) {
   if (!auth) return null;
-  // PostgreSQL UUID input rejects external keys; only attempt internal lookup for UUIDs.
+  // PostgreSQL 的 UUID 输入不接受外部键；只有输入为 UUID 时才尝试内部查询。
   const internal = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
     ? await services.repository.getSession(auth, id) : null;
   return internal ?? await services.repository.getSessionByExternalKey(auth, id);
@@ -39,8 +39,8 @@ export function registerPreviewRoutes(app: FastifyInstance, services: ApiService
     const requested = (capabilityRoute ? resource.join('/') : wildcard) || 'index.html';
     try {
       const content = await readPreviewFile(services.config.SANDBOX_SESSIONS_ROOT, workspace.workspaceId, requested, services.config.NODE_ENV === 'production');
-      // Opaque sandboxed frames cannot rely on SameSite login cookies for assets.
-      // Redirect authenticated HTML entries to a session-only capability root.
+      // 沙箱 iframe 使用不透明来源，无法依赖 SameSite 登录 Cookie 请求资源。
+      // 将已认证的 HTML 入口重定向到仅对当前会话开放的能力根路径。
       if (!capabilityRoute && /\.html?$/i.test(requested)) {
         const access = issuePreviewAccess(services.config, auth, session.id);
         const resource = requested === 'index.html' ? '' : requested.split('/').map(encodeURIComponent).join('/');
@@ -48,8 +48,8 @@ export function registerPreviewRoutes(app: FastifyInstance, services: ApiService
           .redirect(`/api/agent/sessions/${encodeURIComponent(session.id)}/preview-cap/${access}/${resource}`);
       }
       if (capabilityRoute) {
-        // Sandboxed documents have an opaque origin. Their module/font/fetch
-        // requests authenticate with the scoped URL, never login credentials.
+        // 沙箱文档使用不透明来源；其模块、字体和 fetch 请求通过限定范围的 URL 认证，
+        // 不使用登录凭据。
         reply.header('access-control-allow-origin', '*');
         reply.removeHeader('access-control-allow-credentials');
       }

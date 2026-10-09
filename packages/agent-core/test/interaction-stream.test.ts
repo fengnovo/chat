@@ -6,7 +6,7 @@ import { StateBackend } from 'deepagents';
 import type { AgentEvent } from '@repo/contracts';
 import { createDeepAgentRuntime } from '../src/deep-agent.js';
 
-// Keep the production SDK/router/graph/stream adapter; only the remote model is local.
+// 保留生产 SDK、路由器、图和流适配器；只有远端模型替换为本地模型。
 async function modelServer(t: test.TestContext, replies: Array<{ tool?: string; args?: unknown; text?: string }>) {
   const requests: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
   const server = createServer(async (req, res) => {

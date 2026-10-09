@@ -19,7 +19,7 @@ export type ObservabilityLogMethod = {
   (bindings: ObservabilityLogBindings | Error, message?: string): void;
 };
 
-/** Structural subset used by Fastify/Pino integrations without a Pino runtime dependency. */
+/** 提供给 Fastify/Pino 集成使用的结构子集，不依赖 Pino 运行时。 */
 export type ObservabilityLogger = {
   level: ObservabilityLogLevel;
   trace: ObservabilityLogMethod;
@@ -133,8 +133,8 @@ export function createObservabilityLogger(
     return logger;
   };
 
-  // The runtime parameter keeps logger creation coupled to an initialized server-only
-  // observability boundary; trace correlation is read from that runtime's active context.
+  // 通过 runtime 参数，确保日志器只在服务端可观测性边界初始化后创建；
+  // trace 关联信息从该 runtime 的活动上下文中读取。
   void runtime.tracer;
   return makeLogger({});
 }

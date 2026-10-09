@@ -577,8 +577,8 @@ export async function createDeepAgentRuntime(
   const unavailableMcp = [baseMcp, knowledgeMcp].find((result) => 'unavailable' in result);
   if (!options.backend) throw new Error('DeepAgent requires an external sandbox backend');
   const backendMode = options.backendMode ?? 'e2b';
-  // Legacy mode converts MCP errors into tool results. Durable mode keeps raw errors
-  // so an unknown external outcome cannot be recorded as a successful execution.
+  // 旧模式会将 MCP 错误转换成工具结果。持久化模式保留原始错误，
+  // 避免把结果未知的外部调用记录为执行成功。
   const mcpTools = [...baseMcp.tools, ...knowledgeMcp.tools].map((item) =>
     options.durable ? item : wrapMcpToolAsRecoverable(item));
   // 子 Agent 派发工具（P1 同步模式）：工具池交给策略层过滤，事件经 custom 流透出。
@@ -669,18 +669,17 @@ export async function createDeepAgentRuntime(
   if (options.durable?.bindRuntimeDescriptor) {
     try { await options.durable.bindRuntimeDescriptor(buildRuntimeDescriptor(options, productTools)); }
     catch (error) {
-      // A refused initialization has no runtime to dispose its per-run client.
-      try { await knowledgeMcp.client?.close(); } catch { /* Preserve the compatibility refusal. */ }
-      // A new run can bind its available tools and degrade gracefully. For an
-      // existing descriptor, discovery failure must not turn a temporary outage
-      // into a permanent incompatibility. The repository leaves it unchanged.
+      // 初始化被拒绝时，没有运行时可供释放本次 run 的客户端。
+      try { await knowledgeMcp.client?.close(); } catch { /* 保留兼容性拒绝结果。 */ }
+      // 新 run 可以绑定当前可用的工具并平稳降级。对于已有描述符，
+      // 工具发现失败不应把临时故障变成永久不兼容；仓库会保持该描述符不变。
       let cause: unknown = error;
       const seen = new Set<unknown>();
       while (unavailableMcp && 'unavailable' in unavailableMcp && cause && typeof cause === 'object' && !seen.has(cause)) {
         seen.add(cause);
         if ('code' in cause && cause.code === 'RECOVERY_INCOMPATIBLE') {
-          // Keep the discovery error as cause, not the compatibility refusal:
-          // Worker traverses causes to decide whether a failure is terminal.
+          // 将工具发现错误作为 cause 保留，而不是兼容性拒绝：
+          // Worker 会遍历 cause 来判断故障是否为终态。
           throw new DurableExecutionError('MCP discovery temporarily unavailable', { cause: unavailableMcp.unavailable });
         }
         cause = 'cause' in cause ? cause.cause : undefined;

@@ -327,7 +327,7 @@ for (const [operation, stream] of [['events', streamAgentEvents], ['chat', strea
         });
         req.once('error', reject);
       });
-      // Server socket cleanup arrives after the client's close callback.
+      // 服务端套接字的清理发生在客户端 close 回调之后。
       for (let attempt = 0; attempt < 50 && unsubscribeCount === 0; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }

@@ -1,4 +1,4 @@
-/** External names never replace platform handlers or inherit their replay policy. */
+/** 外部名称不会替换平台处理器，也不会继承平台处理器的重放策略。 */
 const RESERVED_MCP_TOOL_NAMES = new Set([
   'ls', 'read_file', 'write_file', 'edit_file', 'delete', 'glob', 'grep', 'execute',
   'write_todos', 'task', 'start_async_task', 'check_async_task', 'update_async_task',

@@ -78,7 +78,7 @@ export interface RunTasksRecord {
   children: Array<ChildExecutionRecord & { leaseEpoch: number; waitingReason: string | null; createdAt: string; updatedAt: string }>;
 }
 
-// Object keys do not affect the request identity. Array order does (in particular attachments).
+// 对象键的顺序不影响请求身份；数组顺序会影响（尤其是附件数组）。
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -880,7 +880,7 @@ export class AgentRepository {
   }
 
   async listRunTasks(context: AuthContext, runId: string): Promise<RunTasksRecord | null> {
-    // A single read transaction keeps the parent ownership and child states consistent.
+    // 使用单个只读事务，确保父任务所有权和子任务状态一致。
     return inTransaction(this.pool, async (client) => {
       const run = await client.query(
         `SELECT r.* FROM agent_runs r JOIN agent_sessions s ON s.id=r.session_id AND s.tenant_id=r.tenant_id
@@ -936,7 +936,7 @@ export class AgentRepository {
       );
       if (!session.rows[0]) throw new RepositoryNotFoundError('session');
 
-      // Session locking serializes submissions before looking up the scoped identity.
+    // 会话锁会先串行化提交，再查询限定范围内的身份。
       const fingerprint = requestFingerprint(input);
       if (input.idempotencyKey) {
         const existing = await client.query(
@@ -947,7 +947,7 @@ export class AgentRepository {
         if (row) {
           let stored = row.request_fingerprint as string | null;
           if (!stored) {
-            // Older runs can be compared only when the original complete input is still durable.
+            // 只有原始完整输入仍已持久化时，才能比较旧 run。
             const dispatch = await client.query(
               `SELECT payload FROM run_dispatch_outbox WHERE tenant_id=$1 AND run_id=$2 AND job_kind='start' ORDER BY created_at,id LIMIT 1`,
               [context.tenantId, row.id],
@@ -966,9 +966,9 @@ export class AgentRepository {
       let message = input.message;
       let executionAttachments = input.attachments ?? [];
       if (input.continuation) {
-        // A failed preparation may never have reached the graph checkpoint.
-        // Anchor the durable invocation to the last real request, including its
-        // attachments, rather than relying on an implicit "previous task".
+        // 准备过程失败时，可能尚未写入图检查点。
+        // 持久化调用应关联到最近一次真实请求及其附件，
+        // 而不是依赖隐含的“上一个任务”。
         const source = await client.query(
           `SELECT id, user_message FROM agent_runs
            WHERE tenant_id=$1 AND user_id=$2 AND session_id=$3 AND NOT continuation
@@ -1025,7 +1025,7 @@ export class AgentRepository {
           fingerprint,
         ],
       );
-      // Keep the title and first run in the same transaction; custom titles are preserved.
+      // 在同一事务中保存标题和首次 run；保留用户自定义标题。
       const firstTitle = input.continuation ? null : input.message.trim().split('\n')[0]?.slice(0, 120);
       await client.query(
         `UPDATE agent_sessions

@@ -18,10 +18,10 @@ export interface E2BSandboxOptions {
 
 const MAX_OUTPUT_BYTES = 200_000;
 
-/** Default endpoint of a local E2B-compatible Docker sandbox service. */
+/** 本地 E2B 兼容 Docker 沙箱服务的默认端点。 */
 export const DEFAULT_LOCAL_E2B_ENDPOINT = 'http://localhost:10087';
 
-/** Resolves the E2B endpoints from environment-style options. */
+/** 根据环境变量形式的选项解析 E2B 端点。 */
 export function resolveE2BEndpoints(
   runtime: string | undefined,
   apiUrl: string | undefined,

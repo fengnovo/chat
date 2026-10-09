@@ -53,8 +53,8 @@ services:
     volumes:
       - agent-qdrant:/qdrant/storage
     healthcheck:
-      # qdrant/qdrant does not ship wget/curl; use the image's bash TCP client
-      # to verify the REST endpoint is accepting a successful health response.
+      # qdrant/qdrant 镜像未提供 wget/curl；使用镜像内置的 bash TCP 客户端
+      # 检查 REST 端点是否正常返回健康状态。
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/6333; printf \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'"]
       interval: 2s
       timeout: 3s

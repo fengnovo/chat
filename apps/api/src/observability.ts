@@ -67,7 +67,7 @@ function safely(operation: () => void): void {
   try {
     operation();
   } catch {
-    // Observability is intentionally fail-open for every business request.
+    // 有意采用 fail-open 策略，确保可观测性问题不会影响任何业务请求。
   }
 }
 
@@ -110,7 +110,7 @@ export function createApiObservability(
           if (finished) return;
           finished = true;
           const outcome = reason === 'server' ? 'success' : reason === 'client' ? 'cancelled' : 'failure';
-          // Active series must use identical labels on increment and decrement.
+          // 活跃序列在递增和递减时必须使用相同的标签。
           safely(() => metrics.sseConnection({ operation, outcome: 'success', delta: -1 }));
           safely(() => metrics.sseDisconnect({ operation, reason }));
           safely(() => {
@@ -132,9 +132,8 @@ type EnqueueFinish = {
 };
 
 /**
- * Opens the agent.run.enqueue producer span and injects its W3C context into the
- * Outbox payload. The returned carrier is persisted with the dispatch row so the
- * Worker can link its consumer root span back to this HTTP trace.
+ * 开启 agent.run.enqueue 生产者 span，并将其 W3C 上下文注入 Outbox 载荷。
+ * 返回的载体会随派发行一并持久化，以便 Worker 将消费者根 span 关联回此 HTTP trace。
  */
 export function startRunEnqueue(
   observability: ApiObservability,

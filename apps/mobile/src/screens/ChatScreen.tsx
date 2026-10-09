@@ -110,7 +110,7 @@ export default function ChatScreen({ route }: Props) {
     );
   }, []);
 
-  // The server owns execution. Losing focus/backgrounding only disconnects SSE.
+  // 执行由服务器负责；失去焦点或进入后台只会断开 SSE。
   useFocusEffect(
     useCallback(() => {
       let disposed = false;
@@ -336,8 +336,8 @@ export default function ChatScreen({ route }: Props) {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={keyboardOffset}
       onLayout={(event) => {
-        // Android window measurements exclude the status bar; iOS includes it.
-        // Measure the actual header origin instead of assuming a fixed header height.
+        // Android 窗口测量值不包含状态栏，iOS 则包含。
+        // 测量实际标题栏起点，不要假定标题栏高度固定。
         event.target.measureInWindow((_x, y) =>
           setKeyboardOffset(y + (Platform.OS === 'android' ? insets.top : 0)),
         );

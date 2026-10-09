@@ -120,8 +120,8 @@ function redactSensitiveTextValues(input: string, replacement: string): string {
 
 function sanitizeString(input: string, replacement: string, maxLength: number): string {
   const boundedInput = input.slice(0, maxLength + 4_096);
-  // Multiply serialized content has no reliable index mapping back to the source.
-  // Prefer dropping the bounded free-form value over risking partial disclosure.
+  // 多重序列化内容无法可靠地映射回源数据中的位置。
+  // 与其冒险泄露部分内容，不如丢弃长度受限的自由格式字段。
   if (ESCAPED_SENSITIVE_TEXT_MARKER.test(boundedInput)) return replacement.slice(0, maxLength);
   return redactSensitiveTextValues(boundedInput, replacement)
     .replace(/\bBearer\s+[^\s,;]+/gi, `Bearer ${replacement}`)
@@ -147,8 +147,8 @@ function redactError(error: Error & { code?: unknown }, replacement: string, max
 }
 
 /**
- * Redacts sensitive keys at every depth and serializes unknown objects through an
- * explicit allow-list. Error messages and causes are intentionally excluded.
+ * 在所有嵌套层级都对敏感键脱敏，并通过显式允许列表序列化未知对象。
+ * 错误消息和原因会有意排除在外。
  */
 export function redactTelemetryValue(value: unknown, policy: TelemetryRedactionPolicy = {}): unknown {
   const replacement = policy.replacement ?? DEFAULT_REPLACEMENT;
@@ -220,7 +220,7 @@ function pathnameOf(value: string): string {
   catch { return '/unknown'; }
 }
 
-/** Produces a bounded route label, preferring the framework route template. */
+/** 生成长度受限的路由标签，优先使用框架提供的路由模板。 */
 export function normalizeRoute(url: string, route?: string): NormalizedRoute {
   const pathname = pathnameOf(route?.trim() || url);
   const segments = pathname.split('/').filter(Boolean).slice(0, 16);

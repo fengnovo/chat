@@ -38,7 +38,7 @@ export async function migrateDatabase(pool: Pool): Promise<void> {
       migrationDirectory = candidate;
       break;
     } catch {
-      // Try the next layout (source, repository root, or workspace package cwd).
+      // 尝试下一个目录结构（源码目录、仓库根目录或工作区包的当前目录）。
     }
   }
   if (!migrationDirectory) throw new Error('Database migration directory was not found.');

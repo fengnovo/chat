@@ -18,13 +18,13 @@ export function reconcileRecoveredHistory<T extends RecoveryMessage>(
       pendingUser = message;
       if (userRuns.has(runId(message))) replacedUsers.add(message.id);
     } else if (message.role === 'assistant' && pendingUser) {
-      // The first assistant reply identifies an optimistic user's run. Text
-      // matching would incorrectly collapse repeated questions across turns.
+      // 第一条助手回复用于识别乐观创建的用户 run。按文本匹配会错误合并不同轮次中
+      // 重复提出的问题。
       if (userRuns.has(runId(message))) replacedUsers.add(pendingUser.id);
       pendingUser = undefined;
     }
   }
-  // A response can complete before its first assistant frame reaches this client.
+  // 首个助手帧到达客户端前，响应可能已经完成。
   if (pendingUser && userRuns.has(recoveredRunId)) replacedUsers.add(pendingUser.id);
   return prependHistoryMessages(history, current.filter((message) => !replacedUsers.has(message.id)));
 }

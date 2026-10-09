@@ -9,7 +9,7 @@ export type ObservabilityContext = {
 
 const propagator = new W3CTraceContextPropagator();
 
-/** Only W3C tracing fields cross this boundary; baggage is intentionally excluded. */
+/** 只有 W3C 跟踪字段可以跨越此边界；baggage 会有意排除。 */
 export function injectObservabilityContext(parent: Context = context.active(), requestId?: string): ObservabilityContext {
   const carrier: ObservabilityContext = {};
   propagator.inject(parent, carrier, defaultTextMapSetter);

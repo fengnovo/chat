@@ -14,7 +14,7 @@ export class ApiError extends Error {
   }
 }
 
-// Debug and Release must not restore each other's server, credentials or chat.
+// Debug 和 Release 不得互相恢复对方的服务器、凭据或聊天记录。
 const storagePrefix = typeof __DEV__ !== 'undefined' && __DEV__
   ? 'keenai.debug'
   : 'keenai.release';

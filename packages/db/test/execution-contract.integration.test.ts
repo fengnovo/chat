@@ -106,8 +106,8 @@ test('execution business contracts survive concurrent submissions and terminal t
         await db.repository.durable.bindExecutionDescriptor(recovered, {graphVersion:'graph-v1'}, 'agent');
         assert.equal((await db.repository.getRunForWorker(owner.tenantId, job.runId))?.status, 'running');
       }
-      // A rolling deployment/older consumer might create execution evidence
-      // without binding the new descriptor. The creation marker cannot bless it.
+      // 滚动部署期间或旧版消费者可能创建未绑定新描述符的执行凭据。
+      // 创建标记不能据此认定该凭据兼容。
       for (const evidence of ['event','tool','child'] as const) {
         const {job,lease} = await fixture();
         if (evidence === 'event') await db.repository.durable.appendEvent(lease,{runId:job.runId,timestamp:new Date().toISOString(),type:'run.started'});

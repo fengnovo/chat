@@ -1,7 +1,7 @@
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 
-/** Generates the product preview capability link after a sandbox build. */
+/** 沙箱构建完成后，生成产品预览能力链接。 */
 export function createPreviewPageTool() {
   return tool(
     async (_input: { message?: string }) => {

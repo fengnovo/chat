@@ -1,14 +1,13 @@
-# Add project specific ProGuard rules here.
-# By default, the flags in this file are appended to flags specified
-# in /usr/local/Cellar/android-sdk/24.3.3/tools/proguard/proguard-android.txt
-# You can edit the include path and order by changing the proguardFiles
-# directive in build.gradle.
+# 在此添加项目专用的 ProGuard 规则。
+# 默认情况下，本文件中的标记会追加到
+# /usr/local/Cellar/android-sdk/24.3.3/tools/proguard/proguard-android.txt 中的标记之后。
+# 修改 build.gradle 中的 proguardFiles 指令，可以调整包含路径及其顺序。
 #
-# For more details, see
+# 详情参见：
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# react-native-reanimated
+# react-native-reanimated 规则
 -keep class com.swmansion.reanimated.** { *; }
 -keep class com.facebook.react.turbomodule.** { *; }
 
-# Add any project specific keep options here:
+# 在此添加项目专用的 keep 选项：

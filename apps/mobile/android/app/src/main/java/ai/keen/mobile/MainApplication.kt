@@ -23,7 +23,7 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Packages that cannot be autolinked yet can be added manually here, for example:
+              // 尚不能自动链接的包可以在此手动添加，例如：
               // add(MyReactNativePackage())
             }
 

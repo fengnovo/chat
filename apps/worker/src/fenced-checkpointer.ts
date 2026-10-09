@@ -2,7 +2,7 @@ import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { DurableExecutionError } from '@repo/agent-core';
 import type { DurableExecutionRepository, Pool, PoolClient, RunExecutionLease } from '@repo/db';
 
-/** PostgresSaver owns a transaction; adapt it to the already fenced outer transaction. */
+/** PostgresSaver 自行管理事务；将其适配到已有栅栏保护的外层事务中。 */
 function transactionPool(client: PoolClient): Pool {
   const query: PoolClient['query'] = ((...args: unknown[]) => {
     const statement = typeof args[0] === 'string' ? args[0].trim().toUpperCase() : '';
@@ -14,7 +14,7 @@ function transactionPool(client: PoolClient): Pool {
   return { query, connect: async () => ({ query, release() {} }) } as unknown as Pool;
 }
 
-/** Row ownership validation and checkpoint write share one PostgreSQL transaction. */
+/** 行所有权校验与检查点写入共用同一个 PostgreSQL 事务。 */
 export function createFencedCheckpointer(
   base: PostgresSaver,
   repository: DurableExecutionRepository,
@@ -28,7 +28,7 @@ export function createFencedCheckpointer(
   fenced.getTuple = async (...args: Parameters<PostgresSaver['getTuple']>) => guarded(() => base.getTuple(...args));
   fenced.put = async (...args: Parameters<PostgresSaver['put']>) => guarded(() => repository.withLease(lease, async (client) => {
     const saver = new PostgresSaver(transactionPool(client), base.serde);
-    // Both installed savers drop arbitrary runnable metadata unless explicitly supplied.
+    // 除非显式传入，否则两种已安装的 saver 都会丢弃任意 runnable 元数据。
     args[2] = { ...args[0].metadata, ...args[2] };
     const result = await saver.put(...args);
     if (args[0].configurable?.thread_id === lease.input.sessionId && !args[0].configurable?.checkpoint_ns) {
@@ -40,7 +40,7 @@ export function createFencedCheckpointer(
   fenced.putWrites = async (...args: Parameters<PostgresSaver['putWrites']>) => guarded(() => repository.withLease(lease, async (client) => {
     await new PostgresSaver(transactionPool(client), base.serde).putWrites(...args);
   }));
-  // The shared pool is owned by worker startup, not the per-execution adapter.
+  // 共享连接池由 Worker 启动流程持有，而不是由单次执行的适配器持有。
   fenced.end = async () => {};
   return fenced;
 }

@@ -128,7 +128,7 @@ test('write_file / edit_file input keeps full content for the file panel', () =>
   const longContent = 'line\n'.repeat(2_000); // ~10 000 chars
   const parsed = normalizeToolInput(
     JSON.stringify({ file_path: '/tmp/x.ts', content: longContent }),
-    true, // preserveStrings — same flag the runtime passes for write_file/edit_file
+    true, // preserveStrings：与运行时传给 write_file/edit_file 的标记一致。
   ) as { file_path: string; content: string };
   assert.equal(parsed.content, longContent);
   assert.ok(!parsed.content.includes('[已截断]'));

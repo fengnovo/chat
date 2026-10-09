@@ -164,7 +164,7 @@ async function android() {
   if (!booted) throw new Error('Android boot timed out.');
   await ensureMetro();
   await run(adb, ['-s', serial, 'reverse', 'tcp:8081', 'tcp:8081']);
-  // Local MinIO presigned URLs use 127.0.0.1; keep their original signed host.
+  // 本地 MinIO 预签名 URL 使用 127.0.0.1；保留原始签名主机名。
   await run(adb, ['-s', serial, 'reverse', 'tcp:59000', 'tcp:59000']);
   await run('pnpm', [
     '--filter',
@@ -291,7 +291,7 @@ async function ios() {
   }
   const app = join(build, 'Build/Products/Debug-iphonesimulator/KeenChat.app');
   await run('xcrun', ['simctl', 'install', device.udid, app]);
-  // Stop an old process so the newly installed native binary is used.
+  // 停止旧进程，确保启动的是刚安装的原生应用。
   spawnSync('xcrun', ['simctl', 'terminate', device.udid, 'ai.keen.mobile'], {
     stdio: 'ignore',
   });

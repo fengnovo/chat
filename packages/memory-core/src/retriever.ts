@@ -49,7 +49,7 @@ export function createMemoryRetriever(
       try {
         searched = await ports.search({ ...input, limit });
       } catch {
-        // Semantic recall is an optimization. Core profile memories remain available.
+        // 语义召回只是优化项；核心个人资料记忆仍可用。
       }
 
       const unique = new Map<string, MemoryRecord>();

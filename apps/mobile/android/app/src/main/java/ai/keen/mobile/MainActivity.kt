@@ -12,22 +12,20 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
-    // Set the theme to AppTheme BEFORE onCreate to support
-    // coloring the background, status bar, and navigation bar.
-    // This is required for expo-splash-screen.
+    // 必须在 onCreate 之前将主题设为 AppTheme，才能设置背景、状态栏和导航栏的颜色。
+    // expo-splash-screen 依赖此设置。
     setTheme(R.style.AppTheme);
     super.onCreate(null)
   }
 
   /**
-   * Returns the name of the main component registered from JavaScript. This is used to schedule
-   * rendering of the component.
+   * 返回从 JavaScript 注册的主组件名称，用于安排组件渲染。
    */
   override fun getMainComponentName(): String = "main"
 
   /**
-   * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]
-   * which allows you to enable New Architecture with a single boolean flags [fabricEnabled]
+   * 返回 [ReactActivityDelegate] 实例。这里使用 [DefaultReactActivityDelegate]，
+   * 只需通过布尔标记 [fabricEnabled] 即可启用新架构。
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate {
     return ReactActivityDelegateWrapper(
@@ -41,21 +39,20 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-    * Align the back button behavior with Android S
-    * where moving root activities to background instead of finishing activities.
+    * 与 Android S 的返回键行为保持一致：将根 Activity 移至后台，而不是结束 Activity。
     * @see <a href="https://developer.android.com/reference/android/app/Activity#onBackPressed()">onBackPressed</a>
     */
   override fun invokeDefaultOnBackPressed() {
       if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) {
           if (!moveTaskToBack(false)) {
-              // For non-root activities, use the default implementation to finish them.
+              // 对于非根 Activity，使用默认实现结束它们。
               super.invokeDefaultOnBackPressed()
           }
           return
       }
 
-      // Use the default back button implementation on Android S
-      // because it's doing more than [Activity.moveTaskToBack] in fact.
+      // 在 Android S 上使用默认的返回键实现，
+      // 因为它实际执行的操作不止 [Activity.moveTaskToBack]。
       super.invokeDefaultOnBackPressed()
   }
 }

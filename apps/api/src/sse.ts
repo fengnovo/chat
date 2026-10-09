@@ -87,8 +87,8 @@ export async function streamAgentEvents(
           if (!events.length) await writer.write(': heartbeat\n\n');
           return false;
         }
-        // Terminal status and its final events commit together. Read once more
-        // after observing that status so a completion racing this flush is delivered.
+        // 终态和最终事件会一起提交。观察到终态后再读取一次，
+        // 确保并发发生在本次 flush 期间的完成事件也能送达。
       }
   });
 

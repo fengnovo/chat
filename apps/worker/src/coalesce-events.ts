@@ -5,7 +5,7 @@ function isText(event: AgentEvent): event is TextEvent {
   return ['assistant.delta', 'assistant.reasoning', 'assistant.narration'].includes(event.type);
 }
 
-/** Reduce per-token commits without delaying text beyond a short deadline. */
+/** 减少逐 token 提交次数，同时确保文本延迟不超过较短的时限。 */
 export async function* coalesceAgentEvents(source: AsyncIterable<AgentEvent>, options: { delayMs?: number; maxBytes?: number } = {}): AsyncGenerator<AgentEvent> {
   const delayMs = options.delayMs ?? 25;
   const maxBytes = options.maxBytes ?? 8 * 1024;
@@ -23,7 +23,7 @@ export async function* coalesceAgentEvents(source: AsyncIterable<AgentEvent>, op
       const next = buffer ? await Promise.race([pending, deadline!]) : await pending;
       if (next === elapsed) {
         const flushed = buffer!; reset(); yield flushed;
-        continue; // Reuse the outstanding next(); never concurrently advance a source.
+        continue; // 复用尚未完成的 next()；不要并发推进同一个数据源。
       }
       pending = undefined;
       if (next.done) {
@@ -47,8 +47,8 @@ export async function* coalesceAgentEvents(source: AsyncIterable<AgentEvent>, op
     throw error;
   } finally {
     reset();
-    // A source may be blocked on model IO. Its runtime owns cancellation; don't
-    // delay the worker's abort/error handling by waiting for a prefetched next().
+    // 数据源可能阻塞在模型 IO 上；取消由其运行时负责，不要等待预取的 next()，
+    // 以免延迟 Worker 的中止和错误处理。
     void iterator.return?.().catch(() => {});
   }
 }

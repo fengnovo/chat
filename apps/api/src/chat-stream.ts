@@ -39,7 +39,7 @@ function createChunkEncoder(runId: string) {
       }
       let agentData: PersistedAgentEvent = event;
       if (event.type === 'retrieval.completed') {
-        // Keep the process trace, while also persisting an auditable citation part.
+        // 保留过程 trace，同时持久化可审计的引用部分。
         chunks.push({
           type: 'data-citations',
           data: {
@@ -147,8 +147,8 @@ export async function streamWorkflowRun(
   const run = await services.repository.getRun(request.auth, runId);
   if (!run) return reply.code(404).send({ error: 'run_not_found' });
 
-  // Count the stable replay prefix without retaining it in memory. A second paged
-  // pass preserves the existing chunk-index resume protocol and streams its body.
+  // 统计稳定的重放前缀，但不将其保留在内存中。第二次分页读取会沿用现有的
+  // 分块索引续传协议，并流式输出正文。
   const countChunks = createChunkEncoder(runId);
   let initialChunkCount = 0;
   let initialCursor = 0;
@@ -226,8 +226,8 @@ export async function streamWorkflowRun(
         finish('server');
         return true;
       }
-      // Notifications may precede subscription during prefix counting. Always
-      // catch up after replaying its cached first page, including an empty page.
+      // 统计前缀时，通知可能早于订阅到达。重放缓存的第一页后始终补读，
+      // 即使该页为空也一样。
       if (cached) continue;
       if (events.length >= 500) continue;
       if (terminal) { finish('server'); return true; }
@@ -237,7 +237,7 @@ export async function streamWorkflowRun(
         if (!events.length) await writer.write(': heartbeat\n\n');
         return false;
       }
-      // Read again after observing terminal status, covering a racing final commit.
+      // 观察到终态后再读取一次，覆盖并发发生的最后一次提交。
     }
   });
 

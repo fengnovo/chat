@@ -14,7 +14,7 @@ export function checkpointBelongsToRun(snapshot: RecoverySnapshot, runId: string
   return snapshot.metadata?.business_run_id === runId || snapshot.metadata?.run_id === runId;
 }
 
-/** Restore only the answer addressed to the currently committed interrupt/retry. */
+/** 只恢复明确对应当前已提交 interrupt 或重试的答案。 */
 export function createRecoveryResumeCommand(snapshot: GraphSnapshot, input: AgentResumeInput): Command | undefined {
   const pending = firstGraphInterrupt(snapshot);
   if (!pending) return undefined;
@@ -32,7 +32,7 @@ export function createRecoveryResumeCommand(snapshot: GraphSnapshot, input: Agen
   } });
 }
 
-/** null resumes the latest committed graph; a different business run needs fresh input. */
+/** null 表示继续最近一次已提交的图；其他业务 run 必须提供新输入。 */
 export function chooseRecoveryInput(
   snapshot: RecoverySnapshot,
   runId: string,
@@ -48,7 +48,7 @@ export function chooseRecoveryInput(
   return interrupted && savedResumeCommand !== undefined ? savedResumeCommand : null;
 }
 
-/** Use committed messages to repair partial token streams after model node replay. */
+/** 模型节点重放后，使用已提交的消息修复不完整的 token 流。 */
 export function canonicalAssistantText(messages: readonly BaseMessage[] | undefined, runId: string): string {
   if (!messages) return '';
   const start = messages.findIndex((message) => message.id === `user-${runId}`);

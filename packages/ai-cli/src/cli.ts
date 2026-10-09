@@ -9,7 +9,7 @@ import { runCli } from './cli/app.js';
 import { A, stopTui } from './tui/index.js';
 
 /**
- * Coding Agent CLI
+ * 编码 Agent 命令行工具
  *
  * pnpm start
  * pnpm start "帮我写一个冒泡排序并测试"

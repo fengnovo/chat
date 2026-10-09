@@ -11,8 +11,8 @@ ALTER TABLE child_executions DROP CONSTRAINT child_executions_status_check;
 ALTER TABLE child_executions ADD CONSTRAINT child_executions_status_check
   CHECK (status IN ('pending','running','waiting','completed','failed','cancelled'));
 
--- Terminal transitions own these invariants, including cancellation without a
--- worker lease and legacy status update paths. All changes roll back together.
+-- 终态转换负责维护这些不变量，包括没有 Worker 租约时的取消和旧版状态更新路径。
+-- 所有变更都会一并回滚。
 CREATE OR REPLACE FUNCTION apply_run_terminal_contract() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.status IN ('completed','failed','cancelled') THEN
@@ -37,7 +37,7 @@ $$;
 CREATE TRIGGER agent_runs_terminal_contract BEFORE UPDATE OF status ON agent_runs
   FOR EACH ROW EXECUTE FUNCTION apply_run_terminal_contract();
 
--- Repair previously committed completions whose Redis enqueue was lost.
+-- 修复已提交完成状态、但 Redis 入队事件丢失的记录。
 INSERT INTO memory_jobs (id, tenant_id, user_id, session_id, run_id)
 SELECT gen_random_uuid(), tenant_id, user_id, session_id, id FROM agent_runs WHERE status='completed'
 ON CONFLICT (tenant_id, run_id) DO NOTHING;

@@ -8,13 +8,13 @@ import { subagentRuntimeDescriptor } from './subagent.js';
 import { stableToolInputHash, trustedBuiltinReplayPolicies } from './tool-execution.js';
 import type { HeadlessAgentOptions } from './types.js';
 
-/** Bump when graph state/recovery compatibility changes beyond the hashed policies. */
+/** 图状态或恢复兼容性发生哈希策略无法体现的变化时，递增此版本。 */
 export const AGENT_RUNTIME_VERSION = 'durable-agent-v2';
 export const AGENT_GRAPH_VERSION = 'parent-attached-children-v2';
 
 const require = createRequire(import.meta.url);
-// Normal module loading resolves installed versions once. Descriptor builders
-// remain pure and detect SDK upgrades even if a manual graph version is unchanged.
+// 普通模块加载只解析一次已安装的版本。描述符构造器保持纯函数；即使手动图版本未变，
+// 也能检测 SDK 升级。
 const frameworkVersions = Object.fromEntries([
   'deepagents', 'langchain', '@langchain/core', '@langchain/langgraph',
   '@langchain/mcp-adapters', '@langchain/openai', '@langchain/anthropic',
@@ -37,8 +37,8 @@ function modelEndpoint(baseUrl: string | undefined): string | null {
 }
 
 function promptTemplateHash(): string {
-  // Hash all product branches so session approval and changing retrieved memory
-  // do not masquerade as an incompatible deployment of the prompt template.
+  // 对所有产品提示分支计算哈希，避免会话审批或召回记忆变化被误判为
+  // 提示模板部署不兼容。
   const templates: string[] = [];
   for (const backendMode of ['docker', 'e2b'] as const) {
     for (const knowledgeEnabled of [false, true]) {
@@ -55,7 +55,7 @@ function promptTemplateHash(): string {
   return stableToolInputHash(templates);
 }
 
-/** Host preflight uses this before sandbox acquisition or MCP discovery; no IO. */
+/** 宿主预检会在获取沙箱或发现 MCP 工具前调用此函数；不执行 IO。 */
 export function buildRuntimeStaticDescriptor(): Record<string, unknown> {
   return {
     runtimeVersion: AGENT_RUNTIME_VERSION,
@@ -68,7 +68,7 @@ export function buildRuntimeStaticDescriptor(): Record<string, unknown> {
   };
 }
 
-/** Only stable non-secret execution identity is persisted; credentials never leave options. */
+/** 只持久化稳定且不含机密的执行身份；凭据不会离开 options。 */
 export function buildRuntimeDescriptor(
   options: HeadlessAgentOptions,
   tools: readonly StructuredToolInterface[],
@@ -87,7 +87,7 @@ export function buildRuntimeDescriptor(
     tools: toolDescriptors,
     toolPolicies: options.durable?.toolPolicies ?? {},
     resources: options.durable?.runtimeResources ?? {},
-    // Source order can affect instruction precedence, so preserve it.
+    // 源顺序会影响指令优先级，因此必须保留。
     skills: [...(options.skills ?? [])],
     memorySources: [...(options.memory ?? [])],
     longTermMemoryEnabled: options.longTermMemory !== undefined,

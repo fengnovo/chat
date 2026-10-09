@@ -266,7 +266,7 @@ test('asset confirm rejects when uploaded bytes do not match declared MIME', asy
     sha256: 'c'.repeat(64),
     captionStatus: 'pending',
   };
-  // LFS-pointer style head bytes: ASCII text but client claims image/jpeg.
+  // LFS 指针格式的文件头：内容是 ASCII 文本，但客户端声称类型为 image/jpeg。
   const lfsPointerHead = new Uint8Array([
     0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x20,
     0x68, 0x74, 0x74, 0x70, 0x73, 0x3a, 0x2f, 0x2f,

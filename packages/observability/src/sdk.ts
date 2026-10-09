@@ -15,7 +15,7 @@ export type ObservabilityRuntime = {
   forceFlush(timeoutMs?: number): Promise<void>;
 };
 
-/** Custom exporters also support embedded deployments without an OTLP collector. */
+/** 自定义导出器也支持未部署 OTLP 收集器的内嵌式部署。 */
 export type ObservabilityOptions = {
   spanExporter?: SpanExporter;
   metricExporter?: PushMetricExporter;
@@ -43,7 +43,7 @@ function lifecycleTimeout(value: number | undefined, fallback = MAX_LIFECYCLE_TI
   return Math.min(timeout(value, fallback), MAX_LIFECYCLE_TIMEOUT_MS);
 }
 
-/** Swallows synchronous throws, rejections, and hung promises without exposing errors. */
+/** 吞掉同步抛错、Promise 拒绝和未完成的 Promise，避免暴露错误信息。 */
 async function bounded(operation: () => Promise<unknown>, timeoutMs: number, warn: () => void): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -54,7 +54,7 @@ async function bounded(operation: () => Promise<unknown>, timeoutMs: number, war
   } finally { clearTimeout(timer); }
 }
 
-/** A dropped batch is acknowledged so OTel cannot log a raw exporter exception. */
+/** 确认已丢弃的批次，避免 OTel 记录未处理的导出器异常。 */
 function safeExport<T>(run: (items: T, callback: (result: ExportResult) => void) => void, timeoutMs: number, warn: () => void) {
   return (items: T, callback: (result: ExportResult) => void): void => {
     let done = false;
@@ -77,7 +77,7 @@ export async function startObservability(config: ObservabilityConfig, options: O
   const warn = () => {
     if (warned) return;
     warned = true;
-    // No exception, URL, payload, or authorization headers enter this message.
+    // 此消息中不得包含异常、URL、载荷或授权标头。
     try { console.warn('[observability] Telemetry export failed or exceeded its deadline; telemetry may be dropped.'); } catch {}
   };
   const shutdownTimeoutMs = lifecycleTimeout(config.shutdownTimeoutMs);
@@ -98,9 +98,9 @@ export async function startObservability(config: ObservabilityConfig, options: O
   };
   try {
     const resource = createObservabilityResource(config);
-    // The installed OTLP HTTP transport retries transient errors with jitter (at most
-    // five retries). This export deadline bounds that retry budget. No second retry loop.
-    // Headers are handled by the standard OTEL_EXPORTER_OTLP[_SIGNAL]_HEADERS env vars.
+    // 已安装的 OTLP HTTP 传输会对临时错误进行带抖动重试（最多重试 5 次）。
+    // 导出截止时间限制了重试预算；这里不再添加第二层重试循环。
+    // 标头由标准环境变量 OTEL_EXPORTER_OTLP[_SIGNAL]_HEADERS 处理。
     const spanExporter = options.spanExporter ?? new OTLPTraceExporter({
       ...(config.otlpEndpoint ? { url: `${config.otlpEndpoint}/v1/traces` } : {}),
       timeoutMillis: exportTimeoutMs, concurrencyLimit: 1,
@@ -156,13 +156,13 @@ export async function startObservability(config: ObservabilityConfig, options: O
         const deadline = performance.now() + budget;
         shutdownPromise = (async () => {
           await bounded(flush, budget, warn);
-          // Always initiate cleanup, even if flush used the whole deadline.
+          // 即使 flush 已耗尽整个截止时间，也始终启动清理流程。
           unregister();
           const cleanup = () => Promise.all([spans.shutdown(), meters.shutdown()]);
           const remaining = deadline - performance.now();
           if (remaining <= 0) {
-            // No extra caller wait after its deadline. Exporter adapters still bound
-            // cleanup separately and all late rejections are consumed.
+            // 超过截止时间后不再让调用方额外等待。导出器适配器仍会单独限制清理时长，
+            // 且所有延迟到达的拒绝都会被处理。
             void Promise.resolve().then(cleanup).catch(warn);
             return;
           }

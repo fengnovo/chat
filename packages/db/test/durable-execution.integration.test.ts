@@ -8,7 +8,7 @@ import { createDatabase, migrateDatabase } from '../src/index.js';
 const enabled = process.env.RUN_INTEGRATION_TESTS === '1';
 const connectionString = process.env.DATABASE_URL ?? 'postgresql://agent:agent@127.0.0.1:55433/agent_test';
 
-// Real row locks, transactions, and takeover exercise the ownership boundary.
+// 使用真实行锁、事务和所有权接管来验证所有权边界。
 test('durable execution persists ownership and replay identities', { skip: !enabled }, async (t) => {
   assert.match(new URL(connectionString).pathname, /test/i);
   const database = createDatabase(connectionString);
@@ -23,7 +23,7 @@ test('durable execution persists ownership and replay identities', { skip: !enab
         await client.query('CREATE TEMP TABLE tool_executions (execution_id uuid PRIMARY KEY)');
         const migration = await readFile(new URL('../migrations/024_durable_tool_retry_count.sql', import.meta.url), 'utf8');
         await client.query(migration);
-        await client.query(migration); // Re-running is safe for partially upgraded databases.
+        await client.query(migration); // 对仅部分升级的数据库重复执行也是安全的。
         const result = await client.query('SELECT retry_count FROM tool_executions');
         assert.deepEqual(result.rows, []);
         await client.query("INSERT INTO tool_executions(execution_id) VALUES ($1)", [randomUUID()]);
@@ -98,7 +98,7 @@ test('durable execution persists ownership and replay identities', { skip: !enab
     });
 
     await t.test('waiting runs never enter recovery and legacy running payload is restored', async () => {
-      // Other subtests own live leases, so only these deliberately expired rows are eligible.
+      // 其他子测试持有有效租约，因此只有这些特意设为过期的行符合条件。
       const waitingJob = await fixture();
       await database.pool.query("UPDATE agent_runs SET status='waiting_approval',execution_state='waiting',lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [waitingJob.runId]);
       const legacyJob = await fixture();
@@ -132,7 +132,7 @@ test('durable execution persists ownership and replay identities', { skip: !enab
       const terminal = event(job, 'run.completed');
       const saved = await durable.appendEvent(lease, terminal);
       assert.equal((await durable.appendEvent(lease, terminal)).seq, saved.seq);
-      await durable.assertLease(lease); // Cleanup/checkpoint may finish before release.
+      await durable.assertLease(lease); // 清理或检查点操作可能先于释放租约完成。
       await durable.releaseLease(lease);
       assert.equal(await durable.claimRun(job, 60_000, 'b'), null);
       await assert.rejects(durable.appendEvent(lease, event(job, 'run.started')), { code: 'EXECUTION_LEASE_LOST' });
@@ -172,7 +172,7 @@ test('durable execution persists ownership and replay identities', { skip: !enab
       await assert.rejects(durable.beginTool(lease, { ...intent, toolCallId: '' }), /tool.call|stable/i);
       await expire(job);
       await assert.rejects(durable.completeTool(lease, created.record.executionId, {}), { code: 'EXECUTION_LEASE_LOST' });
-      // Restore only this test-owned run so later reconciliation counts remain isolated.
+      // 只恢复本测试持有的 run，确保后续协调计数仍相互隔离。
       await database.pool.query("UPDATE agent_runs SET execution_state='terminal',status='failed' WHERE id=$1", [job.runId]);
     });
 
@@ -189,7 +189,7 @@ test('durable execution persists ownership and replay identities', { skip: !enab
       await durable.appendEvent(second, { runId: job.runId, timestamp: new Date().toISOString(), type: 'question.required', interruptId: 'q2', question });
       await durable.releaseLease(second);
       assert.equal(await durable.claimRun(resume, 60_000, 'stale'), null);
-      // Legacy payloads without interruptId are still fenced by the current persisted response.
+      // 不含 interruptId 的旧载荷仍会由当前持久化响应加栅栏保护。
       const { interruptId: _oldId, ...legacyResume } = resume;
       assert.equal(await durable.claimRun(legacyResume, 60_000, 'legacy-stale'), null);
       await database.repository.resolveInterrupt(context, job.runId, 'q2', 'question', answer);
